@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Offline video subtitles fixture</title>
+<style>
+  body{margin:24px;background:#eee;font-family:system-ui}.player,.html5-video-player{position:relative;width:640px}.stage{display:block;width:640px;height:360px;background:#202521}.video-controls,.ytp-right-controls{box-sizing:border-box;display:flex;align-items:center;justify-content:flex-end;gap:8px;width:640px;height:48px;padding:0 8px;background:#171717}.ytp-right-controls{position:absolute;right:0;bottom:0;width:auto}.ytp-subtitles-button{width:48px;height:48px;color:white;background:transparent;border:0}.fixture-controls{margin-bottom:8px}
+</style>
+<div id="root"></div>
+<script>
+  const fixtureShadows = new WeakMap();
+  const fixtureAttachShadow = Element.prototype.attachShadow;
+  Element.prototype.attachShadow = function(options) {
+    const shadow = fixtureAttachShadow.call(this, options);
+    fixtureShadows.set(this, shadow);
+    return shadow;
+  };
+</script>
+<script src="../../extension/design.js"></script>
+<script src="../../extension/video-subtitles.js?v=step5-source-safety-2"></script>
+<script>
+  const mode = new URL(location.href).searchParams.get('mode') || 'native';
+  const root = document.querySelector('#root');
+  const player = document.createElement('div');
+  player.className = mode === 'youtube' ? 'html5-video-player' : 'player';
+  if (mode === 'custom') player.dataset.player = 'fixture';
+  const video = document.createElement('video');
+  video.className = 'stage';
+  if (mode === 'native') video.controls = true;
+  let fixturePaused = true;
+  Object.defineProperty(video, 'paused', {configurable:true, get:() => fixturePaused});
+  video.play = () => { fixturePaused = false; video.dispatchEvent(new Event('play')); return Promise.resolve(); };
+  video.pause = () => { fixturePaused = true; video.dispatchEvent(new Event('pause')); };
+  player.append(video);
+  if (mode === 'custom') {
+    const controls = document.createElement('div'); controls.className = 'video-controls'; controls.textContent = 'Custom controls'; player.append(controls);
+  }
+  if (mode === 'youtube') {
+    const controls = document.createElement('div'); controls.className = 'ytp-right-controls';
+    const cc = document.createElement('button'); cc.className = 'ytp-subtitles-button'; cc.setAttribute('aria-pressed','true'); cc.textContent = 'CC'; controls.append(cc); player.append(controls);
+  }
+  root.append(player);
+  const cues = Array.from({length:220}, (_, index) => ({startTime:index * 2,endTime:index * 2 + 2,text:'Caption line ' + (index + 1)}));
+  const track = {kind:'subtitles',language:'en',label:'English',mode:'showing',cues};
+  Object.defineProperty(video,'textTracks',{configurable:true,value:[track]});
+  const state = {assists:[],controllers:[],settings:{fontSize:20,theme:'auto'},failSettings:false,modelCalls:0};
+  ShisuiVideoSubtitles.mount({
+    settings:state.settings,
+    onAssist:target => {
+      state.assists.push(target);
+      let closed = false;
+      const controller = {close() { if (closed) return; closed = true; target.onClose(); }};
+      state.controllers.push(controller);
+      return controller;
+    },
+    onSettingsChange:async patch => { if (state.failSettings) throw new Error('offline failure'); state.settings={...state.settings,...patch}; return {video:state.settings}; }
+  });
+  globalThis.fixture={mode,video,track,state,shadows:fixtureShadows,unmount:()=>ShisuiVideoSubtitles.unmount()};
+</script>

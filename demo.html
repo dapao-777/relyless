@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Designing Reliable Data Pipelines</title>
+  <style>
+    :root { color-scheme: light; }
+    body { margin: 0; background: #fff; color: #1f2328; font: 16px/1.75 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { width: min(100% - 40px, 760px); margin: 0 auto; padding: 56px 0 96px; }
+    header { padding-bottom: 24px; border-bottom: 1px solid #d1d9e0; }
+    h1 { max-width: 680px; margin: 0 0 12px; font-size: clamp(30px, 5vw, 44px); line-height: 1.12; letter-spacing: -.025em; }
+    .summary { max-width: 680px; margin: 0; color: #59636e; font-size: 18px; }
+    .meta { margin-top: 18px; color: #59636e; font-size: 13px; }
+    article { padding-top: 22px; }
+    h2 { margin: 34px 0 8px; font-size: 22px; line-height: 1.3; }
+    p { margin: 0 0 18px; }
+    code { padding: 2px 4px; border-radius: 3px; background: #f6f8fa; font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Designing Reliable Data Pipelines Without Slowing Delivery</h1>
+      <p class="summary">A practical approach to schema changes, retries, observability, and ownership in production systems.</p>
+      <p class="meta">Shisui · Reading example</p>
+    </header>
+    <article>
+      <p>Reliable pipelines are rarely the result of one perfect architecture. They emerge from a series of explicit operational choices: what the system promises, how it reacts to partial failure, and who can make a safe change when conditions shift.</p>
+
+      <h2>Start with the contract</h2>
+      <p>A data contract should describe more than column names. Producers and consumers need to agree on nullability, event-time semantics, retention, and the meaning of late records. When those assumptions remain implicit, a harmless schema migration can quietly break a downstream dashboard or risk model.</p>
+      <p>Compatibility rules make change predictable. Additive fields are usually safe, while renaming a field requires a transition period in which both versions are available. A registry can enforce the mechanical rules, but teams still need a clear deprecation process for changes that alter business meaning.</p>
+
+      <h2>Make retries ordinary</h2>
+      <p>Distributed systems fail in partial and inconvenient ways. A worker may write its output successfully and lose the acknowledgement, causing the same task to run again. Idempotent operations turn this from an incident into routine behavior: repeated processing produces the same durable result.</p>
+      <p>Exactly-once claims should be treated with care. In practice, many robust systems combine at-least-once delivery with deterministic keys, transactional writes, and bounded deduplication. The important question is not whether duplicates can appear, but where they are detected and how long that protection lasts.</p>
+
+      <h2>Observe outcomes, not activity</h2>
+      <p>Throughput and latency are useful, but they do not prove that the data is correct. Production monitoring should also cover freshness, completeness, distribution shifts, and reconciliation against an independent source. These signals reveal failures that a green infrastructure dashboard can miss.</p>
+      <p>Alerts should identify an owner and suggest a first action. A message such as “pipeline failed” sends responders searching through logs; “orders are 42 minutes late because the upstream watermark stopped advancing” gives them a useful starting point.</p>
+
+      <h2>Keep recovery simple</h2>
+      <p>A backfill is part of the product, not an emergency script. It should use the same transformations as the live path, accept a precise time range, and expose its resource limits. Running it in small partitions makes progress visible and reduces the cost of stopping or retrying.</p>
+      <p>The most maintainable platform is not the one with the most features. It is the one that makes normal changes boring, failures legible, and recovery safe enough to perform during an ordinary working day.</p>
+    </article>
+  </main>
+</body>
+</html>

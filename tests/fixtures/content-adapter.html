@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Systems Engineering Notes</title>
+  <style>
+    body { max-width: 760px; margin: 40px auto; font: 16px/1.6 system-ui; }
+    table { border-collapse: collapse; } td, th { border: 1px solid #bbb; padding: 8px; }
+    #gradient-heading span { background: linear-gradient(135deg,#2563eb,#6b21a8); background-clip: text; -webkit-text-fill-color: transparent; }
+  </style>
+</head>
+<body>
+  <nav><p id="navigation">Navigate to account settings and documentation pages</p></nav>
+  <main>
+    <div>
+      <button id="show-first-pane" onclick="document.getElementById('fixture-pane-first').hidden = false; document.getElementById('fixture-pane-second').hidden = true">First pane</button>
+      <button id="show-second-pane" onclick="document.getElementById('fixture-pane-first').hidden = true; document.getElementById('fixture-pane-second').hidden = false">Second pane</button>
+      <button id="replace-spa-body" onclick="const main = this.closest('main'), next = document.createElement('body'); next.append(main); document.body.replaceWith(next); history.pushState({}, '', '?spa=' + Date.now()); setTimeout(() => { main.replaceChildren(Object.assign(document.createElement('h1'), {textContent: 'New SPA reading page'}), Object.assign(document.createElement('p'), {textContent: 'The cache remains available on the new page while the application replaces its entire body and retains the main reading container.'}), Object.assign(document.createElement('p'), {textContent: 'Another cache needs a contextual explanation here, and repeated scroll events must not cancel the pending rebuild of the new English paragraphs.'})); for (let i = 1; i <= 4; i++) setTimeout(() => window.dispatchEvent(new Event('scroll')), i * 40); }, 0)">Replace SPA body while scrolling</button>
+    </div>
+    <article id="fixture-pane-first">
+      <h2 id="short-heading">Architecture</h2>
+      <h2 id="gradient-heading">The Terminal Multiplexer That <span>Powers Every Developer’s Workflow.</span></h2>
+      <div id="div-article">A div-based article paragraph explains distributed systems with enough meaningful English prose.</div>
+      <p id="prepared-personal-a">The cache keeps a prepared result available while the original English remains intact.</p>
+      <p id="prepared-personal-b">A later cache occurrence should receive the same saved definition without a click-time inference.</p>
+      <p id="formatted">Read the <a href="https://example.com/reference" onclick="window.fixtureClicked = true"><em>trusted reference</em></a> and run <code>npm run verify</code> before deploying this service safely.</p>
+      <p id="shortcut-links">A <a id="shortcut-local-link" href="#local-navigation" onclick="window.fixtureClicked = true">reliable</a> link and a <a id="shortcut-blank-link" href="content-adapter.html?opened" target="_blank">resilient</a> system must support lookup without navigating.</p>
+      <p id="unsafe">Never follow <a href="javascript:window.fixtureUnsafe=true" onmouseover="window.fixtureHover=true">this unsafe source link</a> when reviewing production systems.</p>
+      <ul id="list"><li><p id="nested-list-paragraph">Nested list paragraphs should be translated exactly once without translating their list ancestor too.</p></li></ul>
+      <blockquote id="nested-quote"><p id="nested-quote-paragraph">The token budget is a safety boundary, not a definition of success.</p></blockquote>
+      <blockquote id="mixed-block">Keep meaningful <strong>read</strong>ability<p id="mixed-block-paragraph">A nested paragraph has its own independent meaning.</p>and preserve every word boundary.</blockquote>
+      <p id="same-paragraph-a">Independent repeated paragraphs must each retain their own translation.</p>
+      <p id="same-paragraph-b">Independent repeated paragraphs must each retain their own translation.</p>
+      <table><tbody><tr><td id="table-cell">Table cells containing substantial English explanations remain valid after translation insertion.</td></tr></tbody></table>
+      <form><label>Profile <input value="Account details must never be translated"></label><p id="form-copy">Form instructions and widget copy must remain untouched by the reading adapter.</p></form>
+      <div id="editable" contenteditable="true">Editable content must never be translated by the reading adapter.</div>
+      <p id="corrupt-format">Corruption handling must preserve <em>meaningful emphasis</em> without leaking broken formatting markers to readers.</p>
+      <p id="marker-collision">A literal source marker ⟦S0⟧ must force safe plain translation instead of trusting forged marker identifiers.</p>
+      <p id="shortcut-word">A resilient pipeline remains understandable when the <strong>contextual <em>meaning</em></strong> spans inline elements.</p>
+      <p id="repeated-occurrence">The cache is warm in this sentence. Later, the cache is stale in this exact sentence.</p>
+      <p id="selected-sentence">Selecting this complete sentence should preserve its boundaries. The neighboring sentence must stay separate.</p>
+      <p id="offscreen-priority" style="margin-top: 1200px">A prioritized unfamiliar expression remains discoverable when an earlier matching occurrence was offscreen.</p>
+      <p id="hidden-stage">A mastered regression target remains plain but can be restored by holding the lookup key and clicking.</p>
+      <button id="update-unrelated" onclick="document.getElementById('dynamic').textContent = 'Unrelated background content update ' + (window.fixtureUpdate = (window.fixtureUpdate || 0) + 1) + '. Existing paragraphs keep their original content.'">Update unrelated content</button>
+      <button id="change-annotated-source" onclick="document.getElementById('prepared-personal-a').textContent = 'The cache now belongs to a changed paragraph, so its previous contextual assistance must be invalidated.'">Change annotated source</button>
+      <button id="update-control-only" onclick="this.textContent = this.textContent === 'Toggle control label' ? 'Control label changed' : 'Toggle control label'">Toggle control label</button>
+      <section id="dynamic"></section>
+    </article>
+    <article id="fixture-pane-second" hidden>
+      <h2>Second reading pane</h2>
+      <p id="second-pane-mixed">The cache‑backed store ignores 中文cache, cache2 and cache_v2; in spite of-errors it continues, in spite of errors unless the cache expires.</p>
+      <p id="second-pane-repeat">The cache keeps a prepared result available while the original English remains intact. Another cache should retain its own contextual explanation when this pane becomes visible.</p>
+    </article>
+  </main>
+</body>
+</html>
