@@ -7,8 +7,8 @@ import {historyModelSubscription,subscriptionStatus,onNativeDiagnostic,syncNativ
 import {ROUTE_VERSION,normalizeDomainRules,resolveRuleDomain} from './domain-routing.js';
 import {classifyLocal} from './local-classifier.js';
 import {assistanceProgress,translationProgress} from './assistance-stream.mjs';
-import {SOURCE_DATA_INSTRUCTIONS,SUPPORT_POLICY_VERSION,SUPPORT_INSTRUCTIONS,SUPPORT_SCHEMA,ASSISTANCE_INSTRUCTIONS,assistanceSchema,normalizeSupportItems,prepareSupportItems,inspectSupportResponse,requestSupportWithCorrection,SUPPORT_CORRECTION_INSTRUCTIONS,normalizeSupportResult,normalizeAssistanceCommand,normalizeAssistanceRequest,normalizeAssistanceResult,normalizePreparationContext,EMERGENCY_SCHEMA,EMERGENCY_INSTRUCTIONS,normalizeEmergencyItems,normalizeEmergencyResult} from './gloss.mjs';
-import {AUTO_SCRIPT_ID,ALL_HOSTS,pageOrigin,sitePattern,validateAutomation,validateVideo,resolveAutomation,registrationMatches,requiredPermissionOrigins} from './activation.js';
+import {SOURCE_DATA_INSTRUCTIONS,SUPPORT_POLICY_VERSION,SUPPORT_INSTRUCTIONS,SUPPORT_SCHEMA,ASSISTANCE_INSTRUCTIONS,assistanceSchema,normalizeSupportItems,prepareSupportItems,inspectSupportResponse,requestSupportWithCorrection,SUPPORT_CORRECTION_INSTRUCTIONS,normalizeSupportResult,normalizeAssistanceCommand,normalizeAssistanceRequest,normalizeAssistanceResult,normalizePreparationContext,EMERGENCY_SCHEMA,EMERGENCY_INSTRUCTIONS,normalizeEmergencyItems,normalizeEmergencyResult,PAGE_TRANSLATION_INSTRUCTIONS,normalizePageTranslationItems,inspectPageTranslationResult,normalizePageTranslationResult} from './gloss.mjs';
+import {AUTO_SCRIPT_ID,ALL_HOSTS,VIDEO_SUPPORT_ENABLED,pageOrigin,sitePattern,validateAutomation,validateVideo,resolveAutomation,registrationMatches,requiredPermissionOrigins} from './activation.js';
 import {createDiagnostics} from './diagnostic-service.js';
 import {diagnosticError} from './diagnostics.mjs';
 import {createReadingHistory} from './history-service.js';
@@ -70,6 +70,12 @@ const sentenceModeKey=tabId=>'sentenceGroupsMode:'+tabId;
 const emergencyKey=tabId=>'emergencySession:'+tabId;
 let emergencyWrites=Promise.resolve();
 function changeEmergency(operation){const work=emergencyWrites.then(operation);emergencyWrites=work.catch(()=>{});return work;}
+const POPUP_INTENT_KEY='bilingualPopupIntent';
+let popupIntentWrites=Promise.resolve();
+function changePopupIntent(operation){const work=popupIntentWrites.then(operation);popupIntentWrites=work.catch(()=>{});return work;}
+function setPopupIntent(intent){return changePopupIntent(()=>chrome.storage.session.set({[POPUP_INTENT_KEY]:intent}));}
+function clearPopupIntent(tabId,createdAt){return changePopupIntent(async()=>{const stored=(await chrome.storage.session.get(POPUP_INTENT_KEY))[POPUP_INTENT_KEY];if(stored?.tabId===tabId&&(createdAt===undefined||stored.createdAt===createdAt))await chrome.storage.session.remove(POPUP_INTENT_KEY);});}
+function takePopupIntent(message){return changePopupIntent(async()=>{const stored=(await chrome.storage.session.get(POPUP_INTENT_KEY))[POPUP_INTENT_KEY];await chrome.storage.session.remove(POPUP_INTENT_KEY);const age=Date.now()-stored?.createdAt;return{focus:Boolean(stored&&stored.tabId===message.tabId&&stored.url===message.url&&Number.isFinite(age)&&age>=0&&age<=30000)};});}
 async function emergencySession(tabId){await emergencyWrites;const key=emergencyKey(tabId);return (await chrome.storage.session.get(key))[key]||null;}
 function forgetEmergency(tabId){return changeEmergency(()=>chrome.storage.session.remove(emergencyKey(tabId)));}
 function clearEmergencySessions(){return changeEmergency(async()=>{const all=await chrome.storage.session.get(null),keys=Object.keys(all).filter(key=>key.startsWith('emergencySession:'));if(keys.length)await chrome.storage.session.remove(keys);});}
@@ -96,15 +102,15 @@ function clearProviderState() {
   supportCache.clear();supportInFlight.clear();sentenceGroupCache.clear();sentenceGroupInFlight.clear();translationCache.clear();translationInFlight.clear();providerError='';providerGeneration++;void pruneBackgroundQueue();
   void chrome.storage.session.remove('supportCache').catch(()=>{});
   sentenceGroupCacheWrites=sentenceGroupCacheWrites.catch(()=>{}).then(()=>chrome.storage.session.remove('sentenceGroupCache'));void sentenceGroupCacheWrites.catch(()=>{});
-  void clearEmergencySessions();
+  return clearEmergencySessions();
 }
 function configured(settings) { const provider=activeApiProvider(settings);return settings.providerKind === 'chatgpt' ? subscriptionStatus().authenticated : apiServiceReady(provider); }
  onSubscriptionStatus(subscription => {
   if(subscription.connected)void diagnostics.connected();
-  clearProviderState(); invalidateClassification();
+  const emergencyCleared=clearProviderState(); invalidateClassification();
   if (subscription.connected) void chrome.storage.local.set({subscriptionLinked:subscription.authenticated});
   void chrome.runtime.sendMessage({type:'SUBSCRIPTION_UPDATED',subscription}).catch(() => {});
-  void chrome.storage.local.get('settings').then(({settings}) => { if (!settings?.providerKind || settings.providerKind === 'chatgpt') void broadcast(); });
+  void chrome.storage.local.get('settings').then(async({settings}) => { if (!settings?.providerKind || settings.providerKind === 'chatgpt') {await emergencyCleared;await broadcast();} });
   void reconcileAutomation().catch(error => console.error('更新自动开启策略失败',error));
 });
 async function load(includeWords=true) {
@@ -229,7 +235,7 @@ async function setPageDomain(message) {
   const storageKey = 'pageDomain:' + message.tabId;
   if (selected === 'auto') await chrome.storage.session.remove(storageKey);
   else await chrome.storage.session.set({[storageKey]:{page:page.key,domain:selected}});
-  clearProviderState();
+  await clearProviderState();
   await chrome.tabs.sendMessage(message.tabId,{type:'SS_REFRESH'}).catch(() => {});
   return {domain:selected};
 }
@@ -317,7 +323,7 @@ async function requireApiPermission(service) {
   if(!await chrome.permissions.contains({origins}))throw new Error('尚未授权该服务，请到设置重新保存并授权。');
 }
 async function apiRequest(provider,payload,instructions,schema,{onContent,trace,beforeRequest}={}) {
-  const preferences=readingHistory.policy()?.translation;if(preferences&&[ASSISTANCE_INSTRUCTIONS,SUPPORT_INSTRUCTIONS,SUPPORT_CORRECTION_INSTRUCTIONS,EMERGENCY_INSTRUCTIONS].includes(instructions))payload={...payload,personalization:preferences};
+  const preferences=readingHistory.policy()?.translation;if(preferences&&[ASSISTANCE_INSTRUCTIONS,SUPPORT_INSTRUCTIONS,SUPPORT_CORRECTION_INSTRUCTIONS,EMERGENCY_INSTRUCTIONS,PAGE_TRANSLATION_INSTRUCTIONS].includes(instructions))payload={...payload,personalization:preferences};
   const service=normalizeApiService(provider);await requireApiPermission(service);
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),25000);
   const generation=providerGeneration;
@@ -387,16 +393,28 @@ async function sessionMap(key,ttl,limit){
   if(entries.length!==all.length)await writeReadingSession({[key]:result},generation);return result;
 }
 async function registerOffers(source,targets,expectedProvider,expectedSupport){const work=writes.then(async()=>{const current=await load();if(futureSchema||expectedProvider!==providerGeneration||expectedSupport!==current.supportDataGeneration)return;const key=offeredKey(source.tabId),map=await sessionMap(key,30*60000,256);for(const target of targets){const id=target.wordId+':'+target.senseKey;delete map[id];map[id]={wordId:target.wordId,canonicalTerm:target.canonicalTerm,domain:target.domain,kind:target.kind,senseKey:target.senseKey,label:target.sense,revision:target.revision,sourceHash:source.sourceHash,offeredAt:Date.now()};}await writeReadingSession({[key]:Object.fromEntries(Object.entries(map).slice(-256))},expectedProvider);});writes=work.catch(()=>{});return work;}
-async function setWordPreference(message,sender,trusted){
+let wordPreferenceUpdates=Promise.resolve();
+function setWordPreference(message,sender,trusted){
+  const update=wordPreferenceUpdates.then(()=>saveWordPreference(message,sender,trusted));
+  wordPreferenceUpdates=update.catch(()=>{});return update;
+}
+async function broadcastWordPreference(preference,words){
+  const tabs=await chrome.tabs.query({}),offers=await chrome.storage.session.get(tabs.map(tab=>offeredKey(tab.id)));
+  const family=[{term:preference.term,knownAt:1}],terms=new Set([preference.term]);
+  for(const word of words)if(isKnownTerm(word.term,family))terms.add(word.term);
+  for(const map of Object.values(offers))for(const offer of Object.values(map||{}))if(offer.canonicalTerm&&isKnownTerm(offer.canonicalTerm,family))terms.add(offer.canonicalTerm);
+  const wordIds=[];
+  for(const term of terms)for(const scope of Object.keys(DOMAINS))if(scope!=='auto')wordIds.push(wordId(term,scope));
+  await Promise.allSettled(tabs.map(tab=>chrome.tabs.sendMessage(tab.id,{type:'SS_WORD_PREFERENCE',wordIds,known:preference.known},{frameId:0})));
+}
+async function saveWordPreference(message,sender,trusted){
   const requestedId=text(message.wordId,'词条编号',180);if(typeof message.known!=='boolean')throw new Error('词条偏好无效。');
   const before=await load(),existing=before.words.find(word=>word.id===requestedId);let offer=null,page=null;
   if(!trusted){page=await readingSource(sender);const map=await sessionMap(offeredKey(page.tabId),30*60000,256);offer=Object.values(map).find(value=>value.wordId===requestedId&&value.sourceHash===page.sourceHash)||null;if(!offer&&!(existing&&(existing.requestedAt>0||existing.helpCount>0)))throw new Error('只能修改当前页面提供或你主动查询过的词条。');}
   if(!message.known&&!existing)throw new Error('词条不存在。');
   if(message.known&&!existing&&!offer)throw new Error('词条不存在。');
   const result=await mutate(async state=>{let word=state.words.find(value=>value.id===requestedId);if(!word){const canonical=offer.canonicalTerm,scope=domain(offer.domain);if(wordId(canonical,scope)!==requestedId)throw new Error('词条来源无效。');word=freshWord(canonical,scope,offer.kind);}const knownAt=message.known?Date.now():0;word={...word,knownAt,revision:(word.revision||0)+1};if(!await saveRecord(state,word))throw new Error('词条保存失败。');if(!message.known){const equivalent=[{term:word.term,knownAt:1}];state.words=state.words.map(other=>other.knownAt>0&&isKnownTerm(other.term,equivalent)?{...other,knownAt:0,revision:(other.revision||0)+1}:other);}return {wordId:word.id,term:word.term,known:Boolean(knownAt),knownAt};},false);
-  await invalidateReadingProfile({keepDefinitions:true});
-  // Retain this page's existing offer only for undo; old rendering work stays invalidated.
-  if(page && offer && message.known){const key=offeredKey(page.tabId),map=await sessionMap(key,30*60000,256);map[offer.wordId+':'+offer.senseKey]={...offer,offeredAt:Date.now()};await chrome.storage.session.set({[key]:map});}
+  await broadcastWordPreference(result,before.words);
   return result;
 }
 async function refreshRequestedDefinitions(items,decisions,state,expectedProvider){
@@ -588,34 +606,63 @@ async function emergencyBegin(message){
   if(!['http:','https:'].includes(new URL(tab.url).protocol))throw new Error('此网页不支持紧急翻译。');
   return changeEmergency(async()=>{const state=await load(),generation=providerGeneration,token=crypto.randomUUID()+crypto.randomUUID(),provider=await emergencyProvider(state.settings),current=await chrome.tabs.get(message.tabId);
     if(current.url!==message.url||generation!==providerGeneration)throw new Error('页面或服务已变化，请重新确认。');
-    await chrome.storage.session.set({[emergencyKey(message.tabId)]:{token,url:message.url,generation:state.supportDataGeneration,provider}});
+    await chrome.storage.session.set({[emergencyKey(message.tabId)]:{token,url:message.url,generation:state.supportDataGeneration,provider,cancelledThrough:0}});
     return {token};});
 }
-async function translateItems(items,settings,trace,{onProgress,origin,guard}={}) {
+async function translateItems(items,settings,trace,{scope,onProgress,origin,sourceHash,guard}) {
+  if(!['page','passage'].includes(scope))throw new Error('无效的翻译范围。');
   if(!configured(settings))throw new Error('请先连接服务。');
   const service=settings.providerKind==='api'?activeApiProvider(settings):settings.subscriptionModel;
   if(settings.providerKind==='api')await requireApiPermission(service);
-  const personalization=readingHistory.policy()?.translation||null,generation=providerGeneration,keys=await Promise.all(items.map(item=>hashValue(JSON.stringify([EMERGENCY_INSTRUCTIONS,settings.providerKind,service,personalization,origin,item.text])))),values=new Map(),fresh=[],claimed=new Set(),now=Date.now();
-  for(let index=0;index<items.length;index++){const cached=translationCache.get(keys[index]);if(cached&&now-cached.at<TRANSLATION_CACHE_TTL)values.set(keys[index],cached.translation);else if(!translationInFlight.has(keys[index])&&!claimed.has(keys[index])){claimed.add(keys[index]);fresh.push({item:items[index],key:keys[index]});}}
+  const instructions=scope==='page'?PAGE_TRANSLATION_INSTRUCTIONS:EMERGENCY_INSTRUCTIONS;
+  const personalization=readingHistory.policy()?.translation||null,generation=providerGeneration,keys=await Promise.all(items.map(item=>hashValue(JSON.stringify([scope,instructions,settings.providerKind,service,personalization,origin,scope==='page'?sourceHash:null,item.text,item.context||null])))),outcomes=new Map(),fresh=[],claimed=new Set(),now=Date.now();
+  for(let index=0;index<items.length;index++){const cached=translationCache.get(keys[index]);if(cached&&now-cached.at<TRANSLATION_CACHE_TTL)outcomes.set(keys[index],{translation:cached.translation});else if(!translationInFlight.has(keys[index])&&!claimed.has(keys[index])){claimed.add(keys[index]);fresh.push({item:items[index],key:keys[index]});}}
   if(fresh.length){
     const operation=withBackgroundSlot(async()=>{const sourceItems=fresh.map(value=>value.item),idToKey=new Map(fresh.map(value=>[value.item.id,value.key]));let raw;
       const progress=value=>{if(!onProgress||!value?.items)return;const byKey=new Map(value.items.map(item=>[idToKey.get(item.id),item.translation]));onProgress({items:items.flatMap((item,index)=>byKey.has(keys[index])?[{id:item.id,translation:byKey.get(keys[index])}]:[])});};
-      if(settings.providerKind==='chatgpt')raw=await providerOperation(()=>emergencyTranslateSubscription(sourceItems,settings.subscriptionModel,trace?.traceId,personalization,progress),trace,settings.subscriptionModel);else raw=await apiRequest(service,{items:sourceItems},EMERGENCY_INSTRUCTIONS,EMERGENCY_SCHEMA,{trace,beforeRequest:()=>requireLiveConsumer(backgroundGuards.get(operation)),...(onProgress?{onContent:content=>progress(translationProgress(content,sourceItems))}:{})});
-      try{const result=normalizeEmergencyResult(raw,sourceItems),mapped=new Map(result.items.map((value,index)=>[fresh[index].key,value.translation]));await diagnostics.event(trace,'validation','ok');if(generation===providerGeneration){const at=Date.now();for(const [key,translation]of mapped){translationCache.delete(key);translationCache.set(key,{translation,at});}while(translationCache.size>TRANSLATION_CACHE_LIMIT)translationCache.delete(translationCache.keys().next().value);}return mapped;}catch(error){await diagnostics.event(trace,'validation','error',diagnosticError(error));throw error;}},guard);
+      if(settings.providerKind==='chatgpt')raw=await providerOperation(()=>emergencyTranslateSubscription({scope,items:sourceItems,model:settings.subscriptionModel,traceId:trace?.traceId,preferences:personalization,onProgress:progress}),trace,settings.subscriptionModel);else try{raw=await apiRequest(service,{items:sourceItems},instructions,EMERGENCY_SCHEMA,{trace,beforeRequest:()=>requireLiveConsumer(backgroundGuards.get(operation)),...(onProgress?{onContent:content=>progress(translationProgress(content,sourceItems))}:{})});}catch(error){if(scope!=='page'||(error?.code!=='INVALID_JSON'&&diagnosticError(error).code!=='JSON_INVALID'))throw error;providerError='';raw='';}
+      try{
+        const result=scope==='page'?(settings.providerKind==='chatgpt'?normalizePageTranslationResult(raw,sourceItems):inspectPageTranslationResult(raw,sourceItems)):normalizeEmergencyResult(raw,sourceItems),mapped=new Map();
+        for(const value of result.items)mapped.set(idToKey.get(value.id),{translation:value.translation});
+        for(const value of result.errors||[])mapped.set(idToKey.get(value.id),{error:value.code});
+        await diagnostics.event(trace,'validation','ok');
+        await requireLiveConsumer(backgroundGuards.get(operation));
+        if(generation!==providerGeneration)throw staleWork();
+        const at=Date.now();for(const [key,outcome]of mapped)if(outcome.translation!==undefined){translationCache.delete(key);translationCache.set(key,{translation:outcome.translation,at});}
+        while(translationCache.size>TRANSLATION_CACHE_LIMIT)translationCache.delete(translationCache.keys().next().value);
+        return mapped;
+      }catch(error){await diagnostics.event(trace,'validation','error',diagnosticError(error));throw error;}},guard);
     for(const entry of fresh)translationInFlight.set(entry.key,operation);
     void operation.finally(()=>{for(const entry of fresh)if(translationInFlight.get(entry.key)===operation)translationInFlight.delete(entry.key);}).catch(()=>{});
   }
-  await Promise.all(keys.map(async key=>{if(values.has(key))return;const operation=translationInFlight.get(key);if(!operation)throw new Error('翻译结果已过期，请重试。');backgroundGuards.get(operation).add(guard);const result=await operation;if(!result.has(key))throw new Error('翻译服务未返回完整结果。');values.set(key,result.get(key));}));
-  return {items:items.map((item,index)=>({id:item.id,translation:values.get(keys[index])}))};
+  await Promise.all(keys.map(async key=>{if(outcomes.has(key))return;const operation=translationInFlight.get(key);if(!operation)throw new Error('翻译结果已过期，请重试。');backgroundGuards.get(operation).add(guard);const result=await operation;await guard();if(!result.has(key))throw new Error('翻译服务未返回完整结果。');outcomes.set(key,result.get(key));}));
+  if(scope==='passage')return normalizeEmergencyResult({items:items.map((item,index)=>({id:item.id,translation:outcomes.get(keys[index])?.translation}))},items);
+  return normalizePageTranslationResult({items:items.flatMap((item,index)=>outcomes.get(keys[index])?.translation!==undefined?[{id:item.id,translation:outcomes.get(keys[index]).translation}]:[]),errors:items.flatMap((item,index)=>outcomes.get(keys[index])?.error?[{id:item.id,code:outcomes.get(keys[index]).error}]:[])},items);
 }
 async function emergencyTranslate(message,sender) {
   const source=await readingSource(sender),armed=await emergencySession(source.tabId);
   if(!armed||message.token!==armed.token||armed.url!==source.url)throw new Error('紧急翻译授权无效或已过期。');
-  const items=normalizeEmergencyItems(message.items),state=await load();
+  if(!Number.isSafeInteger(message.requestSeq)||message.requestSeq<=0)throw new Error('无效的翻译请求序号。');
+  if(message.requestSeq<=(armed.cancelledThrough||0))throw staleWork();
+  const items=normalizePageTranslationItems(message.items),state=await load();
   if(armed.generation!==state.supportDataGeneration||armed.provider!==await emergencyProvider(state.settings))throw new Error('翻译设置已改变，请重新开始。');
-  const guard=async()=>{const [latest,page]=await Promise.all([load(),readingSource(sender)]),current=await emergencySession(source.tabId);if(!current||current.token!==armed.token||page.url!==armed.url||current.provider!==await emergencyProvider(latest.settings)||current.generation!==latest.supportDataGeneration)throw staleWork();};
-  const result=await translateItems(items,state.settings,diagnostics.trace(message),{origin:new URL(source.url).origin,guard});
+  const guard=async()=>{const [latest,page]=await Promise.all([load(),readingSource(sender)]),current=await emergencySession(source.tabId);if(!current||current.token!==armed.token||page.url!==armed.url||current.provider!==await emergencyProvider(latest.settings)||current.generation!==latest.supportDataGeneration||message.requestSeq<=(current.cancelledThrough||0))throw staleWork();};
+  const result=await translateItems(items,state.settings,diagnostics.trace(message),{scope:'page',origin:new URL(source.url).origin,sourceHash:source.sourceHash,guard});
   await guard();
+  return result;
+}
+async function emergencyCancelRequest(message,sender){
+  if(!Number.isSafeInteger(message.through)||message.through<=0)throw new Error('无效的翻译请求序号。');
+  const source=await readingSource(sender);
+  const result=await changeEmergency(async()=>{
+    const [page,state]=await Promise.all([readingSource(sender),load()]),provider=await emergencyProvider(state.settings),key=emergencyKey(source.tabId),armed=(await chrome.storage.session.get(key))[key];
+    if(!armed||message.token!==armed.token||armed.url!==source.url||page.url!==source.url)throw new Error('紧急翻译授权无效或已过期。');
+    if(armed.generation!==state.supportDataGeneration||armed.provider!==provider)throw new Error('翻译设置已改变，请重新开始。');
+    const cancelledThrough=Math.max(armed.cancelledThrough||0,message.through);
+    if(cancelledThrough!==armed.cancelledThrough)await chrome.storage.session.set({[key]:{...armed,cancelledThrough}});
+    return {cancelledThrough};
+  });
+  await pruneBackgroundQueue();
   return result;
 }
 async function passageTranslate(message,sender) {
@@ -635,7 +682,7 @@ async function passageTranslate(message,sender) {
     previous=progress;pending=progress;if(!delivering&&!timer)void deliver();
   };
   try{
-    const result=await translateItems(items,state.settings,diagnostics.trace(message),{onProgress,origin:new URL(source.url).origin,guard});open=false;clearTimeout(timer);
+    const result=await translateItems(items,state.settings,diagnostics.trace(message),{scope:'passage',onProgress,origin:new URL(source.url).origin,guard});open=false;clearTimeout(timer);
     if(!await current())throw new Error('页面或服务已变化，已丢弃段落译文。');
     await readingHistory.prepareQuery(sender,message.requestId,{items,domain:message.domain},result);return result;
   }finally{open=false;pending=null;clearTimeout(timer);}
@@ -827,7 +874,7 @@ async function automationResult(settings,tab,paused,authorizeSentenceGroups=fals
   const pattern = resolved.origin ? sitePattern(resolved.origin) : null;
   const authorized = !pattern || await chrome.permissions.contains({origins:[pattern]});
   const sentenceGroups=await effectiveSentenceGroupsMode(settings,tab,paused,authorizeSentenceGroups);
-  const hostname=(()=>{try{return new URL(tab?.url||'').hostname;}catch{return '';}})();const videoAvailable=!paused&&settings.automation.videoSites&&['www.youtube.com','m.youtube.com'].includes(hostname)&&authorized;return {automation:settings.automation,...resolved,effective:resolved.effective && authorized,sentenceGroups,videoAvailable,assistanceMode:settings.assistanceMode};
+  return {automation:settings.automation,...resolved,effective:resolved.effective && authorized,sentenceGroups,videoAvailable:resolved.videoAvailable && authorized,assistanceMode:settings.assistanceMode};
 }
 
 async function verifyAutomationPermissions(before,after) {
@@ -890,10 +937,11 @@ async function reconcileAutoScript(settings) {
   if (matches.length) await chrome.scripting.registerContentScripts([{id:AUTO_SCRIPT_ID,matches,js:['auto-start.js'],runAt:'document_start',allFrames:false,persistAcrossSessions:true}]);
 }
 
+const PAGE_UI_FILES=['design.js',...(VIDEO_SUPPORT_ENABLED?['vendor/youtube-caption-json3.js','video-subtitles.js']:[]),'reading-style.js','content.js'];
 async function injectPageUI(tabId) {
   const probe = await chrome.scripting.executeScript({target:{tabId,frameIds:[0]},func:() => !globalThis.__SHISUI_CONTENT__?.isAlive?.()});
   if (probe[0]?.result === false) return;
-  await chrome.scripting.executeScript({target:{tabId,frameIds:[0]},files:['design.js','vendor/youtube-caption-json3.js','video-subtitles.js','reading-style.js','content.js']});
+  await chrome.scripting.executeScript({target:{tabId,frameIds:[0]},files:PAGE_UI_FILES});
 }
 const tabActivationGeneration = new Map();
 async function activateTab(tab) {
@@ -936,7 +984,7 @@ async function handle(message,sender) {
   if(sender.id!==chrome.runtime.id)throw new Error('不受信任的请求。');
   await dataReady;if(!['MEMORY_CLEAR','HISTORY_CLEAR'].includes(message.type))assertDataAvailable();if(futureSchema&&HISTORY_MUTATIONS.has(message.type))throw new Error('不支持的数据版本，请更新扩展');
   const trusted=Boolean(sender.url?.startsWith(chrome.runtime.getURL('')));
-  const contentAllowed=['HISTORY_BEGIN','HISTORY_TICK','HISTORY_COMMIT','HISTORY_ANNOTATION','DIAGNOSTICS_RENDER','STATE_GET','RESOLVE_DOMAIN','ANALYZE','SUPPORT_BATCH','SENTENCE_GROUPS_GET','SENTENCE_GROUPS_SET','SENTENCE_GROUPS_BATCH','ASSIST','ASSIST_PREVIEW','ASSIST_COMMIT','ENCOUNTER','INTERACT','READING_ACTIVITY','YOUTUBE_CAPTIONS_BRIDGE','OPEN_OPTIONS','AUTO_BOOTSTRAP_CHECK','PAGE_ACTIVITY_SET','VIDEO_SETTINGS_PATCH','PREPARED_SUPPORT','PREPARED_ASSIST','PASSAGE_TRANSLATE','EMERGENCY_TRANSLATE','EMERGENCY_END']
+  const contentAllowed=['HISTORY_BEGIN','HISTORY_TICK','HISTORY_COMMIT','HISTORY_ANNOTATION','DIAGNOSTICS_RENDER','STATE_GET','RESOLVE_DOMAIN','ANALYZE','SUPPORT_BATCH','SENTENCE_GROUPS_GET','SENTENCE_GROUPS_SET','SENTENCE_GROUPS_BATCH','ASSIST','ASSIST_PREVIEW','ASSIST_COMMIT','ENCOUNTER','INTERACT','READING_ACTIVITY','YOUTUBE_CAPTIONS_BRIDGE','OPEN_OPTIONS','AUTO_BOOTSTRAP_CHECK','PAGE_ACTIVITY_SET','VIDEO_SETTINGS_PATCH','PREPARED_SUPPORT','PREPARED_ASSIST','PASSAGE_TRANSLATE', 'EMERGENCY_TRANSLATE', 'EMERGENCY_CANCEL_REQUEST', 'EMERGENCY_END']
   if(!trusted&&!contentAllowed.includes(message.type)&&message.type!=='WORD_PREFERENCE_SET')throw new Error('此操作不能从网页执行。');
   switch(message.type){
     case 'HISTORY_GET':return readingHistory.snapshot({days:message.days,search:message.search,domain:message.domain,type:message.eventType||'',cursor:message.cursor,limit:Number.isSafeInteger(message.limit)&&message.limit>0?message.limit:300});
@@ -961,6 +1009,7 @@ async function handle(message,sender) {
     case 'DIAGNOSTICS_SET':return diagnostics.configure(message.enabled);
     case 'DIAGNOSTICS_CLEAR':return diagnostics.clear();
     case 'DIAGNOSTICS_RENDER':return diagnostics.render(message,sender);
+    case 'POPUP_INTENT_TAKE':if(!trusted)throw new Error('仅扩展界面可读取快捷键操作。');if(!Number.isInteger(message.tabId)||typeof message.url!=='string')throw new Error('快捷键操作无效。');return takePopupIntent(message);
     case 'PAGE_UI_INJECT':{const page=await tabPage(message.tabId);await injectPageUI(message.tabId);injectedEmergencyPages.set(message.tabId,page.url.href);return{};}
     case 'SENTENCE_GROUPS_GET':return sentenceGroupsMode(message,sender,trusted);
     case 'SENTENCE_GROUPS_SET':return setSentenceGroupsMode(message,sender,trusted);
@@ -971,7 +1020,7 @@ async function handle(message,sender) {
     case 'AUTOMATION_PATCH':{const settings=await patchAutomation(message.patch);await reconcileAutomation();const tab=await requestedTab(message,sender);return automationResult(settings,tab,Boolean(tab?.id&&await tabPaused(tab.id)));}
     case 'PAGE_ACTIVITY_SET':if(!Number.isInteger(sender.tab?.id)||sender.frameId!==0||typeof message.enabled!=='boolean')throw new Error('无效的页面活动状态。');await setTabPaused(sender.tab.id,!message.enabled);return{paused:!message.enabled};
     case 'VIDEO_SETTINGS_PATCH':{if(!trusted&&(!Number.isInteger(sender.tab?.id)||sender.frameId!==0))throw new Error('视频设置只能由网页主框架更新。');const video=await mutate(state=>{const next=validateVideo(message.patch,state.settings.video);state.settings={...state.settings,video:next};return next;},false,false);await broadcastVideoSettings(video);return{video};}
-    case 'YOUTUBE_CAPTIONS_BRIDGE':{if(!Number.isInteger(sender.tab?.id)||sender.frameId!==0)throw new Error('字幕桥只能由当前网页主框架启用。');const {url}=await tabPage(sender.tab.id);if(url.protocol!=='https:'||!['www.youtube.com','m.youtube.com'].includes(url.hostname))throw new Error('字幕桥仅适用于 YouTube。');await chrome.scripting.executeScript({target:{tabId:sender.tab.id,frameIds:[0]},world:'MAIN',files:['youtube-captions-bridge.js']});return{};}
+    case 'YOUTUBE_CAPTIONS_BRIDGE':{if(!VIDEO_SUPPORT_ENABLED)throw new Error('视频字幕功能暂未开放。');if(!Number.isInteger(sender.tab?.id)||sender.frameId!==0)throw new Error('字幕桥只能由当前网页主框架启用。');const {url}=await tabPage(sender.tab.id);if(url.protocol!=='https:'||!['www.youtube.com','m.youtube.com'].includes(url.hostname))throw new Error('字幕桥仅适用于 YouTube。');await chrome.scripting.executeScript({target:{tabId:sender.tab.id,frameIds:[0]},world:'MAIN',files:['youtube-captions-bridge.js']});return{};}
     case 'STATE_GET':return {...publicState(await load(false),trusted),emergencyActive:Number.isInteger(sender.tab?.id)&&Boolean(await emergencySession(sender.tab.id))};
     case 'SUBSCRIPTION_STATUS':return refreshSubscription();
     case 'SUBSCRIPTION_LOGIN':return loginSubscription();
@@ -988,7 +1037,7 @@ async function handle(message,sender) {
       const result=await mutate(state=>{state.settings={...state.settings,...patch};if(rememberChanged)state.supportDataGeneration++;if(providerChanged||patch.customTerms||patch.domainRules||patch.domain||patch.domainDetection)clearProviderState();if(classificationChanged)invalidateClassification();return publicState(state,true);},false,false);
       await pruneBackgroundQueue();
       if(providerChanged||patch.domainRules||patch.domain||rememberChanged||patch.assistanceMode)await readingHistory.invalidate();
-      if(rememberChanged||providerChanged)await clearSupportSessions();if(providerChanged)await reconcileAutomation();if(genericChanged)await broadcast();
+      if(rememberChanged||providerChanged)await clearSupportSessions();if(providerChanged)await reconcileAutomation();if(rememberChanged||providerChanged||patch.customTerms||patch.domainRules||patch.domain||patch.domainDetection)await clearEmergencySessions();if(genericChanged)await broadcast();
       if(patch.readingStyle!==undefined&&JSON.stringify(patch.readingStyle)!==JSON.stringify(before.settings.readingStyle))await broadcastReadingStyle(patch.readingStyle);
       if(patch.helpLanguage!==undefined&&patch.helpLanguage!==before.settings.helpLanguage)await broadcastHelpLanguage(patch.helpLanguage);return result;
     }
@@ -1001,6 +1050,7 @@ async function handle(message,sender) {
     case 'EMERGENCY_BEGIN':if(!trusted)throw new Error('仅扩展界面可确认紧急翻译。');return emergencyBegin(message);
     case 'PASSAGE_TRANSLATE':return passageTranslate(message,sender);
     case 'EMERGENCY_TRANSLATE':return emergencyTranslate(message,sender);
+    case 'EMERGENCY_CANCEL_REQUEST':return emergencyCancelRequest(message,sender);
     case 'EMERGENCY_END':return emergencyEnd(message,sender,trusted);
     case 'ASSIST':return assist(message,sender);
     case 'ASSIST_COMMIT':return assistCommit(message,sender);
@@ -1064,7 +1114,7 @@ chrome.permissions.onAdded.addListener(refreshAutomation);
 chrome.permissions.onRemoved.addListener(()=>{clearProviderState();refreshAutomation();});
 chrome.tabs.onActivated?.addListener(()=>{void pruneBackgroundQueue();});
 chrome.tabs.onUpdated.addListener((tabId,changeInfo,tab) => {
-  if(changeInfo.url!==undefined||changeInfo.status==='loading')void pruneBackgroundQueue();
+  if(changeInfo.url!==undefined||changeInfo.status==='loading'){void pruneBackgroundQueue();void clearPopupIntent(tabId);void chrome.tabs.sendMessage(tabId,{type:'SS_EMERGENCY_END',navigation:true,url:changeInfo.url||tab?.url},{frameId:0}).catch(()=>{});}
   if(changeInfo.url!==undefined||changeInfo.status==='loading'){void forgetEmergency(tabId);injectedEmergencyPages.delete(tabId);void chrome.storage.session.remove([offeredKey(tabId),pendingKey(tabId),assistCacheKey(tabId),'pageDomain:'+tabId]);}
   if((changeInfo.url!==undefined||changeInfo.status==='loading')&&!pageOrigin(tab?.url||''))void clearAutomaticSentenceModes(tabId);
   if (changeInfo.url === undefined && changeInfo.status !== 'complete') return;
@@ -1074,6 +1124,7 @@ chrome.tabs.onUpdated.addListener((tabId,changeInfo,tab) => {
 });
 chrome.tabs.onRemoved.addListener(tabId => {
   void pruneBackgroundQueue();
+  void clearPopupIntent(tabId);
   void forgetEmergency(tabId);injectedEmergencyPages.delete(tabId);sentenceModeGeneration.delete(tabId);void chrome.storage.session.remove(sentenceModeKey(tabId));
   tabActivationGeneration.delete(tabId);
   void forgetTabAutomation(tabId);
@@ -1112,8 +1163,24 @@ async function toggleReading(tab) {
   }
 }
 
+async function openBilingualPage(tab) {
+  if(!Number.isInteger(tab?.id)||typeof tab.url!=='string')return;
+  const intent={tabId:tab.id,url:tab.url,createdAt:Date.now()};
+  await setPopupIntent(intent);
+  try {
+    if(typeof chrome.action.openPopup!=='function')throw new Error('浏览器不支持打开扩展窗口。');
+    await chrome.action.openPopup({windowId:tab.windowId});
+    await clearTabStatus(tab.id);
+  } catch (error) {
+    await clearPopupIntent(tab.id,intent.createdAt);
+    const fallback=Object.assign(new Error('请点击工具栏 RelyLess 打开翻译'),{cause:error});
+    await showTabError(tab.id,fallback,fallback.message);
+  }
+}
+
 chrome.commands.onCommand.addListener((command,tab) => {
   if (command === 'toggle-reading') void toggleReading(tab);
+  if (command === 'open-bilingual-page') void openBilingualPage(tab);
 });
 
 chrome.contextMenus.onClicked.addListener((info,tab) => {

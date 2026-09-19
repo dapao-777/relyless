@@ -2,7 +2,7 @@ import {expect,test} from 'bun:test';
 import {
   normalizePreparationContext,normalizeSupportItems,prepareSupportItems,normalizeSupportResponse,normalizeSupportResult,inspectSupportResponse,normalizeSupportAttempt,requestSupportWithCorrection,
   normalizeAssistanceCommand,normalizeAssistanceRequest,normalizeAssistanceResult,
-  normalizeEmergencyItems,normalizeEmergencyResult,
+  normalizeEmergencyItems,normalizeEmergencyResult,normalizePageTranslationItems,inspectPageTranslationResult,normalizePageTranslationResult,
 } from '../extension/gloss.mjs';
 
 const sentence = 'The request is retried unless  the token has expired. 😀';
@@ -178,6 +178,32 @@ test('emergency translation validates exact ids, plain result shape, and item li
   }
 });
 
+const pageContext={title:'Retry guide',heading:'Failure handling',before:'The service may pause.',after:'Retry only the failed item.'};
+const pageItems=[{id:'first',text:'Keep the original English visible.',context:pageContext},{id:'second',text:'Stop translating when asked.',context:{...pageContext,heading:'Stopping'}}];
+
+test('page translation validates closed bounded context while passage remains context-free',()=>{
+  expect(normalizePageTranslationItems(pageItems)).toEqual(pageItems);
+  expect(()=>normalizePageTranslationItems([{...pageItems[0],context:{...pageContext,title:'x'.repeat(161)}}])).toThrow('上下文');
+  expect(()=>normalizePageTranslationItems([{...pageItems[0],context:{...pageContext,extra:''}}])).toThrow('上下文');
+  expect(()=>normalizeEmergencyItems(pageItems)).toThrow('无效');
+  const oversized=[1,2,3].map(index=>({id:`p${index}`,text:'x'.repeat(3500),context:{title:'t'.repeat(160),heading:'h'.repeat(160),before:'b'.repeat(400),after:'a'.repeat(400)}}));
+  expect(()=>normalizePageTranslationItems(oversized)).toThrow('过长');
+});
+
+test('page translation preserves known successes and assigns only known bad or missing items errors',()=>{
+  const inspected=inspectPageTranslationResult({items:[{id:'second',translation:''},{id:'first',translation:'保留可见的英文原文。'}]},pageItems);
+  expect(inspected).toEqual({items:[{id:'first',translation:'保留可见的英文原文。'}],errors:[{id:'second',code:'TRANSLATION_EMPTY'}]});
+  expect(inspectPageTranslationResult({items:[{id:'first',translation:'保留可见的英文原文。'}]},pageItems)).toEqual({items:[{id:'first',translation:'保留可见的英文原文。'}],errors:[{id:'second',code:'ITEM_ID'}]});
+  expect(normalizePageTranslationResult(inspected,pageItems)).toEqual(inspected);
+});
+
+test('page translation rejects unreliable batch mapping without keeping plausible neighbors',()=>{
+  for(const [raw,code] of [
+    ['not json','BATCH_SHAPE'],
+    [{items:[{id:'first',translation:'正确。'},{id:'unknown',translation:'错误。'}]},'ITEM_ID'],
+    [{items:[{id:'first',translation:'正确。'},{id:'first',translation:'重复。'}]},'ITEM_DUPLICATE'],
+  ])expect(inspectPageTranslationResult(raw,pageItems)).toEqual({items:[],errors:pageItems.map(({id})=>({id,code}))});
+});
 test('one correction preserves valid items, pins the failed occurrence, and carries no rejected text',async()=>{
   const items=prepareSupportItems([{...support[0],id:'good'},{...support[0],id:'bad'}]);
   const row=(id,translation)=>({id,target:{id:'t5_5',hint:target.hint,translation,sense:target.sense},meaning,sentenceTranslation});

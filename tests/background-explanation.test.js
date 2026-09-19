@@ -14,6 +14,7 @@ const session={},tab={id:7,url:'https://reading.example/article?private=yes#part
 const pick=(source,keys)=>keys===null?{...source}:Object.fromEntries((Array.isArray(keys)?keys:[keys]).filter(key=>Object.hasOwn(source,key)).map(key=>[key,source[key]]));
 const remove=(source,keys)=>{for(const key of Array.isArray(keys)?keys:[keys])delete source[key];};
 const fixtureTarget=item=>(item.focus?item.targets.find(target=>target.first===item.focus.first&&target.last===item.focus.last):item.targets.find(target=>target.text.toLowerCase()==='unless'))||item.targets[0];
+const pageItem=(id,text,context={title:'Private title',heading:'',before:'',after:''})=>({id,text,context});
 const chromeBefore=globalThis.chrome,fetchBefore=globalThis.fetch;
 let providerCalls=0,failedAssists=0,failNext=false,nextSense=null,forcedBytes=null,supportGate=null,assistGate=null,sentenceGate=null,invalidSentenceGroups=false,currentDocumentId='document-one';const supportPayloads=[];
 globalThis.chrome={
@@ -606,11 +607,12 @@ test('emergency translation requires exact trusted armed URL and never changes l
   await send({type:'PAGE_UI_INJECT',tabId:7},extensionSender);
   await expect(send({type:'EMERGENCY_BEGIN',tabId:7,url:'https://reading.example/other'},extensionSender)).rejects.toThrow('页面已变化');
   const {token}=await send({type:'EMERGENCY_BEGIN',tabId:7,url:tab.url},extensionSender),words=JSON.stringify(stored.words),before=providerCalls;
-  await expect(send({type:'EMERGENCY_TRANSLATE',token:'wrong',items:[{id:'e',text:'Emergency text.'}]})).rejects.toThrow('授权无效');
-  expect((await send({type:'EMERGENCY_TRANSLATE',token,items:[{id:'e',text:'Emergency text.'}]})).items[0]).toEqual({id:'e',translation:'应急译文'});
+  await expect(send({type:'EMERGENCY_TRANSLATE',token,requestSeq:0,items:[pageItem('invalid-sequence','Invalid sequence.')]})).rejects.toThrow();
+  await expect(send({type:'EMERGENCY_TRANSLATE',token:'wrong',requestSeq:1,items:[pageItem('e','Emergency text.')]})).rejects.toThrow('授权无效');
+  expect((await send({type:'EMERGENCY_TRANSLATE',token,requestSeq:1,items:[pageItem('e','Emergency text.')]})).items[0]).toEqual({id:'e',translation:'应急译文'});
   expect(providerCalls).toBe(before+1);expect(JSON.stringify(stored.words)).toBe(words);
   await send({type:'EMERGENCY_END',tabId:7,token},extensionSender);
-  await expect(send({type:'EMERGENCY_TRANSLATE',token,items:[{id:'e',text:'Again.'}]})).rejects.toThrow('授权无效');
+  await expect(send({type:'EMERGENCY_TRANSLATE',token,requestSeq:2,items:[pageItem('e','Again.')]})).rejects.toThrow('授权无效');
 });
 
 test('streamed assistance is readable before completion but cannot commit or survive memory reset',async()=>{
@@ -681,22 +683,75 @@ test('prepared meanings cannot cross an article change with the same URL and sen
   }finally{globalThis.chrome=previous;globalThis.fetch=previousFetch;}
 });
 
-test('translation reuses exact items across passage and emergency while preserving cache boundaries',async()=>{
+test('translation isolates scope and page context while caching only successful items',async()=>{
   const previous=globalThis.chrome,previousFetch=globalThis.fetch,data={wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'},rememberSupport:true}},fixture=isolatedChrome(data,{id:'translation-reuse'}),page={url:'https://isolated.example/read',tab:{id:91},frameId:0};
-  const gate=Promise.withResolvers(),requests=[];let gated=true,calls=0;
+  const requests=[];let calls=0,badAttempts=0;
+  const contextA={title:'Article',heading:'Cache',before:'Earlier text.',after:'Later text.'},contextB={...contextA,heading:'Different section'};
   try{
-    globalThis.chrome=fixture.api;globalThis.fetch = withCapabilityProbe(async (_url,options) => {calls++;const payload=JSON.parse(JSON.parse(options.body).messages[1].content);requests.push(payload);if(payload.items.some(item=>item.text==='fail'))throw new TypeError('offline');if(gated)await gate.promise;return {ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({items:payload.items.map(item=>({id:item.id,translation:'译文'+item.text.length}))})},finish_reason:'stop'}]})};});
+    globalThis.chrome=fixture.api;globalThis.fetch=withCapabilityProbe(async (_url,options)=>{calls++;const payload=JSON.parse(JSON.parse(options.body).messages[1].content);requests.push(payload);if(payload.items.some(item=>item.text==='offline'))throw new TypeError('offline');const malformed=payload.items.some(item=>item.text==='malformed');const result={items:payload.items.map(item=>({id:item.id,translation:item.text==='bad'&&++badAttempts===1?'':'译文'+item.text.length}))};return {ok:true,json:async()=>({choices:[{message:{content:malformed?'{':JSON.stringify(result)},finish_reason:'stop'}]})};});
     await import('../extension/background.js?translation-reuse='+Date.now());await isolatedSend(fixture,{type:'PAGE_UI_INJECT',tabId:91});const {token}=await isolatedSend(fixture,{type:'EMERGENCY_BEGIN',tabId:91,url:page.url});
-    const a='Keep  exact spacing.',b='A second item.',c='A third item.';
-    const passage=isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId:'shared-passage',items:[{id:'a1',text:a},{id:'a2',text:a},{id:'b',text:b}]},page);while(calls!==1)await new Promise(resolve=>setTimeout(resolve,0));
-    const emergency=isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token,items:[{id:'emergency-a',text:a},{id:'c',text:c}]},page);while(calls!==2)await new Promise(resolve=>setTimeout(resolve,0));gated=false;gate.resolve();
-    expect((await passage).items).toEqual([{id:'a1',translation:'译文20'},{id:'a2',translation:'译文20'},{id:'b',translation:'译文14'}]);expect((await emergency).items).toEqual([{id:'emergency-a',translation:'译文20'},{id:'c',translation:'译文13'}]);
-    expect(requests.slice(0,2).map(value=>value.items.length).sort()).toEqual([1,2]);expect(calls).toBe(2);
-    expect(await isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId:'cached-remap',items:[{id:'new-a',text:a}]},page)).toEqual({items:[{id:'new-a',translation:'译文20'}]});expect(calls).toBe(2);
-    await isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId:'whitespace-distinct',items:[{id:'spaced',text:a+' '}]},page);expect(calls).toBe(3);
-    for(const requestId of ['failed-once','failed-twice'])await expect(isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId,items:[{id:'failure',text:'fail'}]},page)).rejects.toThrow();expect(calls).toBe(5);
-    const changed=data.settings.apiServices.map(service=>({...service,model:service.model+'-changed'}));await isolatedSend(fixture,{type:'STATE_PATCH',patch:{apiServices:changed}});await isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId:'service-changed',items:[{id:'after-service',text:a}]},page);expect(calls).toBe(6);
-  }finally{gated=false;gate.resolve();globalThis.chrome=previous;globalThis.fetch=previousFetch;}
+    const first=await isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token,requestSeq:1,items:[pageItem('good','Good text.',contextA),pageItem('bad','bad',contextA)]},page);
+    expect(first).toEqual({items:[{id:'good',translation:'译文10'}],errors:[{id:'bad',code:'TRANSLATION_EMPTY'}]});expect(calls).toBe(1);
+    const retried=await isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token,requestSeq:2,items:[pageItem('bad-retry','bad',contextA)]},page);
+    expect(retried).toEqual({items:[{id:'bad-retry',translation:'译文3'}],errors:[]});expect(requests[1].items.map(item=>item.text)).toEqual(['bad']);expect(calls).toBe(2);
+    expect(await isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token,requestSeq:3,items:[pageItem('good-remap','Good text.',contextA),pageItem('bad-remap','bad',contextA)]},page)).toEqual({items:[{id:'good-remap',translation:'译文10'},{id:'bad-remap',translation:'译文3'}],errors:[]});expect(calls).toBe(2);
+    await isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token,requestSeq:4,items:[pageItem('context-change','Good text.',contextB)]},page);expect(calls).toBe(3);
+    await isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId:'scope-change',items:[{id:'passage',text:'Good text.'}]},page);expect(calls).toBe(4);
+    expect(await isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token,requestSeq:5,items:[pageItem('malformed','malformed',contextA)]},page)).toEqual({items:[],errors:[{id:'malformed',code:'BATCH_SHAPE'}]});expect(calls).toBe(5);
+    for(const [index,id] of ['offline-one','offline-two'].entries())await expect(isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token,requestSeq:6+index,items:[pageItem(id,'offline',contextA)]},page)).rejects.toThrow('无法连接服务');expect(calls).toBe(7);
+    fixture.api.tabs.get=async()=>({id:91,url:page.url,active:true});
+    for(const [index,url]of ['https://isolated.example/other-source','https://another.example/read'].entries()){
+      page.url=url;await isolatedSend(fixture,{type:'PAGE_UI_INJECT',tabId:91});const next=await isolatedSend(fixture,{type:'EMERGENCY_BEGIN',tabId:91,url});await isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token:next.token,requestSeq:1,items:[pageItem('new-source','Good text.',contextA)]},page);expect(calls).toBe(8+index);
+    }
+    expect(data.words).toEqual([]);expect(data.supportUsage||[]).toEqual([]);
+  }finally{globalThis.chrome=previous;globalThis.fetch=previousFetch;}
+});
+
+test('shared translation keeps valid consumers and never caches a result with none',async()=>{
+  const previous=globalThis.chrome,previousFetch=globalThis.fetch,data={wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'}}},fixture=isolatedChrome(data,{id:'translation-consumers'}),pages=new Map([[91,{id:91,url:'https://isolated.example/read',active:true}],[92,{id:92,url:'https://isolated.example/read',active:true}]]);let calls=0,gate=Promise.withResolvers(),started=Promise.withResolvers();
+  const page=id=>({url:pages.get(id).url,tab:{id},frameId:0});
+  try{
+    globalThis.chrome=fixture.api;fixture.api.tabs.get=async id=>({...pages.get(id)});globalThis.fetch=withCapabilityProbe(async (_url,options)=>{calls++;const payload=JSON.parse(JSON.parse(options.body).messages[1].content);started.resolve();await gate.promise;return {ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({items:payload.items.map(item=>({id:item.id,translation:'共享译文'}))})},finish_reason:'stop'}]})};});
+    await import('../extension/background.js?translation-consumers='+Date.now());
+    const first=isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId:'first',items:[{id:'first',text:'Shared translation text.'}]},page(91));await started.promise;
+    const second=isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId:'second',items:[{id:'second',text:'Shared translation text.'}]},page(92));await new Promise(resolve=>setTimeout(resolve,0));pages.get(91).active=false;gate.resolve();
+    await expect(first).rejects.toThrow();expect(await second).toEqual({items:[{id:'second',translation:'共享译文'}]});expect(calls).toBe(1);
+    expect(await isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId:'cached',items:[{id:'cached',text:'Shared translation text.'}]},page(92))).toEqual({items:[{id:'cached',translation:'共享译文'}]});expect(calls).toBe(1);
+    pages.get(91).active=true;gate=Promise.withResolvers();started=Promise.withResolvers();const abandoned=isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId:'abandoned',items:[{id:'abandoned',text:'Nobody remains for this result.'}]},page(91));await started.promise;pages.get(91).active=false;gate.resolve();await expect(abandoned).rejects.toThrow();
+    pages.get(91).active=true;gate=Promise.withResolvers();gate.resolve();await isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId:'not-cached',items:[{id:'not-cached',text:'Nobody remains for this result.'}]},page(91));expect(calls).toBe(3);
+  }finally{gate.resolve();globalThis.chrome=previous;globalThis.fetch=previousFetch;}
+});
+test('page request cancellation persists before registration and prunes queued provider work',async()=>{
+  const previous=globalThis.chrome,previousFetch=globalThis.fetch,data={wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'}}},fixture=isolatedChrome(data,{id:'page-sequence-cancel'});
+  const pages=new Map([91,92,93].map(id=>[id,{id,url:'https://isolated.example/read/'+id,active:true}])),calls=[],blockers=[Promise.withResolvers(),Promise.withResolvers()],started=[Promise.withResolvers(),Promise.withResolvers()];
+  const page=id=>({url:pages.get(id).url,tab:{id},frameId:0});
+  try{
+    globalThis.chrome=fixture.api;fixture.api.tabs.get=async id=>({...pages.get(id)});globalThis.fetch=withCapabilityProbe(async (_url,options)=>{const payload=JSON.parse(JSON.parse(options.body).messages[1].content),text=payload.items[0].text,index=text==='Provider blocker one.'?0:text==='Provider blocker two.'?1:-1;calls.push(text);if(index>=0){started[index].resolve();await blockers[index].promise;}return {ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({items:payload.items.map(item=>({id:item.id,translation:'译文'}))})},finish_reason:'stop'}]})};});
+    await import('../extension/background.js?page-sequence-cancel='+Date.now());await isolatedSend(fixture,{type:'PAGE_UI_INJECT',tabId:91});const {token}=await isolatedSend(fixture,{type:'EMERGENCY_BEGIN',tabId:91,url:pages.get(91).url});
+    await isolatedSend(fixture,{type:'EMERGENCY_CANCEL_REQUEST',token,through:1},page(91));
+    await expect(isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token,requestSeq:1,items:[pageItem('cancelled-before-register','Cancelled before registration.')]},page(91))).rejects.toThrow();expect(calls).toEqual([]);
+    const occupied=[isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId:'block-one',items:[{id:'one',text:'Provider blocker one.'}]},page(92)),isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId:'block-two',items:[{id:'two',text:'Provider blocker two.'}]},page(93))];await Promise.all(started.map(item=>item.promise));
+    const queued=isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token,requestSeq:2,items:[pageItem('cancelled-while-queued','Cancelled while queued.')]},page(91)),queuedState=queued.then(value=>({value}),error=>({error}));await new Promise(resolve=>setTimeout(resolve,0));await isolatedSend(fixture,{type:'EMERGENCY_CANCEL_REQUEST',token,through:2},page(91));blockers.forEach(item=>item.resolve());await Promise.all(occupied);expect((await queuedState).error).toBeInstanceOf(Error);expect(calls.filter(text=>text==='Cancelled while queued.')).toEqual([]);
+  }finally{blockers.forEach(item=>item.resolve());globalThis.chrome=previous;globalThis.fetch=previousFetch;}
+});
+
+test('ending a page session rejects a late result and prevents it from entering translation cache',async()=>{
+  const previous=globalThis.chrome,previousFetch=globalThis.fetch,data={wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'}}},fixture=isolatedChrome(data,{id:'page-stop-cache'}),page={url:'https://isolated.example/read',tab:{id:91},frameId:0},gate=Promise.withResolvers(),started=Promise.withResolvers();let calls=0;
+  try{
+    globalThis.chrome=fixture.api;globalThis.fetch=withCapabilityProbe(async (_url,options)=>{calls++;const payload=JSON.parse(JSON.parse(options.body).messages[1].content);if(calls===1){started.resolve();await gate.promise;}return {ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({items:payload.items.map(item=>({id:item.id,translation:'迟到译文'}))})},finish_reason:'stop'}]})};});
+    await import('../extension/background.js?page-stop-cache='+Date.now());await isolatedSend(fixture,{type:'PAGE_UI_INJECT',tabId:91});const first=await isolatedSend(fixture,{type:'EMERGENCY_BEGIN',tabId:91,url:page.url});const late=isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token:first.token,requestSeq:1,items:[pageItem('late','Late cache candidate.')]},page),lateState=late.then(value=>({value}),error=>({error}));await started.promise;await isolatedSend(fixture,{type:'EMERGENCY_END',tabId:91,token:first.token});gate.resolve();expect((await lateState).error).toBeInstanceOf(Error);
+    await isolatedSend(fixture,{type:'PAGE_UI_INJECT',tabId:91});const second=await isolatedSend(fixture,{type:'EMERGENCY_BEGIN',tabId:91,url:page.url});expect(await isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token:second.token,requestSeq:1,items:[pageItem('fresh','Late cache candidate.')]},page)).toEqual({items:[{id:'fresh',translation:'迟到译文'}],errors:[]});expect(calls).toBe(2);
+  }finally{gate.resolve();globalThis.chrome=previous;globalThis.fetch=previousFetch;}
+});
+
+test('cancelling one shared page request preserves the other valid page consumer',async()=>{
+  const previous=globalThis.chrome,previousFetch=globalThis.fetch,data={wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'}}},fixture=isolatedChrome(data,{id:'page-shared-sequence'}),pages=new Map([[91,{id:91,url:'https://isolated.example/read',active:true}],[92,{id:92,url:'https://isolated.example/read',active:true}]]),gate=Promise.withResolvers(),started=Promise.withResolvers();let calls=0;
+  const page=id=>({url:pages.get(id).url,tab:{id},frameId:0});
+  try{
+    globalThis.chrome=fixture.api;fixture.api.tabs.get=async id=>({...pages.get(id)});globalThis.fetch=withCapabilityProbe(async (_url,options)=>{calls++;const payload=JSON.parse(JSON.parse(options.body).messages[1].content);started.resolve();await gate.promise;return {ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({items:payload.items.map(item=>({id:item.id,translation:'共享页面译文'}))})},finish_reason:'stop'}]})};});
+    await import('../extension/background.js?page-shared-sequence='+Date.now());for(const tabId of pages.keys())await isolatedSend(fixture,{type:'PAGE_UI_INJECT',tabId});const first=await isolatedSend(fixture,{type:'EMERGENCY_BEGIN',tabId:91,url:pages.get(91).url}),second=await isolatedSend(fixture,{type:'EMERGENCY_BEGIN',tabId:92,url:pages.get(92).url});
+    const cancelled=isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token:first.token,requestSeq:1,items:[pageItem('cancelled','Shared page text.')]},page(91)),cancelledState=cancelled.then(value=>({value}),error=>({error}));await started.promise;const valid=isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token:second.token,requestSeq:1,items:[pageItem('valid','Shared page text.')]},page(92));await new Promise(resolve=>setTimeout(resolve,0));await isolatedSend(fixture,{type:'EMERGENCY_CANCEL_REQUEST',token:first.token,through:1},page(91));gate.resolve();expect((await cancelledState).error).toBeInstanceOf(Error);expect(await valid).toEqual({items:[{id:'valid',translation:'共享页面译文'}],errors:[]});expect(calls).toBe(1);
+  }finally{gate.resolve();globalThis.chrome=previous;globalThis.fetch=previousFetch;}
 });
 
 test('full assistance safely supplies brief only within the same request context',async()=>{
@@ -752,9 +807,9 @@ test('emergency authorization survives worker restart but not service changes, s
     const {token}=await isolatedSend(first,{type:'EMERGENCY_BEGIN',tabId:91,url:page.url});
     const restarted=isolatedChrome(data,{id:'worker-session'});Object.assign(restarted.session,structuredClone(first.session));
     globalThis.chrome=restarted.api;await import('../extension/background.js?emergency-worker-after='+Date.now());
-    const command={type:'EMERGENCY_TRANSLATE',token,items:[{id:'next-page-chunk',text:'New content loaded after the worker went idle.'}]};
+    const command={type:'EMERGENCY_TRANSLATE',token,requestSeq:1,items:[pageItem('next-page-chunk','New content loaded after the worker went idle.')]};
     expect(await isolatedSend(restarted,{type:'STATE_GET'},page)).toMatchObject({emergencyActive:true});
-    expect(await isolatedSend(restarted,command,page)).toEqual({items:[{id:'next-page-chunk',translation:'应急译文'}]});
+    expect(await isolatedSend(restarted,command,page)).toEqual({items:[{id:'next-page-chunk',translation:'应急译文'}],errors:[]});
     const services=data.settings.apiServices.map(service=>({...service,model:'another-model'}));
     await isolatedSend(restarted,{type:'STATE_PATCH',patch:{apiServices:services}});
     await expect(isolatedSend(restarted,command,page)).rejects.toThrow();
@@ -889,6 +944,55 @@ test('an offered system word can be marked known, is excluded without learning h
     expect(data.words.find(value=>value.id===word).knownAt).toBeGreaterThan(0);
     expect(data.words.find(value=>value.id===word).helpCount).toBe(1);
   }finally{globalThis.chrome=previous;}
+});
+test('marking a word known preserves unrelated translations and in-flight assistance',async()=>{
+  const previous=globalThis.chrome,previousFetch=globalThis.fetch;
+  const data={wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'},rememberSupport:true,assistanceMode:'ambient'}};
+  const fixture=isolatedChrome(data,{id:'known-local-update'}),page={url:'https://isolated.example/read',tab:{id:91},frameId:0};
+  const started=Promise.withResolvers(),release=Promise.withResolvers();let pending;
+  try{
+    globalThis.chrome=fixture.api;
+    globalThis.fetch=async(url,options)=>{
+      const body=JSON.parse(options.body);if(capabilityResponse(body))return previousFetch(url,options);
+      const payload=JSON.parse(body.messages[1].content);
+      if(payload.items?.[0]?.text==='An unrelated translation is still being prepared.'){started.resolve();await release.promise;}
+      return previousFetch(url,options);
+    };
+    await import('../extension/background.js?known-local-update='+Date.now());
+    const offered=await isolatedSend(fixture,{type:'SUPPORT_BATCH',items:[{id:'known',sentence:'The request is retried unless the token has expired.',domain:'tech',candidates:[{text:'unless'}]}]},page);
+    const cached={type:'PASSAGE_TRANSLATE',requestId:'cached-before-known',items:[{id:'cached',text:'The cache keeps this paragraph available.'}]};
+    const translation=await isolatedSend(fixture,cached,page);
+    pending=isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId:'pending-during-known',items:[{id:'pending',text:'An unrelated translation is still being prepared.'}]},page).then(result=>({result}),error=>({error}));
+    await started.promise;
+    await isolatedSend(fixture,{type:'WORD_PREFERENCE_SET',wordId:offered.items[0].target.wordId,known:true},page);
+    const before=providerCalls;
+    expect(await isolatedSend(fixture,{...cached,requestId:'cached-after-known'},page)).toEqual(translation);
+    expect(providerCalls).toBe(before);
+    release.resolve();
+    expect(await pending).toEqual({result:{items:[{id:'pending',translation:'应急译文'}]}});
+  }finally{release.resolve();if(pending)await pending;globalThis.chrome=previous;globalThis.fetch=previousFetch;}
+});
+test('a late automatic result cannot restore a word marked known while it was running',async()=>{
+  const previous=globalThis.chrome,previousFetch=globalThis.fetch;
+  const fixture=isolatedChrome({wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'},rememberSupport:true,assistanceMode:'ambient'}},{id:'known-late-result'});
+  const page={url:'https://isolated.example/read',tab:{id:91},frameId:0},started=Promise.withResolvers(),release=Promise.withResolvers();let pending;
+  try{
+    globalThis.chrome=fixture.api;
+    globalThis.fetch=async(url,options)=>{
+      const body=JSON.parse(options.body);if(capabilityResponse(body))return previousFetch(url,options);
+      const payload=JSON.parse(body.messages[1].content);
+      if(payload.items?.[0]?.sentence.startsWith('Another request')){started.resolve();await release.promise;}
+      return previousFetch(url,options);
+    };
+    await import('../extension/background.js?known-late-result='+Date.now());
+    const item={id:'first',sentence:'The request is retried unless the token has expired.',domain:'tech',candidates:[{text:'unless'}]};
+    const offered=await isolatedSend(fixture,{type:'SUPPORT_BATCH',items:[item]},page);
+    pending=isolatedSend(fixture,{type:'SUPPORT_BATCH',items:[{...item,id:'late',sentence:'Another request is retried unless the token has expired.'}]},page).then(result=>({result}),error=>({error}));
+    await started.promise;
+    await isolatedSend(fixture,{type:'WORD_PREFERENCE_SET',wordId:offered.items[0].target.wordId,known:true},page);
+    release.resolve();const completed=await pending;
+    expect(completed.error).toBeUndefined();expect(completed.result.items[0]).toMatchObject({id:'late',target:null});
+  }finally{release.resolve();if(pending)await pending;globalThis.chrome=previous;globalThis.fetch=previousFetch;}
 });
 test('page state exposes reading controls but not private routing, models or glossary',async()=>{
   const previous=globalThis.chrome;

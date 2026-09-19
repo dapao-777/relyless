@@ -1,7 +1,10 @@
 import {request} from '../shared.js';
 
 const popupEls={status:document.querySelector('#page-status'),hostname:document.querySelector('#site-hostname'),siteAuto:document.querySelector('#site-auto'),siteAutoNote:document.querySelector('#site-auto-note'),siteAutoError:document.querySelector('#site-auto-error'),toggle:document.querySelector('#toggle-page'),toggleLabel:document.querySelector('#toggle-label'),pageNote:document.querySelector('#page-note'),actionError:document.querySelector('#action-error'),sentenceGroups:document.querySelector('#sentence-groups'),sentenceGroupsNote:document.querySelector('#sentence-groups-note'),sentenceGroupsError:document.querySelector('#sentence-groups-error'),options:document.querySelector('#open-options'),serviceWarning:document.querySelector('#service-warning'),serviceWarningCopy:document.querySelector('#service-warning-copy'),repairService:document.querySelector('#repair-service'),suggestion:document.querySelector('#on-demand-suggestion'),chooseOnDemand:document.querySelector('#choose-on-demand')};
-for(const name of ['open','confirm','start','cancel','actions','stop','clear','result'])popupEls['emergency'+name[0].toUpperCase()+name.slice(1)]=document.querySelector('#emergency-'+name);
+for(const name of ['panel','open','confirm','start','cancel','progress','progress-copy','counts','actions','stop','resume','retry','clear','result','status']){
+  const key='emergency'+name.split('-').map(part=>part[0].toUpperCase()+part.slice(1)).join('');
+  popupEls[key]=document.querySelector('#emergency-'+name);
+}
 const popupLookupKeyCopies=[...document.querySelectorAll('[data-lookup-key]')];
 let popupState=null;
 let popupAutomation=null;
@@ -10,7 +13,8 @@ let popupEnabled=false;
 let popupSentenceGroups={enabled:false,density:'medium',status:'off',error:'',processed:0};
 let popupSentenceGroupsLoaded=false;
 let popupBusy=false;
-let popupEmergency={active:false,displayed:false};
+let popupEmergency={active:false,displayed:false,phase:'off',total:0,completed:0,failed:0,pending:0,skipped:0,error:''};
+let popupEmergencyResume=false;
 
 function popupErrorText(error){return error instanceof Error?error.message:String(error);}
 function popupShowError(element,error){element.textContent=popupErrorText(error);element.hidden=false;}
@@ -18,6 +22,22 @@ function popupClearError(element){element.textContent='';element.hidden=true;}
 function popupSupported(){return Boolean(popupTab?.id&&/^https?:\/\//i.test(popupTab.url||''));}
 function popupOrigin(){try{return popupSupported()?new URL(popupTab.url).origin:'';}catch{return'';}}
 function popupHostname(){try{return popupSupported()?new URL(popupTab.url).hostname:'当前标签页';}catch{return'当前标签页';}}
+function popupEmergencySnapshot(value={}){
+  const count=name=>Number.isInteger(value[name])&&value[name]>=0?value[name]:0;
+  const phases=new Set(['off','translating','waiting','complete','partial','stopped','error']);
+  return {active:Boolean(value.active),displayed:Boolean(value.displayed),phase:phases.has(value.phase)?value.phase:'off',total:count('total'),completed:count('completed'),failed:count('failed'),pending:count('pending'),skipped:count('skipped'),error:typeof value.error==='string'?value.error:''};
+}
+function popupEmergencyPhaseText(){
+  if(!popupSupported())return '当前页不可用；请在普通网页中使用。';
+  if(!popupState?.providerConfigured)return '连接辅助服务后才能翻译本页。';
+  if(popupEmergency.phase==='translating')return '正在翻译读到附近的正文。';
+  if(popupEmergency.phase==='waiting')return '当前附近已处理，继续阅读时再翻译。';
+  if(popupEmergency.phase==='complete')return '已处理所有已识别段落，英文仍保留。';
+  if(popupEmergency.phase==='partial')return '部分段落未译完，可重试失败段落。';
+  if(popupEmergency.phase==='stopped')return '已停止发送新请求，现有译文仍保留。';
+  if(popupEmergency.phase==='error')return popupEmergency.error||'翻译已停止，可确认后继续。';
+  return '保留英文，按阅读位置翻译附近正文。';
+}
 function popupRender(){
   popupEls.hostname.textContent=popupHostname();
   const lookupKey=typeof popupState?.settings?.lookupKey==='string'&&/^[A-Z]$/.test(popupState.settings.lookupKey)?popupState.settings.lookupKey:'D';
@@ -51,16 +71,27 @@ function popupRender(){
   else if(popupSentenceGroups.enabled)popupEls.sentenceGroupsNote.textContent=popupSentenceGroups.processed?'已开启，已处理 '+popupSentenceGroups.processed+' 句；滚动时按需继续。':'已开启，等待分析可见正文。';
   else popupEls.sentenceGroupsNote.textContent='已关闭；可随时为当前页面开启。';
   if(popupSentenceGroups.error){popupEls.sentenceGroupsError.textContent=popupSentenceGroups.error;popupEls.sentenceGroupsError.hidden=false;}else{popupEls.sentenceGroupsError.textContent='';popupEls.sentenceGroupsError.hidden=true;}
-  const emergencyVisible=Boolean(popupEmergency.active||popupEmergency.displayed);
+  const emergencyVisible=Boolean(popupEmergency.active||popupEmergency.displayed||popupEmergency.phase!=='off');
+  const resumable=!popupEmergency.active&&popupEmergency.total>0&&['stopped','error'].includes(popupEmergency.phase);
+  popupEls.emergencyStatus.textContent=popupEmergencyPhaseText();
   popupEls.emergencyOpen.hidden=emergencyVisible||!popupEls.emergencyConfirm.hidden;
   popupEls.emergencyOpen.disabled=popupBusy||!supported||!popupState?.providerConfigured;
-  popupEls.emergencyActions.hidden=!emergencyVisible;
+  popupEls.emergencyProgress.hidden=!emergencyVisible;
+  popupEls.emergencyProgressCopy.textContent='已译 '+popupEmergency.completed+' / 已识别 '+popupEmergency.total+' 段';
+  popupEls.emergencyCounts.textContent='待阅读 '+popupEmergency.pending+' · 失败 '+popupEmergency.failed+' · 跳过 '+popupEmergency.skipped;
+  popupEls.emergencyActions.hidden=!emergencyVisible||!popupEls.emergencyConfirm.hidden;
+  popupEls.emergencyStop.hidden=!popupEmergency.active;
   popupEls.emergencyStop.disabled=popupBusy||!popupEmergency.active;
+  popupEls.emergencyResume.hidden=!resumable;
+  popupEls.emergencyResume.disabled=popupBusy||!resumable||!popupState?.providerConfigured;
+  popupEls.emergencyRetry.hidden=!(popupEmergency.active&&popupEmergency.failed>0);
+  popupEls.emergencyRetry.disabled=popupBusy||!popupEmergency.active||popupEmergency.failed===0;
   popupEls.emergencyClear.disabled=popupBusy||!emergencyVisible;
+  popupEls.emergencyStart.textContent=popupEmergencyResume?'确认并继续':'确认并翻译本页';
   popupEls.emergencyStart.disabled=popupBusy||!supported||!popupState?.providerConfigured;
   popupEls.emergencyCancel.disabled=popupBusy;
 }
-async function popupGetPageStatus(){if(!popupSupported())return;const snapshot=popupSentenceGroups;const result=await chrome.tabs.sendMessage(popupTab.id,{type:'SS_STATUS'},{frameId:0}).catch(()=>null);if(snapshot!==popupSentenceGroups||!result?.ok)return;popupEnabled=Boolean(result.data?.enabled);if(result.data?.sentenceGroups)popupSentenceGroups={...popupSentenceGroups,...result.data.sentenceGroups};if(result.data?.emergency)popupEmergency={active:Boolean(result.data.emergency.active),displayed:Boolean(result.data.emergency.displayed)};}
+async function popupGetPageStatus(){if(!popupSupported())return;const snapshot=popupSentenceGroups;const result=await chrome.tabs.sendMessage(popupTab.id,{type:'SS_STATUS'},{frameId:0}).catch(()=>null);if(snapshot!==popupSentenceGroups||!result?.ok)return;popupEnabled=Boolean(result.data?.enabled);if(result.data?.sentenceGroups)popupSentenceGroups={...popupSentenceGroups,...result.data.sentenceGroups};if(result.data?.emergency)popupEmergency=popupEmergencySnapshot(result.data.emergency);}
 async function popupGetSentenceGroups(){const result=await request('SENTENCE_GROUPS_GET',{tabId:popupTab?.id});const density=['coarse','medium','fine'].includes(result?.density)?result.density:'medium';popupSentenceGroups={enabled:Boolean(result?.enabled),density,status:result?.enabled?'idle':'off',error:'',processed:0};popupSentenceGroupsLoaded=true;}
 async function popupToggleSite(){
   if(!popupSupported()||popupBusy||!popupAutomation)return;
@@ -90,44 +121,53 @@ async function popupToggleSentenceGroups(){
   finally{popupBusy=false;popupRender();}
 }
 async function popupChooseOnDemand(){popupEls.chooseOnDemand.disabled=true;try{popupState=await request('STATE_PATCH',{patch:{assistanceMode:'on-demand'}});popupEls.suggestion.hidden=true;if(popupSupported()){const result=await chrome.tabs.sendMessage(popupTab.id,{type:'SS_REFRESH'}).catch(()=>null);if(result?.ok)popupEnabled=Boolean(result.data.enabled);}popupRender();}catch(error){popupShowError(popupEls.actionError,error);popupEls.chooseOnDemand.disabled=false;}}
-function popupEmergencyPrompt(show){
-  popupEls.emergencyConfirm.hidden=!show;if(show)popupEls.emergencyActions.hidden=true;popupRender();
-  if(show){popupClearError(popupEls.emergencyResult);popupEls.emergencyStart.focus();}
-  else if(!popupEmergency.active&&!popupEmergency.displayed)popupEls.emergencyOpen.focus();
+function popupFocusEmergency(){const button=!popupEls.emergencyConfirm.hidden?popupEls.emergencyStart:popupEmergency.active?popupEls.emergencyStop:!popupEls.emergencyResume.hidden?popupEls.emergencyResume:popupEmergency.phase==='off'?popupEls.emergencyOpen:popupEls.emergencyClear;if(!button.disabled)button.focus();}
+function popupEmergencyPrompt(show,{resume=false,focus=true}={}){
+  popupEmergencyResume=Boolean(show&&resume&&!popupEmergency.active&&popupEmergency.total>0&&['stopped','error'].includes(popupEmergency.phase));
+  popupEls.emergencyConfirm.hidden=!show;popupRender();
+  if(show){popupClearError(popupEls.emergencyResult);if(focus)popupEls.emergencyStart.focus();}
+  else if(focus)popupFocusEmergency();
 }
 async function popupEmergencyStart(){
   if(popupBusy||!popupSupported()||popupEls.emergencyConfirm.hidden)return;
+  const resume=popupEmergencyResume;
   popupBusy=true;popupClearError(popupEls.emergencyResult);popupRender();let token;
   try{
     const current=await chrome.tabs.get(popupTab.id);
     if(current.url!==popupTab.url)throw new Error('网页已切换，请重新打开扩展弹窗后确认。');
     await request('PAGE_UI_INJECT',{tabId:popupTab.id});
     ({token}=await request('EMERGENCY_BEGIN',{tabId:popupTab.id,url:popupTab.url}));
-    const result=await chrome.tabs.sendMessage(popupTab.id,{type:'SS_EMERGENCY_START',token},{frameId:0});
+    const result=await chrome.tabs.sendMessage(popupTab.id,{type:'SS_EMERGENCY_START',token,resume},{frameId:0});
     if(!result?.ok)throw new Error(result?.error||'无法启动本页翻译，请刷新网页后重试。');
-    popupEmergency=result.data?.emergency?{active:Boolean(result.data.emergency.active),displayed:Boolean(result.data.emergency.displayed)}:{active:true,displayed:false};
-    popupEmergencyPrompt(false);
+    popupEmergency=popupEmergencySnapshot(result.data?.emergency||{active:true,displayed:resume,phase:'translating'});
+    popupEmergencyPrompt(false,{focus:false});
     popupEls.emergencyResult.classList.remove('error');
-    popupEls.emergencyResult.textContent='已开始。可在网页中查看进度、停止翻译或返回英文。';
+    popupEls.emergencyResult.textContent=resume?'已继续，仅处理尚未完成的段落。':'已开始，仅处理读到附近的正文。';
     popupEls.emergencyResult.hidden=false;
   }catch(error){
     if(token)await request('EMERGENCY_END',{tabId:popupTab.id,token}).catch(()=>{});
     popupEls.emergencyResult.classList.add('error');popupShowError(popupEls.emergencyResult,error);
-  }finally{popupBusy=false;popupRender();if(popupEls.emergencyConfirm.hidden&&!popupEmergency.active&&!popupEmergency.displayed)popupEls.emergencyOpen.focus();}
+  }finally{popupBusy=false;popupRender();popupFocusEmergency();}
 }
 async function popupEmergencyAction(type){
   if(popupBusy||!popupSupported())return;popupBusy=true;popupClearError(popupEls.emergencyResult);popupRender();
-  try{const result=await chrome.tabs.sendMessage(popupTab.id,{type},{frameId:0});if(!result?.ok)throw new Error(result?.error||'网页未能完成操作，请刷新后重试。');popupEmergency=result.data?.emergency?{active:Boolean(result.data.emergency.active),displayed:Boolean(result.data.emergency.displayed)}:{active:false,displayed:type==='SS_EMERGENCY_STOP'};popupEls.emergencyResult.textContent=type==='SS_EMERGENCY_STOP'?'已停止发送新批次；已显示的中文仍保留。':'已移除整页译文，页面已返回英文。';popupEls.emergencyResult.hidden=false;}
-  catch(error){popupShowError(popupEls.emergencyResult,error);}
-  finally{popupBusy=false;popupRender();}
+  try{
+    const result=await chrome.tabs.sendMessage(popupTab.id,{type},{frameId:0});
+    if(!result?.ok)throw new Error(result?.error||'网页未能完成操作，请刷新后重试。');
+    popupEmergency=popupEmergencySnapshot(result.data?.emergency||{});
+    popupEls.emergencyResult.classList.remove('error');
+    popupEls.emergencyResult.textContent=type==='SS_EMERGENCY_STOP'?'已停止发送新请求；已显示的中文仍保留。':type==='SS_EMERGENCY_RETRY'?'正在重试失败段落。':'已移除本页译文，页面已返回英文。';
+    popupEls.emergencyResult.hidden=false;
+  }catch(error){popupEls.emergencyResult.classList.add('error');popupShowError(popupEls.emergencyResult,error);}
+  finally{popupBusy=false;popupRender();popupFocusEmergency();}
 }
 function popupOpenOptions(section=''){chrome.runtime.openOptionsPage(()=>{if(section)chrome.tabs.query({url:chrome.runtime.getURL('ui/options.html*')},tabs=>{const tab=tabs.at(-1);if(tab?.id)chrome.tabs.update(tab.id,{url:chrome.runtime.getURL('ui/options.html#'+section)});});});}
-async function popupInit(){try{[popupTab]=await chrome.tabs.query({active:true,currentWindow:true});[popupState,popupAutomation]=await Promise.all([request('STATE_GET'),request('AUTOMATION_GET',{tabId:popupTab?.id})]);try{await popupGetSentenceGroups();}catch(error){popupSentenceGroupsLoaded=false;popupSentenceGroups.error='无法读取阅读解构设置：'+popupErrorText(error);popupEls.sentenceGroupsError.textContent=popupSentenceGroups.error;popupEls.sentenceGroupsError.hidden=false;}await popupGetPageStatus();popupRender();if(popupState.settings.assistanceMode==='ambient'){const suggestion=await request('ON_DEMAND_SUGGESTION');popupEls.suggestion.hidden=!suggestion.show;}}catch(error){popupShowError(popupEls.actionError,error);popupRender();}}
+async function popupInit(){try{[popupTab]=await chrome.tabs.query({active:true,currentWindow:true});[popupState,popupAutomation]=await Promise.all([request('STATE_GET'),request('AUTOMATION_GET',{tabId:popupTab?.id})]);try{await popupGetSentenceGroups();}catch(error){popupSentenceGroupsLoaded=false;popupSentenceGroups.error='无法读取阅读解构设置：'+popupErrorText(error);popupEls.sentenceGroupsError.textContent=popupSentenceGroups.error;popupEls.sentenceGroupsError.hidden=false;}await popupGetPageStatus();popupRender();const intent=popupSupported()?await request('POPUP_INTENT_TAKE',{tabId:popupTab.id,url:popupTab.url}).catch(()=>({focus:false})):{focus:false};if(intent?.focus){if(popupEmergency.phase!=='off')popupEls.emergencyPanel.focus();else popupEmergencyPrompt(true);}if(popupState.settings.assistanceMode==='ambient'){const suggestion=await request('ON_DEMAND_SUGGESTION');popupEls.suggestion.hidden=!suggestion.show;}}catch(error){popupShowError(popupEls.actionError,error);popupRender();}}
 async function popupWatchPage(){
-  try{if(!popupBusy&&(popupSentenceGroups.enabled||popupEmergency.active||popupEmergency.displayed)&&document.visibilityState==='visible'){await popupGetPageStatus();popupRender();}}
+  try{if(!popupBusy&&(popupSentenceGroups.enabled||popupEmergency.phase!=='off')&&document.visibilityState==='visible'){await popupGetPageStatus();popupRender();}}
   catch(error){popupSentenceGroups.error=popupErrorText(error);popupRender();}
   finally{setTimeout(()=>void popupWatchPage(),1000);}
 }
-popupEls.toggle.addEventListener('click',()=>void popupTogglePage());popupEls.siteAuto.addEventListener('change',()=>void popupToggleSite());popupEls.sentenceGroups.addEventListener('change',()=>void popupToggleSentenceGroups());popupEls.options.addEventListener('click',()=>popupOpenOptions());popupEls.repairService.addEventListener('click',()=>popupOpenOptions('service'));popupEls.chooseOnDemand.addEventListener('click',()=>void popupChooseOnDemand());popupEls.emergencyOpen.addEventListener('click',()=>popupEmergencyPrompt(true));popupEls.emergencyCancel.addEventListener('click',()=>popupEmergencyPrompt(false));popupEls.emergencyStart.addEventListener('click',()=>void popupEmergencyStart());popupEls.emergencyStop.addEventListener('click',()=>void popupEmergencyAction('SS_EMERGENCY_STOP'));popupEls.emergencyClear.addEventListener('click',()=>void popupEmergencyAction('SS_EMERGENCY_END'));
+popupEls.toggle.addEventListener('click',()=>void popupTogglePage());popupEls.siteAuto.addEventListener('change',()=>void popupToggleSite());popupEls.sentenceGroups.addEventListener('change',()=>void popupToggleSentenceGroups());popupEls.options.addEventListener('click',()=>popupOpenOptions());popupEls.repairService.addEventListener('click',()=>popupOpenOptions('service'));popupEls.chooseOnDemand.addEventListener('click',()=>void popupChooseOnDemand());popupEls.emergencyOpen.addEventListener('click',()=>popupEmergencyPrompt(true));popupEls.emergencyCancel.addEventListener('click',()=>popupEmergencyPrompt(false));popupEls.emergencyStart.addEventListener('click',()=>void popupEmergencyStart());popupEls.emergencyStop.addEventListener('click',()=>void popupEmergencyAction('SS_EMERGENCY_STOP'));popupEls.emergencyResume.addEventListener('click',()=>popupEmergencyPrompt(true,{resume:true}));popupEls.emergencyRetry.addEventListener('click',()=>void popupEmergencyAction('SS_EMERGENCY_RETRY'));popupEls.emergencyClear.addEventListener('click',()=>void popupEmergencyAction('SS_EMERGENCY_END'));
 chrome.storage.onChanged.addListener((changes,area)=>{if(area!=='local'||!changes.settings)return;void request('STATE_GET').then(state=>{popupState=state;popupRender();}).catch(()=>{});});
 void popupInit().then(()=>setTimeout(()=>void popupWatchPage(),1000));

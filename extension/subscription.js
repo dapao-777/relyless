@@ -1,7 +1,7 @@
 import {
   normalizeSupportProviderItems,normalizeSupportAttempt,normalizeSupportCorrections,normalizePreparationContext,
   normalizeAssistanceRequest,normalizeAssistanceResult,
-  normalizeEmergencyItems,normalizeEmergencyResult,
+  normalizeEmergencyItems,normalizeEmergencyResult,normalizePageTranslationItems,normalizePageTranslationResult,
 } from './gloss.mjs';
 import {sanitizeDiagnostic,diagnosticError,validTraceId} from './diagnostics.mjs';
 import {normalizeSentenceGroupItems,normalizeSentenceGroupsResult} from './sentence-groups.mjs';
@@ -181,10 +181,12 @@ export async function assistSubscription(request,model='',traceId,preferences,on
   const progress=typeof onProgress==='function'?value=>{const normalized=normalizedAssistProgress(value,selected);if(normalized)return onProgress(normalized);}:undefined;
   return normalizeAssistanceResult(await send('assist',{...selected,model,...(personalization?{personalization}:{})},traceId,progress),selected);
 }
-export async function emergencyTranslateSubscription(items,model='',traceId,preferences,onProgress) {
-  const selected=normalizeEmergencyItems(items),personalization=normalizePreferences(preferences);
-  const progress=typeof onProgress==='function'?value=>{const normalized=normalizeTranslationProgress(value,selected);if(normalized)return onProgress(normalized);}:undefined;
-  return normalizeEmergencyResult(await send('emergencyTranslate',{items:selected,model,...(personalization?{personalization}:{})},traceId,progress),selected);
+export async function emergencyTranslateSubscription({scope,items,model='',traceId,preferences,onProgress}) {
+  if(scope!=='page'&&scope!=='passage')throw new Error('翻译范围无效。');
+  const selected=scope==='page'?normalizePageTranslationItems(items):normalizeEmergencyItems(items),personalization=normalizePreferences(preferences);
+  const progress=scope==='passage'&&typeof onProgress==='function'?value=>{const normalized=normalizeTranslationProgress(value,selected);if(normalized)return onProgress(normalized);}:undefined;
+  const result=await send('emergencyTranslate',{scope,items:selected,model,...(personalization?{personalization}:{})},traceId,progress);
+  return scope==='page'?normalizePageTranslationResult(result,selected):normalizeEmergencyResult(result,selected);
 }
 export async function sentenceGroupsSubscription(items,model='',traceId) { const selected=normalizeSentenceGroupItems(items); const value=await send('sentenceGroups',{items:selected,model},traceId); return normalizeSentenceGroupsResult(value,selected); }
 export async function historyModelSubscription(kind,payload,model='',traceId) { if(!['summary','personalization'].includes(kind)||!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error('历史模型请求无效。');

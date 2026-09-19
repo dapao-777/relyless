@@ -8,7 +8,7 @@ test("native framing accepts fragmented and coalesced messages", () => {
   const decoder = new NativeMessageDecoder({ onMessage: (value) => received.push(value), onError: (error) => errors.push(error) });
   const first = encodeNativeMessage({ id: 1, type: "status" });
   const second = encodeNativeMessage({ id: 2, type: "cancel", payload: {} });
-  const thirdMessage = { id: 3, type: "emergencyTranslate", payload: { items: [{ id: "block", text: "Keep the English." }], model: "quick" } };
+  const thirdMessage = { id: 3, type: "emergencyTranslate", payload: { scope: "passage", items: [{ id: "block", text: "Keep the English." }], model: "quick" } };
   const third = encodeNativeMessage(thirdMessage);
 
   decoder.push(first.subarray(0, 2));

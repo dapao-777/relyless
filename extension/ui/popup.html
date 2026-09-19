@@ -11,23 +11,28 @@
   <p id="sentence-structure-key" class="sentence-structure-key">标出当前页的主谓宾等结构。分析会产生额外模型用量。</p>
   <p id="sentence-groups-error" class="inline-message error" role="alert" hidden></p>
 </section>
+<section id="emergency-panel" class="emergency-panel" aria-labelledby="emergency-title" tabindex="-1">
+  <div class="emergency-heading"><h2 id="emergency-title">本页双语翻译</h2><p id="emergency-status" aria-live="polite">保留英文，按阅读位置翻译附近正文。</p></div>
+  <button id="emergency-open" class="secondary-button" type="button" disabled>翻译本页</button>
+  <div id="emergency-confirm" class="emergency-confirm" role="group" aria-labelledby="emergency-confirm-title" hidden>
+    <b id="emergency-confirm-title">确认翻译当前页面</b>
+    <p>英文会保留；仅处理你读到附近的正文。</p>
+    <p>原文、页面标题、所在章节和有限的相邻文本会发送给所选服务，并按服务规则计费。停止不能撤回已经发送的请求。</p>
+    <div class="provider-actions"><button id="emergency-start" class="secondary-button" type="button">确认并翻译本页</button><button id="emergency-cancel" class="icon-text-button" type="button">取消</button></div>
+  </div>
+  <div id="emergency-progress" class="emergency-progress" hidden>
+    <strong id="emergency-progress-copy">已译 0 / 已识别 0 段</strong>
+    <span id="emergency-counts">待阅读 0 · 失败 0 · 跳过 0</span>
+  </div>
+  <div id="emergency-actions" class="provider-actions" role="group" aria-label="本页双语翻译操作" hidden>
+    <button id="emergency-stop" class="secondary-button" type="button">停止</button>
+    <button id="emergency-resume" class="secondary-button" type="button" hidden>继续</button>
+    <button id="emergency-retry" class="secondary-button" type="button" hidden>重试失败段落</button>
+    <button id="emergency-clear" class="icon-text-button" type="button">返回英文</button>
+  </div>
+  <p id="emergency-result" class="inline-message" role="status" aria-live="polite" hidden></p>
+</section>
 <section class="site-auto-panel" aria-labelledby="site-auto-title"><div class="site-auto-copy"><h2 id="site-auto-title">此网站以后自动开启</h2><p id="site-auto-note">授权一次，以后打开此网站即可自动开始。</p></div><label class="switch"><input id="site-auto" type="checkbox" disabled><span aria-hidden="true"></span><span class="sr-only">此网站以后自动开启</span></label><p id="site-auto-error" class="inline-message error" role="alert" hidden></p></section>
 <section id="on-demand-suggestion" class="suggestion-panel" hidden><b>想让页面更安静？</b><p>切换为“仅在需要时”会停止自动分析、标记和记录；按住 <span data-lookup-key>D</span> + 单击与选择求助仍可使用。</p><button id="choose-on-demand" class="secondary-button" type="button">仅在需要时</button></section>
-<footer class="popup-footer"><p>按住 <span data-lookup-key>D</span> + 单击单词查看释义。</p><details id="page-more" class="disclosure-block popup-more">
-  <summary><span>更多</span></summary>
-  <div class="disclosure-content">
-    <button id="emergency-open" class="secondary-button" type="button" disabled>紧急整页翻译…</button>
-    <div id="emergency-confirm" class="emergency-confirm" role="group" aria-labelledby="emergency-title" hidden>
-      <b id="emergency-title">只翻译当前页面</b>
-      <p>本页可读正文将分批发送给已选择的服务，可能产生费用。保留英文，不记录整页词汇，也不改变自动辅助设置。</p>
-      <p>停止后不再发送新批次；已发送的请求可能仍计费。可随时移除译文，返回英文。</p>
-      <div class="provider-actions"><button id="emergency-start" class="secondary-button" type="button">确认并翻译本页</button><button id="emergency-cancel" class="icon-text-button" type="button">取消</button></div>
-    </div>
-    <div id="emergency-actions" class="provider-actions" role="group" aria-label="整页翻译操作" hidden>
-      <button id="emergency-stop" class="secondary-button" type="button">停止翻译</button>
-      <button id="emergency-clear" class="icon-text-button" type="button">返回英文</button>
-    </div>
-    <p id="emergency-result" class="inline-message" role="status" hidden></p>
-  </div>
-</details></footer>
+<footer class="popup-footer"><p>按住 <span data-lookup-key>D</span> + 单击单词查看释义。</p></footer>
 </main><script type="module" src="popup.js"></script></body></html>

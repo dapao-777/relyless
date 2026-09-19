@@ -1,6 +1,8 @@
 export const AUTO_SCRIPT_ID = 'ss-auto-start';
 export const ALL_HOSTS = ['http://*/*','https://*/*'];
 export const VIDEO_HOSTS = ['https://www.youtube.com/*','https://m.youtube.com/*'];
+// Temporarily hide video support without erasing saved preferences.
+export const VIDEO_SUPPORT_ENABLED = false;
 
 export function pageOrigin(value) {
   try {
@@ -69,7 +71,7 @@ export function resolveAutomation(automation,activationUrl,paused = false) {
   const effective = Boolean(origin && !paused && (site ? site.enabled : automation.allSites));
   const sentenceGroupsEffective = Boolean(origin && !paused && automation.sentenceGroupsAllSites && siteRule !== false);
   const hostname = origin ? new URL(origin).hostname : '';
-  const videoAvailable = Boolean(!paused && automation.videoSites && ['www.youtube.com','m.youtube.com'].includes(hostname));
+  const videoAvailable = Boolean(VIDEO_SUPPORT_ENABLED && !paused && automation.videoSites && ['www.youtube.com','m.youtube.com'].includes(hostname));
   return {origin,siteRule,effective,sentenceGroupsEffective,paused:Boolean(paused),videoAvailable};
 }
 
@@ -77,7 +79,7 @@ export function registrationMatches(automation) {
   const matches = new Set();
   if (automation.allSites || automation.sentenceGroupsAllSites) ALL_HOSTS.forEach(pattern => matches.add(pattern));
   for (const site of automation.sites) if (site.enabled) matches.add(sitePattern(site.origin));
-  if (automation.videoSites) VIDEO_HOSTS.forEach(pattern => matches.add(pattern));
+  if (VIDEO_SUPPORT_ENABLED && automation.videoSites) VIDEO_HOSTS.forEach(pattern => matches.add(pattern));
   return [...matches].sort();
 }
 

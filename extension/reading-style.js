@@ -95,7 +95,6 @@
     else if (resolved === 'background') rules.push(`background:${background}`,`color:${foreground}`,'border-radius:3px');
     else if (resolved === 'border') rules.push(`border:1px solid ${line}`,'border-radius:3px');
     else if (resolved === 'quote') rules.push('font-style:italic',layer === 'translation' ? `border-left:2px solid ${line}` : `color:${accent}`);
-    else if (resolved === 'default' && layer === 'translation') rules.push('border-left:2px solid currentColor');
     return resolved;
   }
 
@@ -106,7 +105,7 @@
     const mark = staticSelector(selectors.mark,'原文标记');
     const hint = staticSelector(selectors.hint,'短提示');
     const annotation = staticSelector(selectors.annotation,'词注容器');
-    const block = staticSelector(selectors.block,'紧急翻译');
+    const block = staticSelector(selectors.block,'双语译文');
     const rules = [];
     const hintScale = current.annotation.size / 100;
 
@@ -116,11 +115,12 @@
 
     const markRules = ['font-family:inherit',`font-size:${current.original.size}%`,'line-height:inherit','letter-spacing:inherit','background:none','color:inherit','border:0','border-bottom:0','border-radius:0','box-shadow:none','display:inline','filter:none','font-style:inherit','font-weight:inherit','opacity:1','padding:0','text-decoration:none','text-decoration-color:currentColor','text-decoration-line:none','text-decoration-style:solid','text-decoration-thickness:auto','text-underline-offset:auto'];
     const hintRules = ['background:none','border:0','border-bottom:0','border-radius:0','box-shadow:none','box-sizing:border-box','color:inherit','display:block','position:absolute','left:0','top:0','width:100%','filter:none','font-family:var(--ss-source-font,inherit)','font-style:normal',`font-size:max(13px,calc(var(--type-support) * ${hintScale}))`,'font-weight:var(--weight-regular)','line-height:1.45','letter-spacing:.035em','word-spacing:normal','margin:0','opacity:1','padding:0','text-align:center','text-decoration:none','white-space:nowrap','overflow:hidden','text-overflow:ellipsis'];
-    const blockRules = ['background:none','border:0','border-left:0','border-radius:0','box-shadow:none','box-sizing:border-box','color:var(--ss-source-color,inherit)','display:block','filter:none','font-family:var(--ss-source-font,inherit)','font-style:normal',`font-size:max(13px,calc(var(--ss-source-size,1em) * ${current.translation.size / 100}))`,'font-weight:var(--weight-regular)','line-height:var(--ss-source-leading,inherit)','margin:.45em 0 1em','opacity:1','padding:.55em .75em','text-decoration:none','white-space:pre-wrap','overflow-wrap:anywhere','word-break:normal'];
+    const blockRules = ['background:none','border:0','border-left:0','border-radius:0','box-shadow:none','box-sizing:border-box','color:var(--ss-source-color,inherit)','display:block','filter:none','font-family:var(--ss-source-font,inherit)','font-style:normal',`font-size:max(13px,calc(var(--ss-source-size,1em) * ${current.translation.size / 100}))`,'font-weight:var(--weight-regular)','line-height:var(--ss-source-leading,inherit)','margin:.4em 0','opacity:1','padding:0','min-width:0','max-width:100%','text-decoration:none','white-space:pre-wrap','overflow-wrap:anywhere','word-break:normal'];
 
     const markStyle = decorate(markRules,current.original,'original');
     const hintStyle = decorate(hintRules,current.annotation,'annotation');
     const blockStyle = decorate(blockRules,current.translation,'translation');
+    if(['quote','border','background','dashed'].includes(blockStyle))blockRules.push('padding:.55em .75em');
     rules.push(`${mark}{${markRules.map(rule=>rule+'!important').join(';')}}`,`${hint}{${hintRules.map(rule=>rule+'!important').join(';')}}`,`${block}{${blockRules.map(rule=>rule+'!important').join(';')}}`);
     // Host gradient selectors can also match our spans; their transparent fill must not hide owned text.
     rules.push(`${mark},${hint},${block}{-webkit-text-fill-color:currentColor!important}`);
@@ -128,7 +128,7 @@
     for (const [selector,resolved] of [[mark,markStyle],[hint,hintStyle],[block,blockStyle]]) {
       if (resolved === 'quote' && selector !== block) rules.push(`${selector}::before{content:"“"!important}`,`${selector}::after{content:"”"!important}`);
     }
-    rules.push(block+' > p,'+block+' > div > p{font:inherit!important;color:inherit!important;letter-spacing:inherit!important;margin:0 0 .35em!important;padding:0!important;white-space:inherit!important;overflow-wrap:inherit!important;word-break:inherit!important}');
+    rules.push(block+' > span,'+block+' > p,'+block+' > div > p{font:inherit!important;color:inherit!important;background:none!important;-webkit-text-fill-color:currentColor!important;letter-spacing:inherit!important;margin:0 0 .35em!important;padding:0!important;white-space:inherit!important;overflow-wrap:inherit!important;word-break:inherit!important;max-width:100%!important;min-width:0!important}');
     return rules.join('\n');
   }
 

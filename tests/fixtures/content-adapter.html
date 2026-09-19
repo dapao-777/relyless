@@ -32,6 +32,12 @@
       <p id="same-paragraph-a">Independent repeated paragraphs must each retain their own translation.</p>
       <p id="same-paragraph-b">Independent repeated paragraphs must each retain their own translation.</p>
       <table><tbody><tr><td id="table-cell">Table cells containing substantial English explanations remain valid after translation insertion.</td></tr></tbody></table>
+      <table id="bilingual-table"><thead><tr><th>Key</th><th>Value</th><th>Status</th></tr></thead><tbody><tr><td>Cache</td><td>Warm</td><td>Ready</td></tr><tr><td>Queue</td><td>Open</td><td>Busy</td></tr></tbody></table>
+      <div id="bilingual-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:16px"><div id="grid-left">The first grid card keeps its original column.</div><div id="grid-right">The second grid card keeps its original column.</div></div>
+      <div id="bilingual-flex" style="display:flex;gap:16px"><span>The first flexible card remains a single layout item.</span><span>The second flexible card remains a single layout item.</span></div>
+      <div id="bilingual-flex-column" style="display:flex;flex-direction:column"><span>The first vertical flexible card remains in place.</span><span>The next vertical flexible card remains in place.</span></div>
+      <div id="bilingual-bare" style="display:grid;grid-template-columns:1fr 1fr">Unsupported direct bare layout text remains English.<span>A supported grid item contains its own translation.</span></div>
+      <p id="bilingual-break">First readable line.<br>Second readable line.</p>
       <form><label>Profile <input value="Account details must never be translated"></label><p id="form-copy">Form instructions and widget copy must remain untouched by the reading adapter.</p></form>
       <div id="editable" contenteditable="true">Editable content must never be translated by the reading adapter.</div>
       <p id="corrupt-format">Corruption handling must preserve <em>meaningful emphasis</em> without leaking broken formatting markers to readers.</p>

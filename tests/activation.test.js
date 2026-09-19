@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {ALL_HOSTS,VIDEO_HOSTS,registrationMatches,requiredPermissionOrigins,resolveAutomation,validateAutomation,validateVideo} from '../extension/activation.js';
+import {ALL_HOSTS,registrationMatches,requiredPermissionOrigins,resolveAutomation,validateAutomation,validateVideo} from '../extension/activation.js';
 import {normalizeSettings} from '../extension/shared.js';
 
 const activationDefaults={allSites:false,sentenceGroupsAllSites:false,sites:[],videoSites:false};
@@ -11,14 +11,13 @@ test('exact origin rules override all-sites and manual pause disables automatic 
   expect(resolveAutomation(automation,'http://allowed.example:8080/article',true)).toMatchObject({siteRule:true,effective:false,paused:true,videoAvailable:false});
 });
 
-test('video automatic entry requires its independent explicit authorization',()=>{
+test('saved video preferences cannot reactivate hidden support or request video-only hosts',()=>{
   const readingOnly=validateAutomation({sites:[{origin:'https://www.youtube.com',enabled:true}]},activationDefaults);
   expect(resolveAutomation(readingOnly,'https://www.youtube.com/watch?v=fixture')).toMatchObject({effective:true,videoAvailable:false});
   const video=validateAutomation({videoSites:true},activationDefaults);
-  expect(resolveAutomation(video,'https://www.youtube.com/watch?v=fixture')).toMatchObject({effective:false,videoAvailable:true});
-  expect(resolveAutomation(video,'https://m.youtube.com/watch?v=fixture')).toMatchObject({effective:false,videoAvailable:true});
-  expect(resolveAutomation(video,'https://youtube.com/watch?v=fixture').videoAvailable).toBe(false);
-  expect(registrationMatches(video)).toEqual([...VIDEO_HOSTS].sort());
+  expect(resolveAutomation(video,'https://www.youtube.com/watch?v=fixture')).toMatchObject({effective:false,videoAvailable:false});
+  expect(registrationMatches(video)).toEqual([]);
+  expect(requiredPermissionOrigins(video)).toEqual([]);
 });
 
 test('permission requirements mirror persisted policy without broadening exact site access',()=>{
@@ -26,7 +25,7 @@ test('permission requirements mirror persisted policy without broadening exact s
   expect(requiredPermissionOrigins(exact)).toEqual(['https://docs.example/*']);
   const broad=validateAutomation({allSites:true,videoSites:true},activationDefaults);
 
-  expect(requiredPermissionOrigins(broad)).toEqual([...new Set([...ALL_HOSTS,...VIDEO_HOSTS])].sort());
+  expect(requiredPermissionOrigins(broad)).toEqual([...ALL_HOSTS].sort());
   expect(()=>validateAutomation({sites:[{origin:'https://docs.example/path',enabled:true}]},activationDefaults)).toThrow('origin');
   expect(()=>validateAutomation({sites:[{origin:'https://docs.example',enabled:true},{origin:'https://docs.example',enabled:false}]},activationDefaults)).toThrow('唯一');
 });
@@ -76,6 +75,68 @@ test('popup preserves the clicked site choice while rendering its busy state',as
     expect(permissions).toEqual([{origins:['https://docs.example/*']}]);
     expect(patches).toEqual([{sites:[{origin:'https://docs.example',enabled:true}]}]);
     expect(toggle.checked).toBe(true);
+  }finally{
+    if(previousChrome===undefined)delete globalThis.chrome;else globalThis.chrome=previousChrome;
+    if(previousDocument===undefined)delete globalThis.document;else globalThis.document=previousDocument;
+  }
+});
+
+test('popup shortcut intent focuses bilingual translation without starting it',async()=>{
+  const previousChrome=globalThis.chrome,previousDocument=globalThis.document;
+  const elements=new Map();
+  const element=id=>{
+    if(!elements.has(id))elements.set(id,{checked:false,disabled:true,hidden:true,textContent:'',focused:false,handlers:{},classList:{toggle(){},add(){},remove(){}},addEventListener(type,handler){this.handlers[type]=handler;},focus(){this.focused=true;}});
+    return elements.get(id);
+  };
+  const runtimeMessages=[],pageMessages=[];
+  const automation={allSites:false,sites:[],videoSites:false};
+  globalThis.document={visibilityState:'visible',querySelector:element,querySelectorAll:()=>[]};
+  globalThis.chrome={runtime:{async sendMessage(message){runtimeMessages.push(message);if(message.type==='STATE_GET')return{ok:true,data:{settings:{assistanceMode:'on-demand'},providerConfigured:true}};if(message.type==='POPUP_INTENT_TAKE')return{ok:true,data:{focus:true}};return{ok:true,data:{automation,siteRule:null}};}},storage:{onChanged:{addListener(){}}},tabs:{query:async()=>[{id:7,url:'https://docs.example/read'}],sendMessage:async(_id,message)=>{pageMessages.push(message);return{ok:true,data:{enabled:false,emergency:{active:false,displayed:false,phase:'off',total:0,completed:0,failed:0,pending:0,skipped:0}}};}},permissions:{request:async()=>true}};
+  try{
+    await import('../extension/ui/popup.js?shortcut-focus-regression');
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(runtimeMessages).toContainEqual({type:'POPUP_INTENT_TAKE',tabId:7,url:'https://docs.example/read'});
+    expect(element('#emergency-confirm').hidden).toBe(false);
+    expect(element('#emergency-start').focused).toBe(true);
+    expect(pageMessages.some(message=>message.type==='SS_EMERGENCY_START')).toBe(false);
+  }finally{
+    if(previousChrome===undefined)delete globalThis.chrome;else globalThis.chrome=previousChrome;
+    if(previousDocument===undefined)delete globalThis.document;else globalThis.document=previousDocument;
+  }
+});
+
+test('popup renders the complete bilingual snapshot and confirms retained-session resume',async()=>{
+  const previousChrome=globalThis.chrome,previousDocument=globalThis.document;
+  const elements=new Map();
+  const element=id=>{
+    if(!elements.has(id))elements.set(id,{checked:false,disabled:true,hidden:true,textContent:'',focused:false,handlers:{},classList:{toggle(){},add(){},remove(){}},addEventListener(type,handler){this.handlers[type]=handler;},focus(){this.focused=true;}});
+    return elements.get(id);
+  };
+  const events=[];
+  const stopped={active:false,displayed:false,phase:'stopped',total:12,completed:5,failed:2,pending:4,skipped:1};
+  const automation={allSites:false,sites:[],videoSites:false};
+  globalThis.document={visibilityState:'visible',querySelector:element,querySelectorAll:()=>[]};
+  globalThis.chrome={runtime:{async sendMessage(message){events.push(message);if(message.type==='STATE_GET')return{ok:true,data:{settings:{assistanceMode:'on-demand'},providerConfigured:true}};if(message.type==='POPUP_INTENT_TAKE')return{ok:true,data:{focus:true}};if(message.type==='EMERGENCY_BEGIN')return{ok:true,data:{token:'fresh-token'}};return{ok:true,data:{automation,siteRule:null}};}},storage:{onChanged:{addListener(){}}},tabs:{query:async()=>[{id:9,url:'https://docs.example/read'}],get:async()=>({id:9,url:'https://docs.example/read'}),sendMessage:async(_id,message)=>{events.push(message);if(message.type==='SS_STATUS')return{ok:true,data:{enabled:false,emergency:stopped}};if(message.type==='SS_EMERGENCY_START')return{ok:true,data:{emergency:{...stopped,active:true,phase:'translating'}}};return{ok:true,data:{enabled:false}};}},permissions:{request:async()=>true}};
+  try{
+    await import('../extension/ui/popup.js?resume-snapshot-regression');
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(element('#emergency-resume').hidden).toBe(false);
+    expect(element('#emergency-retry').hidden).toBe(true);
+    expect(element('#emergency-actions').hidden).toBe(false);
+    expect(element('#emergency-panel').focused).toBe(true);
+    element('#emergency-resume').handlers.click();
+    element('#emergency-cancel').handlers.click();
+    expect(element('#emergency-resume').focused).toBe(true);
+    expect(events.some(message=>message.type==='SS_EMERGENCY_START')).toBe(false);
+    element('#emergency-resume').handlers.click();
+    element('#emergency-start').handlers.click();
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(element('#emergency-stop').focused).toBe(true);
+    const start=events.find(message=>message.type==='SS_EMERGENCY_START');
+    expect(start).toEqual({type:'SS_EMERGENCY_START',token:'fresh-token',resume:true});
+    const types=events.map(message=>message.type);
+    expect(types.indexOf('PAGE_UI_INJECT')).toBeLessThan(types.indexOf('EMERGENCY_BEGIN'));
+    expect(types.indexOf('EMERGENCY_BEGIN')).toBeLessThan(types.indexOf('SS_EMERGENCY_START'));
   }finally{
     if(previousChrome===undefined)delete globalThis.chrome;else globalThis.chrome=previousChrome;
     if(previousDocument===undefined)delete globalThis.document;else globalThis.document=previousDocument;

@@ -7,7 +7,7 @@ import { homedir } from "node:os";
 import {
   SOURCE_DATA_INSTRUCTIONS,SUPPORT_INSTRUCTIONS,SUPPORT_CORRECTION_INSTRUCTIONS,SUPPORT_SCHEMA,normalizeSupportProviderItems,inspectSupportResponse,normalizeSupportCorrections,normalizePreparationContext,
   ASSISTANCE_INSTRUCTIONS,assistanceSchema,normalizeAssistanceRequest,normalizeAssistanceResult,
-  EMERGENCY_INSTRUCTIONS,EMERGENCY_SCHEMA,normalizeEmergencyItems,normalizeEmergencyResult,
+  EMERGENCY_INSTRUCTIONS,PAGE_TRANSLATION_INSTRUCTIONS,EMERGENCY_SCHEMA,normalizeEmergencyItems,normalizeEmergencyResult,normalizePageTranslationItems,inspectPageTranslationResult,
 } from '../extension/gloss.mjs';
 import {diagnosticError} from '../extension/diagnostics.mjs';
 import {SENTENCE_GROUPS_INSTRUCTIONS,SENTENCE_GROUPS_SCHEMA,normalizeSentenceGroupItems,prepareSentenceGroupItems,normalizeSentenceGroupResponse} from '../extension/sentence-groups.mjs';
@@ -202,7 +202,8 @@ function parseClassification(value) {
 }
 
 
-function parseStructuredOutput(text, parse) {
+function parseStructuredOutput(text, parse, raw = false) {
+  if(raw)return parse(text);
   try { return parse(JSON.parse(text)); }
   catch (error) {
     if (error instanceof SyntaxError) throw new Error("Codex 返回的结构化结果无效，请重试。");
@@ -288,7 +289,7 @@ export class CodexClient extends EventEmitter {
     child.on("exit", (code) => { if (this.child === child) this.#onExit(code); });
 
     await this.#request("initialize", {
-      clientInfo: { name: "shisui_translate", title: "RelyLess", version: "0.1.0" },
+      clientInfo: { name: "shisui_translate", title: "RelyLess", version: "0.2.0" },
       capabilities: { optOutNotificationMethods: ["reasoning/textDelta", "reasoning/summaryTextDelta"] },
     });
     this.#notify("initialized", {});
@@ -492,7 +493,7 @@ export class CodexClient extends EventEmitter {
     }
     if (params.turn?.id !== active.turnId) return;
     if (params.turn.status === "completed") {
-      try { active.resolve(parseStructuredOutput(active.finalText, active.parse)); }
+      try { active.resolve(parseStructuredOutput(active.finalText, active.parse, active.rawOutput)); }
       catch (error) {
         this.#record({ ...active.context, stage: 'validation', status: 'error', ...diagnosticError(error) });
         active.reject(error);
@@ -677,11 +678,12 @@ export class CodexClient extends EventEmitter {
       turnParams:threadId=>buildStructuredTurnParams(threadId,JSON.stringify({items:prepareSentenceGroupItems(selected)}),SENTENCE_GROUPS_SCHEMA,effort),parse:value=>normalizeSentenceGroupResponse(value,selected)});
   }
 
-  async emergencyTranslate({items,model='',personalization},{traceId,onProgress}={}) {
-    const selected=normalizeEmergencyItems(items),preferences=normalizePreferences(personalization),effort=await this.#noReasoningEffort(model);
-    return this.#runTask({context:this.#context('EMERGENCY_TRANSLATE',traceId,model),model,baseInstructions:EMERGENCY_INSTRUCTIONS,
-      turnParams:threadId=>buildStructuredTurnParams(threadId,JSON.stringify({items:selected,...(preferences?{personalization:preferences}:{})}),EMERGENCY_SCHEMA,effort),parse:value=>normalizeEmergencyResult(value,selected),
-      ...(typeof onProgress==='function'?{onProgress,translationItems:selected}:{})});
+  async emergencyTranslate({scope,items,model='',personalization},{traceId,onProgress}={}) {
+    if(scope!=='page'&&scope!=='passage')throw new Error('翻译范围无效。');
+    const page=scope==='page',selected=page?normalizePageTranslationItems(items):normalizeEmergencyItems(items),preferences=normalizePreferences(personalization),effort=await this.#noReasoningEffort(model);
+    return this.#runTask({context:this.#context('EMERGENCY_TRANSLATE',traceId,model),model,baseInstructions:page?PAGE_TRANSLATION_INSTRUCTIONS:EMERGENCY_INSTRUCTIONS,
+      turnParams:threadId=>buildStructuredTurnParams(threadId,JSON.stringify({items:selected,...(preferences?{personalization:preferences}:{})}),EMERGENCY_SCHEMA,effort),parse:value=>page?inspectPageTranslationResult(value,selected):normalizeEmergencyResult(value,selected),rawOutput:page,
+      ...(!page&&typeof onProgress==='function'?{onProgress,translationItems:selected}:{})});
   }
 
   async historyModel({kind,payload,model=''},{traceId}={}) {
@@ -694,7 +696,7 @@ export class CodexClient extends EventEmitter {
         if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('历史模型返回格式无效。');return value;
       }});
   }
-  async #runTask({ context, model, baseInstructions, turnParams, parse, prepare = null, onProgress = null, assistanceRequest = null, translationItems = null }) {
+  async #runTask({ context, model, baseInstructions, turnParams, parse, prepare = null, onProgress = null, assistanceRequest = null, translationItems = null, rawOutput = false }) {
     await this.start();
     if (!this.account) throw new Error("请先连接 ChatGPT 订阅。", { cause: "AUTH_REQUIRED" });
     if (this.workSlots >= MAX_WORK_ITEMS) throw new Error("当前订阅任务较多，请稍后重试。");
@@ -724,7 +726,7 @@ export class CodexClient extends EventEmitter {
         this.#finishTask(threadId);
       }, this.timeoutMs);
       timer.unref?.();
-      const active = { context, threadId, turnId: null, finalText: null, finalTexts:new Map(), completedTurns:new Map(), timer, resolve: resolveResult, reject: rejectResult, parse, onProgress, assistanceRequest, translationItems, streams:new Map(), lastProgress:'', firstContent:false, startedAt:Date.now() };
+      const active = { context, threadId, turnId: null, finalText: null, finalTexts:new Map(), completedTurns:new Map(), timer, resolve: resolveResult, reject: rejectResult, parse, rawOutput, onProgress, assistanceRequest, translationItems, streams:new Map(), lastProgress:'', firstContent:false, startedAt:Date.now() };
       this.tasks.set(threadId, active);
       void this.#request("turn/start", turnParams(threadId,prepared), context).then(turnResult => {
         const turnId = turnResult?.turn?.id;

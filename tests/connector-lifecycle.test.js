@@ -73,7 +73,7 @@ test('assistance creates its isolated thread while model capabilities are still 
 test('native inference sends none and stops when the provider rejects disabling reasoning',async()=>{
   const fixture=await session((request,reply)=>reply({id:request.id,error:{code:-32602,message:'reasoning effort none is not supported',data:{codexErrorInfo:'badRequest'}}}),{modelPages:()=>({data:[{id:'thinking-only',displayName:'Thinking Only',hidden:false,isDefault:true,supportedReasoningEfforts:[{reasoningEffort:'minimal'},{reasoningEffort:'low'}]}],nextCursor:null})});
   try {
-    await expect(fixture.client.emergencyTranslate({items:[{id:'one',text:'Translate this.'}],model:'thinking-only'})).rejects.toThrow('不支持关闭思考');
+    await expect(fixture.client.emergencyTranslate({scope: 'passage', items: [{id:'one',text:'Translate this.'}], model:'thinking-only'})).rejects.toThrow('不支持关闭思考');
     const turns=fixture.sent.filter(message=>message.method==='turn/start');
     expect(turns).toHaveLength(1);
     expect(turns[0].params.effort).toBe('none');
@@ -137,7 +137,7 @@ test('structured turns isolate hostile data and keep every model task sandbox cl
     const grouped=await fixture.client.sentenceGroups({items:[{id:'hostile',sentence:hostile}],model:'quick'});
     expect(normalizeSentenceGroupsResult(grouped,[{id:'hostile',sentence:hostile}]).items[0].groups).toEqual([{start:0,end:hostile.length,role:'clause',parent:-1}]);
 
-    await fixture.client.emergencyTranslate({items:[{id:'hostile',text:hostile}],model:'quick'});
+    await fixture.client.emergencyTranslate({scope: 'passage', items: [{id:'hostile',text:hostile}], model:'quick'});
     const turns = fixture.sent.filter(message=>message.method==='turn/start');
     for (const turn of turns) {
       expect(turn.params.approvalPolicy).toBe('never');
@@ -225,10 +225,10 @@ test('support, assistance, and emergency translation reject forged provider meta
     expect(supportTurn.params.input[0].text).not.toContain('wordId');
     await expect(fixture.client.assist({text: 'unless', context: items[0].sentence, domain: 'tech', kind: 'word', level: 'hint', detail: 'full', model: 'quick'})).rejects.toThrow('格式');
     expect(await fixture.client.assist({text: 'unless', context: items[0].sentence, domain: 'tech', kind: 'word', level: 'rescue', detail: 'full', model: 'quick'})).toEqual({level:'rescue',translation:'除非',sense:'except if',details:unlessDetails});
-    const itemError = await fixture.client.emergencyTranslate({items:[{id:'block',text:'Keep English and show a Chinese translation.'}],model:'quick'}).catch(error=>error);
+    const itemError = await fixture.client.emergencyTranslate({scope: 'passage', items: [{id:'block',text:'Keep English and show a Chinese translation.'}], model:'quick'}).catch(error=>error);
     expect(itemError).toBeInstanceOf(Error);
     expect(itemError.code).toBe('ITEM_ID');
-    expect(await fixture.client.emergencyTranslate({items:[{id:'block',text:'Keep English and show a Chinese translation.'}],model:'quick'})).toEqual({items:[{id:'block',translation:'保留英文并显示中文翻译。'}]});
+    expect(await fixture.client.emergencyTranslate({scope: 'passage', items: [{id:'block',text:'Keep English and show a Chinese translation.'}], model:'quick'})).toEqual({items:[{id:'block',translation:'保留英文并显示中文翻译。'}]});
     await expect(fixture.client.assist({text: 'unless', context: items[0].sentence, domain: 'tech', kind: 'word', level: 'hint', detail: 'full', model: 'missing'})).rejects.toThrow('当前不可用');
   } finally { await fixture.close(); }
 });
@@ -267,9 +267,16 @@ test('subscription validates rich support, assistance, emergency, and sentence h
     await expect(assistSubscription({text: 'unless', context: items[0].sentence, domain: 'tech', kind: 'word', level: 'hint', detail: 'full'},'quick')).rejects.toThrow('格式');
     response = {items:[{id:'block',translation:'紧急翻译。'}]};
     const translationProgress=[];
-    expect(await emergencyTranslateSubscription([{id:'block',text:'Emergency translation.'}],'quick',undefined,undefined,value=>translationProgress.push(value))).toEqual(response);
+    expect(await emergencyTranslateSubscription({scope:'passage',items:[{id:'block',text:'Emergency translation.'}],model:'quick',onProgress:value=>translationProgress.push(value)})).toEqual(response);
     expect(translationProgress).toEqual([{items:[{id:'block',translation:'紧急译'}]}]);
     expect(lastMessage.type).toBe('emergencyTranslate');
+    expect(lastMessage.payload.scope).toBe('passage');
+    response={items:[{id:'page',translation:'页面译文。'}],errors:[]};
+    const pageProgress=[];
+    const pageContext={title:'Title',heading:'Heading',before:'Before',after:'After'};
+    expect(await emergencyTranslateSubscription({scope:'page',items:[{id:'page',text:'Page text.',context:pageContext}],model:'quick',onProgress:value=>pageProgress.push(value)})).toEqual(response);
+    expect(lastMessage.payload.scope).toBe('page');
+    expect(pageProgress).toEqual([]);
     response={items:[{id:'sentence',groups:[
       {role:'adverbial',first:1,last:3},{role:'object',first:3,last:4},
       {role:'subject',first:1,last:1},{role:'subject',first:1,last:1},
@@ -469,13 +476,32 @@ test('emergency translation streams only matched item snapshots from the accepte
     });
   });
   try {
-    expect(await fixture.client.emergencyTranslate({items},{onProgress:value=>progress.push(value)})).toEqual(result);
+    expect(await fixture.client.emergencyTranslate({scope:'passage',items},{onProgress:value=>progress.push(value)})).toEqual(result);
     expect(progress.at(-1)).toEqual(result);
     expect(progress.every(snapshot=>snapshot.items.length<=items.length&&snapshot.items.every(item=>items.some(source=>source.id===item.id)))).toBe(true);
     expect(JSON.stringify(progress)).not.toContain('伪造');
   } finally { await fixture.close(); }
 });
 
+test('page translation keeps partial native success and converts malformed JSON into batch errors without streaming',async()=>{
+  const context={title:'Guide',heading:'Retry',before:'A request failed.',after:'Retry it.'};
+  const items=[{id:'one',text:'Keep the English.',context},{id:'two',text:'Show Chinese below it.',context}];
+  const outputs=[JSON.stringify({items:[{id:'one',translation:'保留英文。'},{id:'two',translation:''}]}),'not json'];
+  const progress=[];
+  const fixture=await session((request,reply)=>{
+    const threadId=request.params.threadId,turnId=`page-${outputs.length}`,text=outputs.shift();
+    const input=JSON.parse(request.params.input[0].text);
+    expect(input.items).toEqual(items);
+    reply({id:request.id,result:{turn:{id:turnId}}});
+    reply({method:'item/completed',params:{threadId,turnId,item:{type:'agentMessage',text}}});
+    reply({method:'turn/completed',params:{threadId,turn:{id:turnId,status:'completed'}}});
+  });
+  try{
+    expect(await fixture.client.emergencyTranslate({scope:'page',items},{onProgress:value=>progress.push(value)})).toEqual({items:[{id:'one',translation:'保留英文。'}],errors:[{id:'two',code:'TRANSLATION_EMPTY'}]});
+    expect(await fixture.client.emergencyTranslate({scope:'page',items},{onProgress:value=>progress.push(value)})).toEqual({items:[],errors:[{id:'one',code:'BATCH_SHAPE'},{id:'two',code:'BATCH_SHAPE'}]});
+    expect(progress).toEqual([]);
+  }finally{await fixture.close();}
+});
 test('invalid authoritative assistance output rejects without leaking invalid progress',async()=>{
   const progress=[];
   const invalid=JSON.stringify({result:{level:'hint',hint:'used to find data quickly',sense:'database lookup structure',details:indexDetails},forged:true});
