@@ -232,13 +232,25 @@ test('a correction cannot become an endless retry or erase the failed target',as
   }
 });
 
-test('transport failures and untrustworthy IDs or ranges never trigger correction',async()=>{
+test('transport failures are never retried; structural failures get exactly one retry',async()=>{
   const items=prepareSupportItems(support),base={id:'one',target:{id:'t5_5',hint:target.hint,translation:'除非',sense:target.sense},meaning,sentenceTranslation};
-  for(const response of [new Error('network unavailable'),{...base,id:'forged'},{...base,target:{...base.target,id:'t0_0'}}]){
-    let calls=0;
-    await expect(requestSupportWithCorrection(items,article,async batch=>{calls++;if(response instanceof Error)throw response;return inspectSupportResponse({items:[response]},batch,article);})).rejects.toThrow();
-    expect(calls).toBe(1);
+  let calls=0;
+  await expect(requestSupportWithCorrection(items,article,async()=>{calls++;throw new Error('network unavailable');})).rejects.toThrow();
+  expect(calls).toBe(1);
+  for(const response of [{...base,id:'forged'},{...base,target:{...base.target,id:'t0_0'}}]){
+    calls=0;
+    await expect(requestSupportWithCorrection(items,article,async batch=>{calls++;return inspectSupportResponse({items:[response]},batch,article);})).rejects.toThrow();
+    expect(calls).toBe(2);
   }
+});
+
+test('one structural retry recovers a batch whose target carried an extra field',async()=>{
+  const items=prepareSupportItems(support),valid={id:'one',target:{id:'t5_5',hint:target.hint,translation:'除非',sense:target.sense},meaning,sentenceTranslation};
+  const malformed={...valid,target:{...valid.target,text:'unless'}};
+  let calls=0;
+  const result=await requestSupportWithCorrection(items,article,async batch=>{calls++;return inspectSupportResponse({items:[calls===1?malformed:valid]},batch,article);});
+  expect(calls).toBe(2);
+  expect(result.items[0].target).toMatchObject({text:'unless',translation:'除非'});
 });
 
 test('native attempts reject overlapping success and failure IDs and shifted correction focus',()=>{

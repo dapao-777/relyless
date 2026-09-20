@@ -1,4 +1,4 @@
-import {DOMAINS, request} from '../shared.js';
+import {DOMAINS, request, errorText, setResult, parseOrigin, downloadJson} from '../shared.js';
 
 const byId = id => document.getElementById(id);
 const els = Object.fromEntries([
@@ -12,14 +12,12 @@ Object.assign(els,{knownWordList:byId('known-word-list'),knownWordEmpty:byId('kn
 const HISTORY_PAGE_SIZE=300;
 const historyState={days:30,tab:'query',snapshot:null,personalization:null,sequence:0,nextCursor:null};
 const stageLabels = {hint:'短注',mark:'仅标记原词',quiet:'暂不自动提示'};
-const sourceLabels = {manual:'主动求助',personal:'个人历史词再遇',history:'个人历史词再遇',system:'系统候选',model:'模型生成',legacy:'历史导入',adaptive:'自动策略',default:'默认策略'};
+const sourceLabels = {manual:'主动求助',personal:'个人历史词再遇',system:'系统候选',model:'模型生成',legacy:'历史导入',adaptive:'自动策略',default:'默认策略'};
 const typeMap = {query:'query',automatic:'annotation',summary:'summary'};
 const dateTime = value => value ? new Intl.DateTimeFormat('zh-CN',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value)) : '未记录';
 const dateOnly = value => value ? new Intl.DateTimeFormat('zh-CN',{dateStyle:'medium'}).format(new Date(value)) : '未记录';
 const text = value => typeof value === 'string' ? value : '';
 const count = value => Number.isFinite(Number(value)) ? Number(value) : 0;
-const setResult = (element,message,error=false) => { element.textContent=message;element.hidden=!message;element.classList.toggle('error',error); };
-const errorText = error => error instanceof Error ? error.message : String(error);
 
 function make(tag,className,content) {
   const element=document.createElement(tag);
@@ -27,7 +25,7 @@ function make(tag,className,content) {
   if(content!==undefined) element.textContent=content;
   return element;
 }
-function actionButton(label,handler,className='secondary-button') {
+function actionButton(label,handler,className='') {
   const button=make('button',className,label);button.type='button';button.addEventListener('click',handler);return button;
 }
 function formatDuration(ms) {
@@ -37,12 +35,6 @@ function formatDuration(ms) {
   return rest ? `${hours} 小时 ${rest} 分钟` : `${hours} 小时`;
 }
 function domainName(value) { return DOMAINS[value] || value || '通用'; }
-function parseOrigin(value) {
-  let parsed;
-  try { parsed=new URL(value.trim()); } catch { throw new Error('请输入完整的网站 origin。'); }
-  if(!['http:','https:'].includes(parsed.protocol)||parsed.username||parsed.password||parsed.pathname!=='/'||parsed.search||parsed.hash) throw new Error('网站必须是协议 + 主机，可含端口但不能含路径。');
-  return parsed.origin;
-}
 async function patchConfig(patch,message) {
   resetHistoryPaging();
   const feedback='personalization' in patch||'autoApply' in patch?els.personalizationResult:els.historyConfigResult;
@@ -278,9 +270,6 @@ function renderPersonalization() {
 async function loadPersonalization() {
   try { historyState.personalization=await request('PERSONALIZATION_GET');renderPersonalization(); }
   catch(error) { setResult(els.personalizationResult,errorText(error),true); }
-}
-function downloadJson(data,name) {
-  const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'})),anchor=document.createElement('a');anchor.href=url;anchor.download=name;anchor.click();setTimeout(()=>URL.revokeObjectURL(url),0);
 }
 function activateTab(button) {
   for(const tab of document.querySelectorAll('[data-history-tab]')) { const active=tab===button;tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1; }

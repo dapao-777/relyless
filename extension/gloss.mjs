@@ -318,9 +318,15 @@ export async function requestSupportWithCorrection(items,article,request){
   const selected=normalizeSupportProviderItems(items),context=normalizePreparationContext(article),pending=[],merged=new Map();
   // No nominated source occurrence means no model decision exists to request.
   for(const item of selected){if(item.targets.length)pending.push(item);else merged.set(item.id,{id:item.id,target:null,meaning:{en:null,zh:null},sentenceTranslation:null});}
+  // Structural validation failures (broken envelopes, IDs, ranges) fail closed but
+  // get one blind retry: a transient format slip should not blank the page's support.
+  // Errors without validation detail (transport, abort) are never retried here.
   const attempt=async(batch,corrections)=>{
-    try{return normalizeSupportAttempt(await request(batch,corrections),batch,context);}
-    catch(error){const item=batch[error.detail?.itemIndex];if(item)error.detail.itemIndex=selected.findIndex(value=>value.id===item.id);throw error;}
+    const run=async()=>{
+      try{return normalizeSupportAttempt(await request(batch,corrections),batch,context);}
+      catch(error){const item=batch[error.detail?.itemIndex];if(item)error.detail.itemIndex=selected.findIndex(value=>value.id===item.id);throw error;}
+    };
+    try{return await run();}catch(error){if(!error?.detail?.fields)throw error;return run();}
   };
   if(pending.length){
     const first=await attempt(pending,[]);

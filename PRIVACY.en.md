@@ -36,6 +36,7 @@ Request payloads do not actively include the page URL, but providers still recei
 
 - **API keys and service configuration**: stored in your browser's local extension storage, used to authenticate to the corresponding endpoint.
 - **Personal vocabulary profile**: on by default, used to "remember requested words and support preferences." It does not store source sentences, titles, or source URLs. You can disable it in settings (after which it is no longer read or updated) or clear it under "Data & Privacy."
+- **Reading history** (off by default; requires explicit opt-in and a list of allowed sites): stores queried terms, length-capped example sentences with their translations/explanations, reading summaries, and objective statistics. Example sentences are capped at 1,000 characters (longer sentences are not stored), per-item translations at 2,000 characters, explanations at 1,200, and sentences in automatic-annotation events at 2,000. At most 300 events are kept for up to 90 days, without source URLs. You can export or clear them under "Reading history" or "Data & Privacy."
 - **Prepared explanations and limited context cache**: kept only for the current browser session.
 - **Successful bilingual translation results**: only in a five-minute, at most 256-entry in-memory cache.
 

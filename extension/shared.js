@@ -32,3 +32,8 @@ export async function request(type, payload = {}) {
   if (!response?.ok) throw new Error(response?.error || '插件连接已断开，请刷新页面后重试。');
   return response.data;
 }
+export function errorText(error) { return error instanceof Error ? error.message : String(error); }
+export function setResult(element, message, isError = false) { element.textContent = message; element.hidden = !message; element.classList.toggle('error', isError); }
+export function parseOrigin(value) { const entered = value.trim(); let parsed; try { parsed = new URL(entered); } catch { throw new Error('请输入完整的网站 origin。'); } if (!['http:','https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) throw new Error('网站必须是协议 + 主机，可含端口但不能含路径。'); return parsed.origin; }
+export function downloadJson(data, name) { const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], {type:'application/json'})); const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 0); }
+export function upsertSiteEntry(sites, origin, enabled) { return [...(sites || []).filter(site => site.origin !== origin), {origin, enabled}]; }

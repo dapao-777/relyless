@@ -55,7 +55,6 @@ shadowRoot.innerHTML = `<style>${tokens}/* component styles */</style>`;
 - 成功：`--green`、`--green-soft`、`--green-line`。绿色仅表示成功/已连接，不再作为品牌底色。
 - 警告：`--warning`、`--warning-soft` 使用黄色系，只表达需要注意的状态；普通说明使用中性表面。
 - 危险：`--danger`、`--danger-soft` 只用于失败、删除和不可逆操作。
-- 阅读标记：`--reading-mark`、`--reading-mark-medium`。
 
 所有承载文字的页面、popup、卡片、dialog、drawer、输入框和菜单表面必须解析为不透明实色。禁止 `backdrop-filter`、玻璃质感、半透明 surface 和 opacity 淡入。页面右上角的任务状态也使用实色紧凑表面；定位 host 不拦截点击，仅可见状态条及主动展开的详情接收交互。
 
@@ -70,12 +69,11 @@ shadowRoot.innerHTML = `<style>${tokens}/* component styles */</style>`;
 | 页面标题 | `--type-page-title` | 22px / `--leading-title` | 设置页标题，常规字重 |
 | 区块标题 | `--type-section-title` | 18px / `--leading-title` | 设置页工具栏标题 |
 | 求助词头 | `--type-word-head` | 20px / `--leading-title` | 局部帮助卡目标文本 |
-| 窄屏词头 | `--type-word-head-narrow` | 20px / `--leading-title` | 320–400px 词头 |
 | 正文 | `--type-body` | 15px / `--leading-body`（1.6） | 说明、原文、英文提示、主动请求的中文说明、主要列表信息 |
 | 控件 | `--type-control` | 14px / `--leading-control`（1.4） | 按钮、输入、选择、导航、选项标签 |
 | 辅助 | `--type-support` | 13px / `--leading-support`（1.5） | 状态、帮助、来源、日期、标签、注释；可见文字下限 |
 
-字重仅使用 `--weight-regular`、`--weight-medium`、`--weight-semibold`、`--weight-bold`。不写 550、620、650、720 等插值字重。
+字重仅使用 `--weight-regular`、`--weight-medium`、`--weight-semibold`。不写 550、620、650、700、720 等插值字重。
 
 禁止为塞入固定空间把文字降到 9–12px。空间不足时依次采用换行、增加 `min-height`、减少布局列数或省略非必要装饰。承载文字的控件不得用固定 `height` 截字。
 
@@ -90,7 +88,6 @@ shadowRoot.innerHTML = `<style>${tokens}/* component styles */</style>`;
 - `--space-5` 20px：标准卡片内边距与区块间距。
 - `--space-6` 24px：内容组分隔。
 - `--space-8` 32px：页面区块分隔。
-- `--space-10` 40px：大空状态和主要留白。
 - `--space-12` 48px：页面边距和大区块收尾。
 
 新增组件不得自行引入 14px、18px、21px 等临近值来制造第二套节奏。1–3px 边框、图标几何、浏览器原生控件补偿和排版微调不属于间距 token。
@@ -98,7 +95,7 @@ shadowRoot.innerHTML = `<style>${tokens}/* component styles */</style>`;
 ## 5. 圆角与阴影
 
 - `--radius-control` 8px：输入、选择器和紧凑状态说明。
-- `--radius-panel` / `--radius-card` 12px：设置分组、帮助卡、视频原文稿。
+- `--radius-panel` 12px：设置分组、帮助卡、视频原文稿。
 - `--radius-pill` 999px：操作按钮、导航选中背景和开关轨道；状态文字不加装饰胶囊。
 - `--shadow-low`：仅确实需要轻微浮起的表面；设置分组和原文稿不加阴影。
 - `--shadow-high`：浮于网页上的局部帮助卡，使用短而柔和的阴影。
