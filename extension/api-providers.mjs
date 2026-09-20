@@ -38,6 +38,7 @@ export const API_PROVIDERS = [
   {id:'volcengine',name:'Volcengine',protocol:'chat',baseUrl:'https://ark.cn-beijing.volces.com/api/v3',defaultModel:'doubao-seed-1-6-flash-250828',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'alibaba',name:'Alibaba Cloud',protocol:'chat',baseUrl:'https://dashscope.aliyuncs.com/compatible-mode/v1',defaultModel:'qwen3.8-flash',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'moonshotai',name:'Moonshot AI',protocol:'chat',baseUrl:'https://api.moonshot.ai/v1',defaultModel:'kimi-k2.6',apiKeyUrl:'',keyOptional:false,fields:[]},
+  {id:'stepfun',name:'StepFun (阶跃星辰)',protocol:'chat',baseUrl:'https://api.stepfun.com/v1',defaultModel:'step-1-flash',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'huggingface',name:'Hugging Face',protocol:'chat',baseUrl:'https://router.huggingface.co/v1',defaultModel:'Qwen/Qwen2.5-7B-Instruct-1M',apiKeyUrl:'',keyOptional:false,fields:[]},
 ];
 
