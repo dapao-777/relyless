@@ -389,7 +389,12 @@ function withBackgroundSlot(operation,guard){
   let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;}),guards=new Set([guard]);
   backgroundGuards.set(promise,guards);
   if(activeBackgroundWork>=2&&workWaiters.length>=16){reject(Object.assign(new Error('后台任务较多，请稍后重试。'),{code:'NOT_READY'}));return promise;}
-  workWaiters.push({operation,guards,generation:providerGeneration,resolve,reject});drainBackgroundWork();return promise;
+  const entry={operation,guards,generation:providerGeneration,resolve,reject};
+  workWaiters.push(entry);drainBackgroundWork();
+  // 入队后守卫可能已经失效（设置变更、标签关闭、来源变化）。排队期间没有人会重跑守卫，
+  // 这里立即检查一次：失效的任务当场取消，不占槽位也不等下次 prune。已被 drain 取走的条目跳过。
+  if(workWaiters.includes(entry))void checkBackgroundWork(entry).catch(error=>{const index=workWaiters.indexOf(entry);if(index>=0){workWaiters.splice(index,1);reject(error);}});
+  return promise;
 }
 async function readingPageCall(operation){
   try{return await operation();}catch(error){if(/No tab with id:|No frame with id:|Frame not found|No document with id:|The tab was closed/i.test(error?.message||''))throw staleWork();throw error;}

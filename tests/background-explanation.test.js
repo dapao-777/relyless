@@ -333,19 +333,22 @@ async function queuedSupportFixture(run){
   const page=id=>({url:'https://isolated.example/read',tab:{id},frameId:0});
   const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
   const until=async condition=>{for(let i=0;i<100;i++){if(condition())return;await tick();}throw new Error('Queued scenario did not settle');};
+  // 排队请求只有在 diagnostics 记下 request/start 之后才真正进入可被设置变更取消的注册表；
+  // 固定 tick() 无法保证这个顺序，会随机丢掉取消（表现为 Queued scenario did not settle）。
+  const registered=async id=>until(()=>fixture.local.diagnostics.events.some(row=>row.stage==='request'&&row.status==='start'&&(row.inputIds||[]).includes(id)));
   const start=(id,sentence)=>{const state={};state.done=isolatedSend(fixture,{type:'SUPPORT_BATCH',items:[{id:'s'+id,sentence,domain:'general',candidates:[{text:'ordinary'}]}]},page(id)).then(value=>{state.value=value;state.settled=true;},error=>{state.error=error;state.settled=true;});pending.push(state.done);return state;};
   try{
     globalThis.chrome=fixture.api;fixture.api.tabs.get=async id=>{if(!pages.has(id))throw new Error('No tab with id: '+id+'.');return {...pages.get(id)};};
     globalThis.fetch = withCapabilityProbe(async (...args) => {const payload=JSON.parse(JSON.parse(args[1].body).messages[1].content);requests.push(payload.items[0].sentence);if(requests.length<=2)await gate.promise;return previousFetch(...args);});
     await import('../extension/background.js?queued-support='+crypto.randomUUID());
     start(91,'The first ordinary request occupies a slot.');start(92,'The second ordinary request occupies a slot.');await until(()=>requests.length===2);
-    await run({fixture,data,pages,page,start,requests,gate,until,tick});
+    await run({fixture,data,pages,page,start,requests,gate,until,tick,registered});
   }finally{gate.resolve();await Promise.all(pending);globalThis.chrome=previous;globalThis.fetch=previousFetch;}
 }
 
 test('navigation removes queued support before occupied provider slots finish',async()=>{
-  await queuedSupportFixture(async({fixture,pages,start,requests,gate,until,tick})=>{
-    const stale=start(93,'An ordinary queued request must not run.');await tick();
+  await queuedSupportFixture(async({fixture,pages,start,requests,gate,until,registered})=>{
+    const stale=start(93,'An ordinary queued request must not run.');await registered('s93');
     pages.get(93).url='https://isolated.example/next';for(const listener of fixture.api.tabs.onUpdated.listeners)listener(93,{url:pages.get(93).url},pages.get(93));
     await until(()=>stale.settled);expect(stale.error).toBeInstanceOf(Error);expect(requests).toHaveLength(2);
     const live=start(94,'An ordinary valid request still runs.');gate.resolve();await live.done;
@@ -355,28 +358,28 @@ test('navigation removes queued support before occupied provider slots finish',a
 });
 
 test('one paused consumer cannot cancel queued inference still needed by another page',async()=>{
-  await queuedSupportFixture(async({fixture,page,start,requests,gate,tick})=>{
-    const sentence='An ordinary shared request needs only one inference.',stale=start(93,sentence);await tick();const live=start(94,sentence);await tick();
+  await queuedSupportFixture(async({fixture,page,start,requests,gate,registered})=>{
+    const sentence='An ordinary shared request needs only one inference.',stale=start(93,sentence);await registered('s93');const live=start(94,sentence);await registered('s94');
     await isolatedSend(fixture,{type:'PAGE_ACTIVITY_SET',enabled:false},page(93));gate.resolve();await Promise.all([stale.done,live.done]);
     expect(stale.error).toBeInstanceOf(Error);expect(live.value.items[0].id).toBe('s94');expect(requests.filter(value=>value===sentence)).toHaveLength(1);
   });
 });
 
 test('on-demand cutover cancels queued automatic inference without sending it',async()=>{
-  await queuedSupportFixture(async({fixture,start,requests,until,tick})=>{
-    const stale=start(93,'An ordinary request must stop in on-demand mode.');await tick();
+  await queuedSupportFixture(async({fixture,start,requests,until,registered})=>{
+    const stale=start(93,'An ordinary request must stop in on-demand mode.');await registered('s93');
     await isolatedSend(fixture,{type:'STATE_PATCH',patch:{assistanceMode:'on-demand'}});
     await until(()=>stale.settled);expect(stale.error).toBeInstanceOf(Error);expect(requests).toHaveLength(2);
   });
 });
 
 test('closed queued tabs are cancellation, but unexpected tab API failures remain errors',async()=>{
-  await queuedSupportFixture(async({fixture,pages,start,requests,until,tick})=>{
-    const closed=start(93,'An ordinary request belongs to a closed tab.');await tick();pages.delete(93);
+  await queuedSupportFixture(async({fixture,pages,start,requests,until,registered})=>{
+    const closed=start(93,'An ordinary request belongs to a closed tab.');await registered('s93');pages.delete(93);
     for(const listener of fixture.api.tabs.onRemoved.listeners)listener(93);await until(()=>closed.settled);
     expect(closed.error).toBeInstanceOf(Error);expect(requests).toHaveLength(2);
     const cancelled=fixture.local.diagnostics.events.find(row=>row.stage==='request'&&row.status==='cancelled');expect(cancelled.code).toBe('STALE');
-    const broken=start(94,'An ordinary request hits an unexpected API failure.');await tick();const get=fixture.api.tabs.get;
+    const broken=start(94,'An ordinary request hits an unexpected API failure.');await registered('s94');const get=fixture.api.tabs.get;
     fixture.api.tabs.get=async id=>{if(id===94)throw new Error('unexpected fixture API failure');return get(id);};
     for(const listener of fixture.api.tabs.onUpdated.listeners)listener(94,{status:'loading'},pages.get(94));await until(()=>broken.settled);
     expect(broken.error).toBeInstanceOf(Error);expect(fixture.local.diagnostics.events.filter(row=>row.stage==='request'&&row.status==='error').map(row=>row.code)).toEqual(['UNKNOWN']);expect(requests).toHaveLength(2);
@@ -384,9 +387,9 @@ test('closed queued tabs are cancellation, but unexpected tab API failures remai
 });
 
 test('turning sentence analysis off rejects queued work before any model request',async()=>{
-  await queuedSupportFixture(async({fixture,page,requests,until,tick})=>{
+  await queuedSupportFixture(async({fixture,page,requests,until,registered})=>{
     await isolatedSend(fixture,{type:'PAGE_UI_INJECT',tabId:93});await isolatedSend(fixture,{type:'SENTENCE_GROUPS_SET',tabId:93,enabled:true});
-    let done=false;const queued=isolatedSend(fixture,{type:'SENTENCE_GROUPS_BATCH',items:[{id:'s93',sentence:'When the setting changes, stop this analysis.'}]},page(93)).then(value=>({value}),error=>({error})).finally(()=>{done=true;});await tick();
+    let done=false;const queued=isolatedSend(fixture,{type:'SENTENCE_GROUPS_BATCH',items:[{id:'s93',sentence:'When the setting changes, stop this analysis.'}]},page(93)).then(value=>({value}),error=>({error})).finally(()=>{done=true;});await registered('s93');
     await isolatedSend(fixture,{type:'SENTENCE_GROUPS_SET',enabled:false},page(93));await until(()=>done);
     expect((await queued).error).toBeInstanceOf(Error);expect(requests).toHaveLength(2);
   });
