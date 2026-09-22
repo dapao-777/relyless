@@ -1,18 +1,16 @@
 import {afterAll,beforeAll,expect,test} from 'bun:test';
 import {normalizeSettings,wordId} from '../extension/shared.js';
+import {event,pick,remove,isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
 import 'fake-indexeddb/auto';
 
 function capabilityResponse(body){const format=body.response_format?.json_schema;if(format?.name!=='relyless_capability')return null;return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({probe:format.schema.properties.probe.enum[0]})}}]});}
 function withCapabilityProbe(handler){return async(url,options)=>capabilityResponse(JSON.parse(options.body))||handler(url,options);}
 
-const event=()=>({listeners:[],addListener(listener){this.listeners.push(listener);}});
 const runtimeMessage=event(),stored={
   wordSchemaVersion:5,productSchemaVersion:1,words:[],legacyReadingArchive:[{term:'legacy',sentence:'private old sentence'}],supportDataGeneration:0,supportUsage:[],onDemandSuggestionShownAt:0,
   settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'},rememberSupport:true,assistanceMode:'ambient',lookupKey:'Shift'},
 };
 const session={},tab={id:7,url:'https://reading.example/article?private=yes#part',title:'Private title',active:true};
-const pick=(source,keys)=>keys===null?{...source}:Object.fromEntries((Array.isArray(keys)?keys:[keys]).filter(key=>Object.hasOwn(source,key)).map(key=>[key,source[key]]));
-const remove=(source,keys)=>{for(const key of Array.isArray(keys)?keys:[keys])delete source[key];};
 const fixtureTarget=item=>(item.focus?item.targets.find(target=>target.first===item.focus.first&&target.last===item.focus.last):item.targets.find(target=>target.text.toLowerCase()==='unless'))||item.targets[0];
 const pageItem=(id,text,context={title:'Private title',heading:'',before:'',after:''})=>({id,text,context});
 const chromeBefore=globalThis.chrome,fetchBefore=globalThis.fetch;
@@ -318,13 +316,6 @@ test('usage aggregation enforces UTC window, blockers, foreground memory, and on
   expect(stored.words).toEqual([]);expect(stored.supportUsage).toEqual([]);expect(stored.onDemandSuggestionShownAt).toBe(0);
   expect(stored.legacyReadingArchive).toBeUndefined();
 });
-
-function isolatedChrome(data,{failMigration=false,id='isolated-fixture'}={}){
-  const messages=event(),local=data,isolatedSession={};let failed=false;const select=(source,keys)=>keys===null?{...source}:pick(source,keys);
-  const api={runtime:{id,getURL:path=>'chrome-extension://'+id+'/'+path,lastError:null,onMessage:messages,onConnect:event(),onInstalled:event(),onStartup:event(),sendMessage:async()=>{},openOptionsPage:async()=>{}},storage:{local:{QUOTA_BYTES:10_000_000,setAccessLevel:async()=>{},get:async keys=>select(local,keys),set:async values=>{if(failMigration&&!failed&&values.wordSchemaVersion===5){failed=true;throw new Error('quota');}Object.assign(local,structuredClone(values));},remove:async keys=>remove(local,keys),getBytesInUse:async()=>JSON.stringify(local).length},session:{get:async keys=>select(isolatedSession,keys),set:async values=>Object.assign(isolatedSession,structuredClone(values)),remove:async keys=>remove(isolatedSession,keys)}},permissions:{contains:async()=>true,remove:async()=>true,onAdded:event(),onRemoved:event()},tabs:{onRemoved:event(),onUpdated:event(),query:async()=>[],sendMessage:async()=>{},get:async()=>({id:91,url:'https://isolated.example/read',active:true,title:'Never stored'})},contextMenus:{onClicked:event(),removeAll:async()=>{},create:(_o,cb)=>cb()},scripting:{executeScript:async()=>[{result:true}],getRegisteredContentScripts:async()=>[],unregisterContentScripts:async()=>{},registerContentScripts:async()=>{}},commands:{onCommand:event()},action:{setBadgeText:async()=>{},setTitle:async()=>{},setBadgeBackgroundColor:async()=>{}}};
-  return {api,messages,local,session:isolatedSession,id};
-}
-const isolatedSend=(fixture,message,sender={})=>new Promise((resolve,reject)=>fixture.messages.listeners.at(-1)(message,{id:fixture.id,url:'chrome-extension://'+fixture.id+'/ui/options.html',...sender},response=>response.ok?resolve(response.data):reject(new Error(response.error))));
 
 async function queuedSupportFixture(run){
   const previous=globalThis.chrome,previousFetch=globalThis.fetch,gate=Promise.withResolvers(),pending=[],requests=[];

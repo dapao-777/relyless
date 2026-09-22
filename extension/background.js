@@ -14,6 +14,7 @@ import {createDiagnostics} from './diagnostic-service.js';
 import {createConversationStore} from './conversation-store.js';
 import {collectConversationMemory} from './conversation-memory.js';
 import {normalizeReview,advanceReview,scheduleFirstReview,dueReviewEntries,reviewKey} from './srs.js';
+import {normalizeRouting,routingQuestions,summarizeRequest,routeCacheKey,decideRoute,pruneRouteCache,routingStatsView,ROUTING_LIMITS} from './routing.js';
 import {diagnosticError} from './diagnostics.mjs';
 import {createReadingHistory} from './history-service.js';
 import {createSpeechHandler} from './speech.js';
@@ -164,6 +165,7 @@ function validatePatch(patch,currentSettings) {
   if (patch.passageAction !== undefined) { const a=patch.passageAction; if (!a || typeof a !== 'object' || Array.isArray(a) || Object.keys(a).some(key=>!['open','delay'].includes(key))) throw new Error('无效的划词动作设置。'); const current=currentSettings?.passageAction||{}; result.passageAction={open:a.open===undefined?current.open:a.open==='hover'?'hover':'click',delay:a.delay===undefined?current.delay:Number.isSafeInteger(a.delay)&&a.delay>=0&&a.delay<=3000?a.delay:current.delay}; }
   if (patch.readingStyle !== undefined) result.readingStyle=globalThis.ShisuiReadingStyle.validate(patch.readingStyle);
   if (patch.rulePacks !== undefined) result.rulePacks=normalizeRulePacks(patch.rulePacks);
+  if (patch.routing !== undefined) result.routing=normalizeRouting(patch.routing,currentSettings?.routing||DEFAULT_SETTINGS.routing);
   if (patch.rememberSupport !== undefined) { if (typeof patch.rememberSupport !== 'boolean') throw new Error('无效记忆设置。'); result.rememberSupport=patch.rememberSupport; }
   if (patch.domain !== undefined) result.domain=domain(patch.domain);
   if (patch.subscriptionModel !== undefined) result.subscriptionModel=text(patch.subscriptionModel,'订阅模型',150,false);
@@ -573,7 +575,13 @@ async function setSentenceGroupsLineStyle(message,_sender,trusted){
 async function sentenceGroupsBatch(message,sender){
   const source=await readingSource(sender);if(!source.active||await tabPaused(source.tabId))throw new Error('网页当前未活动，暂停阅读解构。');
   const modeKey=sentenceModeKey(source.tabId),mode=(await chrome.storage.session.get(modeKey))[modeKey];if(!mode?.enabled||mode.page!==source.sourceHash)throw new Error('当前页面未启用阅读解构模式。');
-  const items=normalizeSentenceGroupItems(message.items),state=await load(),generation=providerGeneration,modeGeneration=mode.generation,service=state.settings.providerKind==='api'?activeApiProvider(state.settings):state.settings.subscriptionModel;
+  let state=await load();
+  const items=normalizeSentenceGroupItems(message.items),generation=providerGeneration,modeGeneration=mode.generation;
+  // 解构默认不判卷（频次高）；开启后按策略先选路，缓存键随之切换到实际服务。
+  {const route=await chooseRoute('sentenceGroups',summarizeRequest('sentenceGroups',{text:items.map(item=>item.sentence).join('\n').slice(0,900)}),{settings:state.settings,guard:async()=>{}});
+   if(route.kind==='api'&&route.service)state={...state,settings:{...state.settings,providerKind:'api',activeApiServiceId:route.service.id}};
+   else if(route.kind==='subscription')state={...state,settings:{...state.settings,providerKind:'chatgpt'}};}
+  const service=state.settings.providerKind==='api'?activeApiProvider(state.settings):state.settings.subscriptionModel;
   const guard=async()=>{const [latest,current,currentMode]=await Promise.all([load(),readingSource(sender),chrome.storage.session.get(modeKey).then(value=>value[modeKey])]);if(generation!==providerGeneration||state.supportDataGeneration!==latest.supportDataGeneration||current.sourceHash!==source.sourceHash||!current.active||await tabPaused(source.tabId)||!currentMode?.enabled||currentMode.page!==source.sourceHash||currentMode.generation!==modeGeneration)throw staleWork();};
   if(!configured(state.settings))throw new Error('请先连接服务；原文保持不变。');if(state.settings.providerKind==='api')await requireApiPermission(service);
   await sentenceGroupCacheReady;
@@ -652,9 +660,13 @@ async function emergencyBegin(message){
     await chrome.storage.session.set({[emergencyKey(message.tabId)]:{token,url:message.url,generation:state.supportDataGeneration,provider,cancelledThrough:0}});
     return {token};});
 }
-async function translateItems(items,settings,trace,{scope,onProgress,origin,sourceHash,guard}) {
+async function translateItems(items,settings,trace,{scope,onProgress,origin,sourceHash,guard=async()=>{}}) {
   if(!['page','passage'].includes(scope))throw new Error('无效的翻译范围。');
   if(!configured(settings))throw new Error('请先连接服务。');
+  // 整页与选段翻译都是高价值路径：先判卷再选路，升级路切换到指定服务后再走原链路。
+  const route=await chooseRoute(scope==='page'?'emergency':'passage',summarizeRequest(scope,{text:items.map(item=>item.text).join('\n').slice(0,900)}),{settings,guard});
+  if(route.kind==='api'&&route.service)settings={...settings,providerKind:'api',activeApiServiceId:route.service.id};
+  else if(route.kind==='subscription')settings={...settings,providerKind:'chatgpt'};
   const service=settings.providerKind==='api'?activeApiProvider(settings):settings.subscriptionModel;
   if(settings.providerKind==='api')await requireApiPermission(service);
   const instructions=scope==='page'?PAGE_TRANSLATION_INSTRUCTIONS:EMERGENCY_INSTRUCTIONS;
@@ -779,6 +791,92 @@ async function reviewFeedback(message){
   plan[key]=advanceReview(current,outcome);await saveReviewPlan();
   return {updated:true,box:plan[key].box,dueAt:plan[key].dueAt};
 }
+// 模型路由：判卷凭据复用领域识别的 Jev 配置（一份 Key），判断结果按 操作+内容+设置版本 缓存。
+const ROUTE_CACHE_KEY = 'routeDecisions';
+let routeCache = null, routeCacheLoaded = false;
+const routingStats = {judged: 0, escalated: 0, judgeFailed: 0, cacheHits: 0, skipped: 0};
+async function loadRouteCache() {
+  if (routeCacheLoaded) return routeCache;
+  const data = await chrome.storage.local.get(ROUTE_CACHE_KEY);
+  const plan = data[ROUTE_CACHE_KEY];
+  routeCache = plan && typeof plan === 'object' && !Array.isArray(plan) ? plan : {};
+  routeCacheLoaded = true;
+  return routeCache;
+}
+let routeCacheWrite = Promise.resolve();
+async function saveRouteCache() {
+  routeCacheWrite = routeCacheWrite.then(async () => { await chrome.storage.local.set({[ROUTE_CACHE_KEY]: routeCache}); }).catch(() => {});
+  return routeCacheWrite;
+}
+function routingSettingsOf(settings) { return normalizeRouting(settings?.routing || {}, DEFAULT_SETTINGS.routing); }
+function routingVersion(settings) {
+  const routing = routingSettingsOf(settings);
+  return JSON.stringify([routing.enabled, routing.premiumServiceId, routing.minConfidence, routing.operations]);
+}
+function judgeService(settings) {
+  const detection = settings?.domainDetection || {};
+  const baseUrl = (detection.jevBaseUrl || 'https://router.requesty.ai/v1').trim();
+  const model = (detection.jevModel || 'typesafe/jev-1.13.0').trim();
+  const apiKey = detection.jevApiKey || '';
+  if (!apiKey || !model) return null;
+  try { return normalizeApiService({id: 'route-judge', name: '路由判定', providerId: 'requesty', baseUrl, model, apiKey, options: {}}); } catch { return null; }
+}
+function premiumTarget(settings, routing) {
+  if (!routing.premiumServiceId) return null;
+  if (routing.premiumServiceId === ROUTING_LIMITS.SUBSCRIPTION_TARGET) return subscriptionStatus().authenticated ? {kind: 'subscription', service: null} : null;
+  const found = (settings.apiServices || []).find(service => service.id === routing.premiumServiceId);
+  if (!found || !apiServiceReady(found)) return null;
+  return {kind: 'api', service: found};
+}
+// 返回 {kind, service, reason}；任何失败都回落主路由，绝不阻塞请求。
+async function chooseRoute(operation, summary, {settings, guard = async () => {}, trace} = {}) {
+  const routing = routingSettingsOf(settings);
+  const primary = {kind: settings.providerKind === 'api' ? 'api' : 'subscription', service: settings.providerKind === 'api' ? activeApiProvider(settings) : null, reason: 'default'};
+  if (!routing.enabled || !routing.operations[operation]) { routingStats.skipped++; return primary; }
+  const judge = judgeService(settings);
+  if (!judge) { routingStats.skipped++; return {...primary, reason: 'judge-unconfigured'}; }
+  const cache = await loadRouteCache(), key = routeCacheKey(operation, summary, routingVersion(settings)), now = Date.now();
+  const hit = cache[key];
+  if (hit && now - hit.at < routing.cacheTtlMinutes * 60000) {
+    routingStats.cacheHits++;
+    if (hit.route === 'premium') {
+      const premium = premiumTarget(settings, routing);
+      if (premium) { routingStats.escalated++; return {...premium, reason: hit.reason}; }
+    }
+    return {...primary, reason: 'cached-primary'};
+  }
+  let answers = null;
+  try {
+    const value = await withBackgroundSlot(() => apiRequest(judge, {state: summary, questions: routingQuestions()}, undefined, undefined, {trace, beforeRequest: guard}), guard);
+    answers = value?.answers || null;
+  } catch { routingStats.judgeFailed++; }
+  if (!answers) {
+    cache[key] = {at: now, route: 'primary', reason: 'judge-failed'};
+    routeCache = pruneRouteCache(cache, now, routing.cacheTtlMinutes);
+    await saveRouteCache();
+    return {...primary, reason: 'judge-failed'};
+  }
+  const decision = decideRoute(answers, routing);
+  routingStats.judged++;
+  if (decision.route === 'premium') {
+    const premium = premiumTarget(settings, routing);
+    if (!premium) {
+      cache[key] = {at: now, route: 'primary', reason: 'premium-unavailable'};
+      routeCache = pruneRouteCache(cache, now, routing.cacheTtlMinutes);
+      await saveRouteCache();
+      return {...primary, reason: 'premium-unavailable'};
+    }
+    routingStats.escalated++;
+    cache[key] = {at: now, route: 'premium', reason: decision.reason};
+    routeCache = pruneRouteCache(cache, now, routing.cacheTtlMinutes);
+    await saveRouteCache();
+    return {...premium, reason: decision.reason};
+  }
+  cache[key] = {at: now, route: 'primary', reason: decision.reason};
+  routeCache = pruneRouteCache(cache, now, routing.cacheTtlMinutes);
+  await saveRouteCache();
+  return {...primary, reason: decision.reason};
+}
 async function conversationAsk(message,sender){
   const sessionId=conversationSessionId(message.sessionId);
   if(!sessionId)throw new Error('追问会话无效。');
@@ -796,7 +894,9 @@ async function conversationAsk(message,sender){
   const store=async task=>{if(!persist)return;try{await task(conversationStore);}catch{}};
   await store(async store=>store.begin({id:turnId,sessionId,createdAt:startedAt,question:command.question,text:command.text,context:command.context,domain:command.domain,kind:command.kind,level:command.level,source:{url:source.url||'',title:tabTitle}}));
   try{
-    const onContent=content=>{
+    const route=await chooseRoute('conversation',summarizeRequest('conversation',{text:command.text,context:command.context,question:command.question}),{settings:state.settings});
+  if(route.kind==='api'&&route.service)state.settings={...state.settings,providerKind:'api',activeApiServiceId:route.service.id};
+  const onContent=content=>{
       if(flight.stopped)return;
       const progress=conversationProgress(content);
       if(!progress.answer)return;
@@ -897,9 +997,12 @@ const operation=previous.catch(()=>{}).then(async()=>{
               await Promise.all([...flight.listeners].map(listener=>listener(progress).catch(()=>{})));
             };
             try{
-              if(isSubscriptionKind(state.settings.providerKind))return await providerOperation(()=>assistSubscription(request,state.settings.subscriptionModel,diagnostics.trace(message)?.traceId,readingHistory.policy()?.translation,onProgress,nativeKind(state.settings)),diagnostics.trace(message),state.settings.subscriptionModel,nativeKind(state.settings));
+              // 主动求助是高价值路径：先判卷，premium 档切到升级服务，其余按原设置。
+              const route=await chooseRoute('assist',summarizeRequest('assist',{text:command.text,context:command.context,level:command.level,kind:command.kind}),{settings:state.settings});
+              const routed=route.kind==='api'&&route.service?{...state.settings,providerKind:'api',activeApiServiceId:route.service.id}:state.settings;
+              if(isSubscriptionKind(routed.providerKind))return await providerOperation(()=>assistSubscription(request,routed.subscriptionModel,diagnostics.trace(message)?.traceId,readingHistory.policy()?.translation,onProgress,nativeKind(routed)),diagnostics.trace(message),routed.subscriptionModel,nativeKind(routed));
               const onContent=content=>onProgress(assistanceProgress(content,request,{envelope:'result'}));
-              const wrapped=await apiRequest(activeApiProvider(state.settings),request,ASSISTANCE_INSTRUCTIONS,assistanceSchema(request),{onContent,trace:diagnostics.trace(message)});
+              const wrapped=await apiRequest(activeApiProvider(routed),request,ASSISTANCE_INSTRUCTIONS,assistanceSchema(request),{onContent,trace:diagnostics.trace(message)});
               return wrapped.result;
             }finally{flight.open=false;}
           })();
@@ -1128,7 +1231,7 @@ async function handle(message,sender) {
   if(sender.id!==chrome.runtime.id)throw new Error('不受信任的请求。');
   await dataReady;if(!['MEMORY_CLEAR','HISTORY_CLEAR'].includes(message.type))assertDataAvailable();if(futureSchema&&HISTORY_MUTATIONS.has(message.type))throw new Error('不支持的数据版本，请更新扩展');
   const trusted=Boolean(sender.url?.startsWith(chrome.runtime.getURL('')));
-  const contentAllowed=['HISTORY_BEGIN','HISTORY_TICK','HISTORY_COMMIT','HISTORY_ANNOTATION','DIAGNOSTICS_RENDER','STATE_GET','RESOLVE_DOMAIN','ANALYZE','SUPPORT_BATCH','SENTENCE_GROUPS_GET','SENTENCE_GROUPS_SET','SENTENCE_GROUPS_BATCH','ASSIST','ASSIST_PREVIEW','ASSIST_COMMIT','ENCOUNTER','INTERACT','READING_ACTIVITY','YOUTUBE_CAPTIONS_BRIDGE','OPEN_OPTIONS','AUTO_BOOTSTRAP_CHECK','PAGE_ACTIVITY_SET','VIDEO_SETTINGS_PATCH','PREPARED_SUPPORT','PREPARED_ASSIST','PASSAGE_TRANSLATE', 'EMERGENCY_TRANSLATE', 'EMERGENCY_CANCEL_REQUEST', 'EMERGENCY_END','LANGUAGE_PROFILE','CONVERSATION_ASK','CONVERSATION_STOP','CONVERSATION_HISTORY','CONVERSATION_DELETE','REVIEW_DUE','REVIEW_FEEDBACK']
+  const contentAllowed=['HISTORY_BEGIN','HISTORY_TICK','HISTORY_COMMIT','HISTORY_ANNOTATION','DIAGNOSTICS_RENDER','STATE_GET','RESOLVE_DOMAIN','ANALYZE','SUPPORT_BATCH','SENTENCE_GROUPS_GET','SENTENCE_GROUPS_SET','SENTENCE_GROUPS_BATCH','ASSIST','ASSIST_PREVIEW','ASSIST_COMMIT','ENCOUNTER','INTERACT','READING_ACTIVITY','YOUTUBE_CAPTIONS_BRIDGE','OPEN_OPTIONS','AUTO_BOOTSTRAP_CHECK','PAGE_ACTIVITY_SET','VIDEO_SETTINGS_PATCH','PREPARED_SUPPORT','PREPARED_ASSIST','PASSAGE_TRANSLATE', 'EMERGENCY_TRANSLATE', 'EMERGENCY_CANCEL_REQUEST', 'EMERGENCY_END','LANGUAGE_PROFILE','CONVERSATION_ASK','CONVERSATION_STOP','CONVERSATION_HISTORY','CONVERSATION_DELETE','REVIEW_DUE','REVIEW_FEEDBACK','ROUTING_STATS']
   if(!trusted&&!contentAllowed.includes(message.type)&&message.type!=='WORD_PREFERENCE_SET')throw new Error('此操作不能从网页执行。');
   switch(message.type){
     case 'HISTORY_GET':return readingHistory.snapshot({days:message.days,search:message.search,domain:message.domain,type:message.eventType||'',cursor:message.cursor,limit:Number.isSafeInteger(message.limit)&&message.limit>0?message.limit:300});
@@ -1188,6 +1291,7 @@ async function handle(message,sender) {
     case 'ANALYZE':{const source=text(message.text,'正文',200000,false),state=await load();if(state.settings.assistanceMode!=='ambient')throw new Error('当前为仅在需要时模式。');const history=canRemember(state)?state.words:[],result=withoutKnownTerms(analyze(source,analysisSettings(state),history,message.domain?domain(message.domain):undefined),state.words);return{...result,languageStats:englishTokenStats(source)};}
     case 'LANGUAGE_PROFILE':return identifyPageLanguage(text(message.text,'正文',40000,false));
     case 'REVIEW_DUE':return reviewDue(message);
+    case 'ROUTING_STATS':return {routing:routingStatsView(routingStats),settings:routingSettingsOf((await load(false)).settings)};
     case 'REVIEW_FEEDBACK':return reviewFeedback(message);
     case 'CONVERSATION_ASK':return conversationAsk(message,sender);
     case 'CONVERSATION_STOP':return conversationStop(message,sender);
