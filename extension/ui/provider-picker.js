@@ -1,13 +1,14 @@
 // Keep the native select as the form value; Popover supports icons on Chrome 116+.
+import {providerIconUrl} from './provider-icons.js';
+
 export function createProviderPicker(select,providers) {
   const root=select.parentElement,button=root.querySelector('[role="combobox"]'),list=root.querySelector('[role="listbox"]');
   const currentLogo=button.querySelector('img'),currentName=button.querySelector('span');
   let active=0,search='',typedAt=0;
-  const iconPath=id=>'../icons/providers/'+(['openai-compatible','open-responses','jalapenocloud','tensdaq'].includes(id)?'custom-api':id)+'.svg';
   const choices=providers.map(provider=>{
     select.append(new Option(provider.name,provider.id));
     const row=document.createElement('div');row.id='provider-option-'+provider.id;row.className='provider-option';row.setAttribute('role','option');row.dataset.value=provider.id;
-    const logo=document.createElement('img');logo.className='provider-logo';logo.src=iconPath(provider.id);logo.alt='';logo.width=24;logo.height=24;
+    const logo=document.createElement('img');logo.className='provider-logo';logo.src=providerIconUrl(provider.id);logo.alt='';logo.width=24;logo.height=24;
     const name=document.createElement('span');name.textContent=provider.name;row.append(logo,name);list.append(row);return row;
   });
   const isOpen=()=>list.matches(':popover-open');

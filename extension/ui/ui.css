@@ -649,7 +649,8 @@ details.history-event { padding: 0; }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--surface);
+  /* 品牌 Logo 均为深色设计，固定用白色底衬保证深浅主题下都可辨。 */
+  background: #ffffff;
   border: 1px solid var(--line);
   padding: 3px;
   box-shadow: var(--shadow-low);
@@ -734,7 +735,7 @@ details.history-event { padding: 0; }
   width: 44px;
   height: 44px;
   border-radius: 10px;
-  background: var(--surface);
+  background: #ffffff;
   border: 1px solid var(--line);
   display: flex;
   align-items: center;

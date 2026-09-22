@@ -5,6 +5,7 @@
  */
 
 import {API_PROVIDERS} from '../api-providers.mjs';
+import {providerIconUrl} from './provider-icons.js';
 
 export const CATALOG_CATEGORIES = [
   {id: 'subscription', label: '订阅通道'},
@@ -73,8 +74,9 @@ export const CATALOG_TEMPLATES = [
   }),
 ];
 
+// 图标回退与 API 挑选器共用一张表（ui/provider-icons.js），避免两处各写一份。
 export function iconUrlFor(iconName) {
-  return `../icons/providers/${iconName || 'custom-api'}.svg`;
+  return providerIconUrl(iconName);
 }
 
 const SUBSCRIPTION_IDS = new Set(SUBSCRIPTION_TEMPLATES.map(item => item.id));
