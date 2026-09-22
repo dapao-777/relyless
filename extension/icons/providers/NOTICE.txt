@@ -30,6 +30,7 @@ Local file -> upstream file:
   volcengine.svg -> volcengine-color.svg
   alibaba.svg -> alibabacloud-color.svg
   moonshotai.svg -> moonshot.svg
+  stepfun.svg -> stepfun.svg
   huggingface.svg -> huggingface-color.svg
 Monochrome currentColor values are fixed to #111827 for standalone image rendering.
 
