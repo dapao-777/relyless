@@ -37,6 +37,13 @@ test('disable and clear are barriers against late request events and never delet
   expect(storage.data.words).toEqual([{term:'private-history'}]);
 });
 
+test('incognito requests leave no diagnostic events',async()=>{
+  const service=createDiagnostics({storage:memory(),session:memory(),sync:async()=>false,nativeStatus:()=>({connected:false})});
+  const value={items:[{id:'p1',translation:'译文'}]};
+  expect(await service.run({type:'PASSAGE_TRANSLATE',items:[{id:'p1',text:'private'}]},{tab:{id:17,incognito:true}},async()=>value)).toEqual(value);
+  expect((await service.snapshot()).events).toEqual([]);
+});
+
 test('storage failures remain visible and do not fail the reading operation',async()=>{
   const storage=memory();storage.set=async()=>{throw Error('quota-secret');};
   const service=createDiagnostics({storage,session:memory(),sync:async()=>false,nativeStatus:()=>({connected:false})});

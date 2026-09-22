@@ -15,12 +15,25 @@ const LEVELS = new Set(['hint', 'rescue']);
 
 function openDatabase(factory, name) {
   return new Promise((resolve, reject) => {
-    const request = factory.open(name, 1);
-    request.onupgradeneeded = () => {
+    const request = factory.open(name, 2);
+    request.onupgradeneeded = event => {
       const db = request.result;
-      const turns = db.createObjectStore('turns', { keyPath: 'id' });
-      turns.createIndex('sessionAt', ['sessionId', 'createdAt']);
-      turns.createIndex('at', 'createdAt');
+      if (event.oldVersion < 1) {
+        const turns = db.createObjectStore('turns', { keyPath: 'id' });
+        turns.createIndex('sessionAt', ['sessionId', 'createdAt']);
+        turns.createIndex('at', 'createdAt');
+      } else {
+        const turns = request.transaction.objectStore('turns');
+        const cursor = turns.openCursor();
+        cursor.onsuccess = () => {
+          const entry = cursor.result;
+          if (!entry) return;
+          const source = entry.value?.source;
+          const url = safeSourceUrl(source?.url);
+          if (source?.url !== url) entry.update({...entry.value, source:{...source, url}});
+          entry.continue();
+        };
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -33,6 +46,19 @@ function bounded(value, max) {
   const trimmed = value.trim();
   if (!trimmed || trimmed.length > max) return null;
   return trimmed;
+}
+function safeSourceUrl(value) {
+  const input = bounded(value, 2048);
+  if (!input) return '';
+  try {
+    const url = new URL(input);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    return url.href;
+  } catch { return ''; }
 }
 
 /** 归一化一条问答回合；返回 null 表示拒绝。隐私窗口的写入在调用方就拦下，这里只做数据边界。 */
@@ -51,7 +77,7 @@ export function normalizeConversationTurn(input, now = Date.now()) {
   if (!Number.isSafeInteger(input.createdAt) || input.createdAt <= 0) return null;
   const answer = typeof input.answer === 'string' ? input.answer.slice(0, MAX_ANSWER) : '';
   const source = input.source && typeof input.source === 'object' && !Array.isArray(input.source)
-    ? { url: bounded(input.source.url, 2048) || '', title: bounded(input.source.title, 300) || '' }
+    ? { url: safeSourceUrl(input.source.url), title: bounded(input.source.title, 300) || '' }
     : { url: '', title: '' };
   return {
     id, sessionId, createdAt: input.createdAt, updatedAt: Number.isSafeInteger(input.updatedAt) ? input.updatedAt : input.createdAt,

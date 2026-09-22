@@ -32,6 +32,28 @@ test('a turn round-trips through begin, checkpoint and finish', async () => {
   expect(turns[0].answer).toBe('因为强调从过去持续到现在。');
 });
 
+test('conversation source drops URL credentials, query and fragment before storage', async () => {
+  const store=storeFor('db-private-url');
+  await store.begin(turn({source:{url:'https://user:password@reading.example/article?access_token=private#secret',title:'Article'}}));
+  const [stored]=await store.list('a'.repeat(64));
+  expect(stored.source).toEqual({url:'https://reading.example/article',title:'Article'});
+});
+test('opening an older conversation database removes saved URL secrets', async () => {
+  const name='db-old-private-url',request=indexedDB.open(name,1);
+  request.onupgradeneeded=()=>{
+    const turns=request.result.createObjectStore('turns',{keyPath:'id'});
+    turns.createIndex('sessionAt',['sessionId','createdAt']);
+    turns.createIndex('at','createdAt');
+  };
+  const db=await new Promise((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+  const transaction=db.transaction('turns','readwrite');
+  transaction.objectStore('turns').put(turn({source:{url:'https://reading.example/article?secret=old#fragment',title:'Old'}}));
+  await new Promise((resolve,reject)=>{transaction.oncomplete=resolve;transaction.onerror=()=>reject(transaction.error);});
+  db.close();
+  const [stored]=await storeFor(name).list('a'.repeat(64));
+  expect(stored.source.url).toBe('https://reading.example/article');
+});
+
 test('checkpoints never overwrite a finished or stopped turn', async () => {
   const store = storeFor('db-checkpoint-race');
   const created = await store.begin(turn());
