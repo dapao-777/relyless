@@ -11,7 +11,12 @@
 <body class="options-body">
 <header class="settings-toolbar"><a href="#assistance" aria-label="RelyLess设置"><img class="brand-icon" src="../icons/relyless.svg" width="28" height="28" alt=""><span>RelyLess</span></a><span class="toolbar-context">扩展设置</span></header>
 <div class="workspace">
-<aside class="sidebar"><nav aria-label="设置导航">
+<aside class="sidebar">
+<div class="settings-search">
+<input id="settings-search" type="search" placeholder="搜索设置…" aria-label="搜索设置" autocomplete="off">
+<div id="search-results" class="search-results" hidden></div>
+</div>
+<nav aria-label="设置导航">
 <p class="nav-group-label">阅读</p>
 <a href="#assistance" data-section="assistance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M8 8h8M8 12h8M8 16h5"></path></svg><span>阅读偏好</span></a>
 <a href="#appearance" data-section="appearance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 5h16M8 5v14m-3 0h6M15 11h5m-2-2v10m-2 0h4"></path></svg><span>显示与解构</span></a>
@@ -1021,6 +1026,23 @@
           <p class="field-help" id="routing-stats">尚未启用。</p>
 </div>
 </div>
+      <details class="paper-card settings-disclosure">
+<summary>高级：并发与排队</summary>
+<div class="form-stack">
+        <label class="field setting-select">
+<span>并发请求数</span>
+<select id="request-concurrency">
+<option value="1">1 · 最稳，最省额度</option>
+<option value="2">2 · 默认</option>
+<option value="3">3</option>
+<option value="4">4</option>
+<option value="6">6</option>
+<option value="8">8 · 最快，容易触发限流</option>
+</select>
+<small>同时发往模型服务的后台请求上限，订阅与 API 服务共用。超出上限的请求会排队等待；调高更快但更耗额度。</small>
+</label>
+</div>
+</details>
       <aside class="privacy-note">
 <b>发送哪些内容？</b>
 <p>辅助会发送标题、章节及附近的有限上下文，不发送页面网址。</p>

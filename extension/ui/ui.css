@@ -124,6 +124,15 @@ legend { padding: 0; margin-bottom: var(--space-3); font-size: var(--type-contro
 .toolbar-context { color: var(--muted); font-size: var(--type-support); border-left: 1px solid var(--line); padding-left: var(--space-5); }
 .workspace { display: grid; grid-template-columns: 216px minmax(0,1fr); min-height: calc(100vh - 64px); }
 .sidebar { padding: var(--space-5) var(--space-3) var(--space-5) 0; align-self: start; position: sticky; top: 0; max-height: 100vh; overflow-y: auto; scrollbar-width: thin; }
+.settings-search { padding: 0 var(--space-3) var(--space-4) var(--space-2); position: relative; }
+.settings-search input { width: 100%; min-height: 38px; padding: var(--space-2) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface); color: inherit; font-size: var(--type-control); }
+.settings-search input:focus-visible { outline: 2px solid var(--action); outline-offset: 1px; }
+.search-results { margin-top: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--surface); max-height: 320px; overflow-y: auto; }
+.search-results button { display: block; width: 100%; text-align: left; padding: var(--space-2) var(--space-4); border: 0; background: none; color: inherit; font-size: var(--type-support); cursor: pointer; }
+.search-results button:hover { background: var(--surface-hover); }
+.search-results .search-section { color: var(--muted); }
+.search-results .search-empty { display: block; padding: var(--space-3) var(--space-4); color: var(--muted); font-size: var(--type-support); }
+.sidebar nav a[hidden], .sidebar .nav-group-label[hidden] { display: none; }
 .nav-group-label { padding: var(--space-5) var(--space-6) var(--space-2); font-size: var(--type-support); font-weight: var(--weight-medium); color: var(--muted); letter-spacing: .05em; }
 .nav-group-label:first-child { padding-top: 0; }
 .sidebar nav { display: grid; gap: var(--space-1); }
@@ -313,6 +322,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--space-3); b
   .settings-toolbar { padding-inline: var(--space-4); min-height: 56px; }
   .workspace { display: block; }
   .sidebar { position: static; padding: 0 var(--space-4) var(--space-3); }
+  .settings-search { padding: 0 0 var(--space-2); }
   .nav-group-label { display: none; }
   .sidebar nav { display: flex; gap: var(--space-1); overflow-x: auto; }
   .sidebar nav a { flex: 0 0 auto; white-space: nowrap; border-radius: var(--radius-pill); padding: var(--space-2) var(--space-3); min-height: 40px; gap: var(--space-2); }
