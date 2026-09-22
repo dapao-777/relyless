@@ -119,11 +119,11 @@ legend { padding: 0; margin-bottom: var(--space-3); font-size: var(--type-contro
 .popup-footer [data-lookup-key] { padding: 1px 6px; border: 1px solid var(--accent-line); border-radius: var(--radius-control); color: var(--accent); background: var(--accent-soft); font-weight: var(--weight-medium); }
 /* Settings use one content column, flat grouped rows, and a quiet navigation rail. */
 .options-body { min-height: 100vh; background: var(--canvas); }
-.settings-toolbar { display: flex; align-items: center; gap: var(--space-5); min-height: 64px; padding: var(--space-4) var(--space-6); background: var(--canvas); }
+.settings-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-5); min-height: 64px; padding: var(--space-4) var(--space-6); background: var(--canvas); }
 .settings-toolbar a { display: inline-flex; align-items: center; gap: var(--space-3); text-decoration: none; color: var(--ink); font-size: var(--type-section-title); }
 .toolbar-context { color: var(--muted); font-size: var(--type-support); border-left: 1px solid var(--line); padding-left: var(--space-5); }
 .workspace { display: grid; grid-template-columns: 216px minmax(0,1fr); min-height: calc(100vh - 64px); }
-.sidebar { padding: var(--space-5) var(--space-3) var(--space-5) 0; align-self: start; position: sticky; top: 0; }
+.sidebar { padding: var(--space-5) var(--space-3) var(--space-5) 0; align-self: start; position: sticky; top: 0; max-height: 100vh; overflow-y: auto; scrollbar-width: thin; }
 .nav-group-label { padding: var(--space-5) var(--space-6) var(--space-2); font-size: var(--type-support); font-weight: var(--weight-medium); color: var(--muted); letter-spacing: .05em; }
 .nav-group-label:first-child { padding-top: 0; }
 .sidebar nav { display: grid; gap: var(--space-1); }
@@ -247,8 +247,12 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--space-3); b
 .service-selection { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: var(--space-3); }
 .options-body .settings-section { max-width: 960px; padding-bottom: var(--space-8); }
 .options-body .pair-grid { display: grid; grid-template-columns: minmax(0,1fr); gap: var(--space-5); }
-@media (min-width: 1200px) {
+@media (min-width: 1100px) {
   .options-body .pair-grid { grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; }
+}
+@media (pointer: coarse) {
+  .options-body button, .options-body select, .options-body input:not([type="checkbox"]):not([type="radio"]), .options-body textarea { min-height: 44px; }
+  .options-body .sidebar nav a { min-height: 44px; }
 }
 .options-body .section-intro p { max-width: 64ch; color: var(--muted-strong); font-size: var(--type-body); line-height: var(--leading-body); }
 .options-body .group-label { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-4); margin-top: var(--space-6); padding-inline: var(--space-1); }
@@ -348,7 +352,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--space-3); b
 .about-contacts { margin: var(--space-5) 0 0; }
 .about-contact { display: grid; grid-template-columns: 88px minmax(0,1fr); gap: var(--space-3); align-items: baseline; padding-block: var(--space-3); border-top: 1px solid var(--line); }
 .about-contact dt { color: var(--muted); font-size: var(--type-support); }
-.about-contact dd { display: flex; align-items: baseline; gap: var(--space-3); min-width: 0; }
+.about-contact dd { display: flex; align-items: baseline; gap: var(--space-3); min-width: 0; overflow-wrap: anywhere; }
 .about-contact dd small { color: var(--muted); }
 .related-settings { display: flex; flex-wrap: wrap; gap: var(--space-3) var(--space-5); font-size: var(--type-control); }
 .related-settings a { text-decoration: none; }
