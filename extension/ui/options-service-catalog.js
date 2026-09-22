@@ -19,7 +19,8 @@ export const CATALOG_CATEGORIES = [
 const SUBSCRIPTION_TEMPLATES = [
   {id: 'chatgpt', name: 'ChatGPT 订阅', category: 'subscription', icon: 'openai', desc: '免 API Key，通过本机连接器使用 Codex 权益', website: 'https://chatgpt.com', keyOptional: true},
   {id: 'grok', name: 'Grok 订阅', category: 'subscription', icon: 'xai', desc: '免 API Key，通过 SuperGrok 或 X Premium+ 直连', website: 'https://x.ai', keyOptional: true},
-  {id: 'antigravity', name: 'Google 订阅', category: 'subscription', icon: 'google', desc: '免 API Key，通过 Google AI Pro / Ultra 的 Antigravity 权益', website: 'https://gemini.google.com', keyOptional: true},];
+  {id: 'antigravity', name: 'Google 订阅', category: 'subscription', icon: 'google', desc: '免 API Key，通过 Google AI Pro / Ultra 的 Antigravity 权益', website: 'https://gemini.google.com', keyOptional: true},
+];
 
 // 目录元数据：分类、简介与官方密钥页。未列出的服务商归入自定义，不影响使用。
 const PROVIDER_CATALOG_META = {

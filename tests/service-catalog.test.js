@@ -1,6 +1,18 @@
 import {expect,test} from 'bun:test';
 import {CATALOG_TEMPLATES,CATALOG_CATEGORIES,iconUrlFor} from '../extension/ui/options-service-catalog.js';
 import {API_PROVIDERS} from '../extension/api-providers.mjs';
+import {SUBSCRIPTION_KINDS,isSubscriptionKind} from '../extension/subscription.js';
+
+test('every api provider appears exactly once in the catalog', () => {
+  const apiEntries = CATALOG_TEMPLATES.filter(item => API_PROVIDERS.some(provider => provider.id === item.id));
+  expect(apiEntries).toHaveLength(API_PROVIDERS.length);
+  for (const provider of API_PROVIDERS) {
+    const entry = CATALOG_TEMPLATES.find(item => item.id === provider.id);
+    expect(entry.name).toBe(provider.name);
+    expect(entry.keyOptional).toBe(provider.keyOptional === true);
+  }
+});
+
 test('the catalog lists one entry per supported subscription channel', () => {
   const subscriptions = CATALOG_TEMPLATES.filter(item => item.category === 'subscription');
   expect(subscriptions.map(item => item.id).sort()).toEqual([...SUBSCRIPTION_KINDS].sort());
@@ -10,7 +22,8 @@ test('the catalog lists one entry per supported subscription channel', () => {
   expect(subscriptions.find(item => item.id === 'antigravity').icon).toBe('google');
 });
 
-test('api providers are grouped into known categories', () => {  const categories = new Set(CATALOG_CATEGORIES.map(category => category.id));
+test('api providers are grouped into known categories', () => {
+  const categories = new Set(CATALOG_CATEGORIES.map(category => category.id));
   for (const item of CATALOG_TEMPLATES) expect(categories.has(item.category)).toBe(true);
   expect(CATALOG_TEMPLATES.filter(item => item.category === 'custom').length).toBeGreaterThan(0);
   expect(CATALOG_TEMPLATES.filter(item => item.category === 'popular').map(item => item.id)).toContain('deepseek');
