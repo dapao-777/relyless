@@ -32,8 +32,10 @@ test('connector diagnostics sanitize secrets, mirror silently, and persist disab
     expect(text).not.toMatch(/secret-message|secret-stack|secret-stderr|secret\.test/);
     expect(text.trim().split('\n').map(JSON.parse)).toHaveLength(2);
     expect(broadcasts).toHaveLength(1);
-    expect((await stat(directory)).mode & 0o777).toBe(0o700);
-    expect((await stat(join(directory, 'diagnostics.jsonl'))).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') {
+      expect((await stat(directory)).mode & 0o777).toBe(0o700);
+      expect((await stat(join(directory, 'diagnostics.jsonl'))).mode & 0o777).toBe(0o600);
+    }
 
     await store.configure(false);
     const before = await readFile(join(directory, 'diagnostics.jsonl'), 'utf8');
@@ -43,7 +45,9 @@ test('connector diagnostics sanitize secrets, mirror silently, and persist disab
     expect(restarted.enabled).toBe(false);
     await restarted.clear();
     expect(await readFile(authPath, 'utf8')).toBe('login-data-must-remain');
-    expect((await stat(join(directory, 'diagnostics-config.json'))).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') {
+      expect((await stat(join(directory, 'diagnostics-config.json'))).mode & 0o777).toBe(0o600);
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -63,7 +67,9 @@ test('connector diagnostics rotate one file only after the 256 KiB boundary', as
     await store.append(event({ code: 'STDERR_UNKNOWN' }));
     expect((await stat(path)).size).toBeLessThanOrEqual(DIAGNOSTIC_MAX_BYTES);
     expect((await stat(`${path}.1`)).size).toBe(DIAGNOSTIC_MAX_BYTES);
-    expect((await stat(`${path}.1`)).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') {
+      expect((await stat(`${path}.1`)).mode & 0o777).toBe(0o600);
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -185,7 +191,8 @@ test('native startup removes expired events and sanitizes retained disk records'
     await writeFile(path,[event({at:Date.now()-8*86400000,code:'STDERR_TIMEOUT'}),event({at:Date.now(),message:'private-source'})].map(JSON.stringify).join('\n')+'\ninvalid-json\n');
     await DiagnosticStore.create(directory);const text=await readFile(path,'utf8');
     expect(text.trim().split('\n').map(JSON.parse).map(value=>value.code)).toEqual(['STDERR_AUTH']);
-    expect(text).not.toContain('private-source');expect((await stat(path)).mode&0o777).toBe(0o600);
+    expect(text).not.toContain('private-source');
+    if (process.platform !== 'win32') expect((await stat(path)).mode&0o777).toBe(0o600);
   }finally{await rm(directory,{recursive:true,force:true});}
 });
 test('native assistance progress is framed without settling the pending request',async()=>{

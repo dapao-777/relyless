@@ -171,7 +171,7 @@ function validatePatch(patch,currentSettings) {
   if (patch.providerKind !== undefined) { if (!['chatgpt','api'].includes(patch.providerKind)) throw new Error('不支持的服务类型。'); result.providerKind=patch.providerKind; }
   if (patch.apiServices !== undefined) {
     if (!Array.isArray(patch.apiServices) || patch.apiServices.length>20) throw new Error('API 服务最多保存 20 个。');
-    const ids=new Set();result.apiServices=patch.apiServices.map(value=>{const service=normalizeApiService(value);service.id=text(service.id,'服务编号',128);service.name=text(service.name,'服务名称',60);service.baseUrl=text(service.baseUrl,'API 地址',2048);service.model=text(service.model,'模型',150);service.apiKey=text(service.apiKey,'API Key',4096,false);if(!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(service.id)||ids.has(service.id))throw new Error('API 服务编号必须安全且唯一。');if(!getApiProvider(service.providerId).keyOptional&&!service.apiKey)throw new Error('API Key 不能为空。');apiServiceOrigins(service);ids.add(service.id);return service;});
+    const ids=new Set();result.apiServices=patch.apiServices.map(value=>{const service=normalizeApiService(value);service.id=text(service.id,'服务编号',128);service.name=text(service.name,'服务名称',60);service.baseUrl=text(service.baseUrl,'API 地址',2048);service.model=text(service.model,'模型',150);service.apiKey=text(service.apiKey,'API Key',4096,false);if(!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(service.id)||ids.has(service.id))throw new Error('API 服务编号必须安全且唯一。');if(!getApiProvider(service.providerId).keyOptional&&!service.apiKey&&!currentSettings.apiServices?.some(item=>item.id===service.id))throw new Error('API Key 不能为空。');apiServiceOrigins(service);ids.add(service.id);return service;});
   }
   if (patch.activeApiServiceId !== undefined) result.activeApiServiceId=text(patch.activeApiServiceId,'当前 API 服务',128,false);
   const services=result.apiServices??currentSettings.apiServices,active=result.activeApiServiceId??currentSettings.activeApiServiceId;
@@ -858,10 +858,10 @@ async function conversationAsk(message,sender){
   if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(turnId))throw new Error('追问回合无效。');
   const source=await readingSource(sender),state=await load();
   // 本地记忆先收集再随请求一起过校验：内容有界，且只作为数据发送。
-  const command=normalizeConversationRequest({...message,memory:collectConversationMemory(state,{text:message.text,domain:message.domain})});
+  const command=normalizeConversationRequest({...message,memory:source.incognito?[]:collectConversationMemory(state,{text:message.text,domain:message.domain})});
   if(!configured(state.settings))throw new Error('请先配置可用的翻译或帮助服务。');
   if(state.settings.providerKind==='chatgpt')throw new Error('当前登录服务暂不支持继续追问，请在设置里改用 API 服务。');
-  const persist=Boolean(conversationStore)&&!sender.tab?.incognito,startedAt=Date.now();
+  const persist=Boolean(conversationStore)&&!source.incognito,startedAt=Date.now();
   const flight={stopped:false};conversationFlights.set(turnId,flight);
   let answer='',checkpoint=0;
   const tabTitle=(await chrome.tabs.get(source.tabId).catch(()=>null))?.title||'';
@@ -901,12 +901,14 @@ async function conversationStop(message,sender){
 async function conversationHistory(message,sender){
   const sessionId=conversationSessionId(message.sessionId);
   if(!sessionId||!conversationStore)return {turns:[]};
+  if((await readingSource(sender)).incognito)return {turns:[]};
   const turns=await conversationStore.list(sessionId,40);
   return {turns:turns.map(turn=>({id:turn.id,question:turn.question,answer:turn.answer,status:turn.status,createdAt:turn.createdAt}))};
 }
 async function conversationDelete(message,sender){
   const sessionId=conversationSessionId(message.sessionId);
   if(!sessionId||!conversationStore)return {removed:0};
+  if(sender.tab&&(await readingSource(sender)).incognito)return {removed:0};
   await conversationStore.removeSession(sessionId);
   return {removed:1};
 }

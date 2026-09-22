@@ -1,6 +1,7 @@
 import {afterAll,beforeAll,expect,test} from 'bun:test';
 import {normalizeSettings,wordId} from '../extension/shared.js';
 import {event,pick,remove,isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
+import {createConversationStore} from '../extension/conversation-store.js';
 import 'fake-indexeddb/auto';
 
 function capabilityResponse(body){const format=body.response_format?.json_schema;if(format?.name!=='relyless_capability')return null;return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({probe:format.schema.properties.probe.enum[0]})}}]});}
@@ -76,6 +77,37 @@ test('legacy API settings migrate once and named services remain independent and
   await expect(send({type:'STATE_PATCH',patch:{apiServices:[services[0],{...services[1],id:'bad id'}]}},extensionSender)).rejects.toThrow('安全');
   await expect(send({type:'STATE_PATCH',patch:{activeApiServiceId:'missing'}},extensionSender)).rejects.toThrow('引用');
   await expect(send({type:'STATE_PATCH',patch:{apiServices:[services[1]]}},extensionSender)).rejects.toThrow('移除当前');
+});
+test('a saved API service can be disconnected while new keyless services remain invalid',async()=>{
+  const original=structuredClone(stored.settings.apiServices);
+  const active=stored.settings.activeApiServiceId;
+  const disconnected=original.map(service=>service.id===active?{...service,apiKey:''}:service);
+  try{
+    const result=await send({type:'STATE_PATCH',patch:{apiServices:disconnected}},extensionSender);
+    expect(result.settings.apiServices.find(service=>service.id===active).apiKey).toBe('');
+    expect(result.settings.apiServices.find(service=>service.id!==active).apiKey).toBe('second-key');
+    await expect(send({type:'STATE_PATCH',patch:{apiServices:[...disconnected,{...original[0],id:'new-service',apiKey:''}]}},extensionSender)).rejects.toThrow('API Key');
+  }finally{
+    await send({type:'STATE_PATCH',patch:{apiServices:original}},extensionSender);
+  }
+});
+test('private pages cannot read or delete ordinary-window conversation history',async()=>{
+  const store=createConversationStore(),sessionId='c'.repeat(64),turnId='d'.repeat(36);
+  await store.begin({id:turnId,sessionId,createdAt:Date.now(),question:'Why?',text:'a word',context:'a word in context',domain:'general',kind:'word',level:'hint'});
+  await store.finish(turnId,{answer:'Because of the context.',status:'complete'});
+  try{
+    expect((await send({type:'CONVERSATION_HISTORY',sessionId})).turns).toHaveLength(1);
+    tab.incognito=true;
+    expect(await send({type:'CONVERSATION_HISTORY',sessionId})).toEqual({turns:[]});
+    expect(await send({type:'CONVERSATION_DELETE',sessionId})).toEqual({removed:0});
+    tab.incognito=false;
+    expect((await send({type:'CONVERSATION_HISTORY',sessionId})).turns).toHaveLength(1);
+    expect(await send({type:'CONVERSATION_DELETE',sessionId},extensionSender)).toEqual({removed:1});
+    expect(await store.list(sessionId)).toHaveLength(0);
+  }finally{
+    tab.incognito=false;
+    await store.removeSession(sessionId);
+  }
 });
 test('API model discovery is settings-only and never invents a custom Responses catalog',async()=>{
   const service={id:'draft',name:'Draft',providerId:'open-responses',baseUrl:'https://models.example/v1/responses',model:'',apiKey:'draft-key',options:{}};

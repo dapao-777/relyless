@@ -14,7 +14,7 @@ export function createProviderPicker(select,providers) {
   const isOpen=()=>list.matches(':popover-open');
   function sync() {
     const index=select.selectedIndex,provider=providers[index];if(!provider)return;
-    currentLogo.src=iconPath(provider.id);currentName.textContent=provider.name;button.disabled=select.disabled;
+    currentLogo.src=providerIconUrl(provider.id);currentName.textContent=provider.name;button.disabled=select.disabled;
     for(let i=0;i<choices.length;i++)choices[i].setAttribute('aria-selected',String(i===index));
     if(!isOpen())active=index;
   }

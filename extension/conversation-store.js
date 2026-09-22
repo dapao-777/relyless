@@ -98,9 +98,9 @@ export function createConversationStore({ name = 'shisui-conversations', indexed
     async begin(turnInput) {
       const turn = normalizeConversationTurn({ ...turnInput, status: 'generating', answer: '', updatedAt: now() }, now());
       if (!turn) throw new Error('追问内容无效。');
-      const existing = await allBySession(turn.sessionId);
-      if (existing.length >= MAX_TURNS_PER_SESSION) throw new Error('这段文字的追问已达上限，请稍后再试。');
       await serialize(async () => {
+        const existing = await allBySession(turn.sessionId);
+        if (existing.length >= MAX_TURNS_PER_SESSION) throw new Error('这段文字的追问已达上限，请稍后再试。');
         const transaction = (await ensure()).transaction('turns', 'readwrite');
         transaction.objectStore('turns').put(turn);
         await commit(transaction);
@@ -141,8 +141,8 @@ export function createConversationStore({ name = 'shisui-conversations', indexed
       return turns.sort((a, b) => a.createdAt - b.createdAt).slice(-limit);
     },
     async removeSession(sessionId) {
-      const turns = await allBySession(sessionId);
       await serialize(async () => {
+        const turns = await allBySession(sessionId);
         const transaction = (await ensure()).transaction('turns', 'readwrite');
         const store = transaction.objectStore('turns');
         for (const turn of turns) store.delete(turn.id);
@@ -165,16 +165,16 @@ export function createConversationStore({ name = 'shisui-conversations', indexed
     /** 过期清理：每轮按自己的 createdAt 计算 30 天；清完后不再有回合的会话自然消失。 */
     async prune(reference = now()) {
       const cutoff = reference - TTL_MS;
-      const transaction = (await ensure()).transaction('turns', 'readonly');
-      const expired = await ask(transaction.objectStore('turns'), store => store.index('at').getAll(globalThis.IDBKeyRange.upperBound(cutoff)));
-      if (!expired.length) return 0;
-      await serialize(async () => {
+      return serialize(async () => {
+        const transaction = (await ensure()).transaction('turns', 'readonly');
+        const expired = await ask(transaction.objectStore('turns'), store => store.index('at').getAll(globalThis.IDBKeyRange.upperBound(cutoff)));
+        if (!expired.length) return 0;
         const write = (await ensure()).transaction('turns', 'readwrite');
         const store = write.objectStore('turns');
         for (const turn of expired) store.delete(turn.id);
         await commit(write);
+        return expired.length;
       });
-      return expired.length;
     },
   };
 }
