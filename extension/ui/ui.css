@@ -130,7 +130,7 @@ legend { padding: 0; margin-bottom: var(--space-3); font-size: var(--type-contro
 .sidebar nav a { display: flex; align-items: center; gap: var(--space-4); min-height: 44px; padding: var(--space-3) var(--space-6); color: var(--muted-strong); text-decoration: none; font-size: var(--type-control); border-radius: 0 var(--radius-pill) var(--radius-pill) 0; }
 .sidebar nav a:hover { background: var(--surface-hover); }
 .sidebar nav a.active { background: var(--action); color: var(--on-action); font-weight: var(--weight-medium); }
-.main-panel { min-width: 0; width: 100%; max-width: 900px; padding: var(--space-5) var(--space-12) var(--space-12); }
+.main-panel { min-width: 0; width: 100%; max-width: 1000px; padding: var(--space-5) var(--space-12) var(--space-12); }
 .workspace-header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-4); }
 .workspace-header h1 { font-size: var(--type-page-title); font-weight: var(--weight-regular); }
 .save-state { color: var(--accent); text-align: right; }
@@ -245,7 +245,11 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--space-3); b
 }
 @media (max-width: 900px) { .main-panel { padding-inline: var(--space-6); } }
 .service-selection { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: var(--space-3); }
-.options-body .settings-section { max-width: 720px; padding-bottom: var(--space-8); }
+.options-body .settings-section { max-width: 880px; padding-bottom: var(--space-8); }
+.options-body .pair-grid { display: grid; grid-template-columns: minmax(0,1fr); gap: var(--space-5); }
+@media (min-width: 1200px) {
+  .options-body .pair-grid { grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; }
+}
 .options-body .section-intro p { max-width: 64ch; color: var(--muted-strong); font-size: var(--type-body); line-height: var(--leading-body); }
 .options-body .group-label { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-4); margin-top: var(--space-6); padding-inline: var(--space-1); }
 .options-body .group-label span { font-size: var(--type-section-title); font-weight: var(--weight-medium); }
