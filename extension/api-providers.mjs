@@ -39,6 +39,7 @@ export const API_PROVIDERS = [
   {id:'volcengine',name:'Volcengine',protocol:'chat',baseUrl:'https://ark.cn-beijing.volces.com/api/v3',defaultModel:'doubao-seed-1-6-flash-250828',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'alibaba',name:'Alibaba Cloud',protocol:'chat',baseUrl:'https://dashscope.aliyuncs.com/compatible-mode/v1',defaultModel:'qwen3.8-flash',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'moonshotai',name:'Moonshot AI',protocol:'chat',baseUrl:'https://api.moonshot.ai/v1',defaultModel:'kimi-k2.6',apiKeyUrl:'',keyOptional:false,fields:[]},
+  {id:'stepfun',name:'StepFun (阶跃星辰)',protocol:'chat',baseUrl:'https://api.stepfun.com/v1',defaultModel:'step-1-flash',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'huggingface',name:'Hugging Face',protocol:'chat',baseUrl:'https://router.huggingface.co/v1',defaultModel:'Qwen/Qwen2.5-7B-Instruct-1M',apiKeyUrl:'',keyOptional:false,fields:[]},
 ];
 
@@ -123,11 +124,11 @@ export function normalizeApiService(row) {
   const allowed=new Set(legacy?['id','name','baseUrl','model','apiKey','apiKeys']:['id','name','providerId','baseUrl','model','apiKey','apiKeys','options']);
   for (const key of Object.keys(row)) if (!allowed.has(key)) throw new Error('API 服务包含未知字段。');
   for (const key of ['id','name','baseUrl','model','apiKey']) if (typeof row[key]!=='string') throw new Error('无效的 API 服务。');
-  if (row.apiKeys!==undefined && !Array.isArray(row.apiKeys)) throw new Error('无效的 API 密钥列表。');
   const providerId=legacy?'openai-compatible':row.providerId;
   if (typeof providerId!=='string' || !getApiProvider(providerId)) throw new Error('不支持的 API 服务商。');
   const provider=getApiProvider(providerId),options=normalizedOptions(provider,legacy?{}:row.options);
   const configuredBase=row.baseUrl.trim() || apiProviderBaseUrl(providerId,options);
+  if(row.apiKeys!==undefined && !Array.isArray(row.apiKeys)) throw new Error('无效的 API 密钥列表。');
   const apiKeys=normalizeApiKeys(row.apiKeys,row.apiKey);
   return {id:row.id.trim(),name:row.name.trim(),providerId,baseUrl:normalizedBaseUrl(configuredBase),model:row.model.trim(),apiKey:apiKeys[0]||'',apiKeys,options};
 }

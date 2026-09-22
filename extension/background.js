@@ -1,9 +1,9 @@
 import { DEFAULT_SETTINGS, DOMAINS, wordId, normalizeSettings, activeApiProvider } from './shared.js';
 import {apiServiceOrigins,apiServiceReady,getApiProvider,normalizeApiService} from './api-providers.mjs';
-import {listProviderModels,performProviderRequest} from './api-transport.mjs';
+import {listProviderModels,performProviderRequest,providerRequestTimeoutMs} from './api-transport.mjs';
 import { analyze, analyzeBatch, englishTokenStats, historyMatches, identifyPageLanguage, isKnownTerm, localReferenceFor, resolveCanonicalTerm } from './lexicon.js';
 import { encounter, interact, migrateSupportWord, normalizeKnownAt, normalizeSenseLabel, readingEvidence } from './reading.js';
-import {historyModelSubscription,subscriptionStatus,onNativeDiagnostic,syncNativeDiagnostics,onSubscriptionStatus,ensureSubscription,refreshSubscription,loginSubscription,cancelSubscription,logoutSubscription,listSubscriptionModels,classifySubscription,supportSubscription,assistSubscription,emergencyTranslateSubscription,sentenceGroupsSubscription} from './subscription.js';
+import {historyModelSubscription,subscriptionStatus,onNativeDiagnostic,syncNativeDiagnostics,onSubscriptionStatus,ensureSubscription,refreshSubscription,loginSubscription,cancelSubscription,logoutSubscription,listSubscriptionModels,classifySubscription,supportSubscription,assistSubscription,emergencyTranslateSubscription,sentenceGroupsSubscription,isSubscriptionKind,nativeKind} from './subscription.js';
 import {ROUTE_VERSION,normalizeDomainRules,resolveRuleDomain} from './domain-routing.js';
 import {normalizeRulePacks} from './rule-pack.js';
 import {classifyLocal} from './local-classifier.js';
@@ -24,7 +24,8 @@ const connectSpeech=createSpeechHandler(chrome.tts);
 chrome.runtime.onConnect.addListener(port=>{
   if(port.name==='shisui-speech'&&port.sender?.id===chrome.runtime.id&&Number.isInteger(port.sender?.tab?.id)&&port.sender.frameId===0)connectSpeech(port);
 });
-const diagnostics=createDiagnostics({storage:chrome.storage.local,session:chrome.storage.session,sync:syncNativeDiagnostics,nativeStatus:subscriptionStatus});
+function nativeStatus(){const chatgpt=subscriptionStatus('chatgpt'),grok=subscriptionStatus('grok'),antigravity=subscriptionStatus('antigravity');if(chatgpt.connected)return chatgpt;if(grok.connected)return grok;if(antigravity.connected)return antigravity;return chatgpt.error?chatgpt:(grok.error?grok:antigravity);}
+const diagnostics=createDiagnostics({storage:chrome.storage.local,session:chrome.storage.session,sync:syncNativeDiagnostics,nativeStatus});
 onNativeDiagnostic(record=>{void diagnostics.fromNative(record);});
 const DOMAIN_SCHEMA={type:'object',additionalProperties:false,required:['domain'],properties:{domain:{type:'string',enum:Object.keys(DOMAINS).filter(value=>value!=='auto')}}};
 const HISTORY_MUTATIONS=new Set(['HISTORY_CONFIG','HISTORY_DELETE','HISTORY_SUMMARY_EDIT','HISTORY_CLEAR','HISTORY_RULE_SET','PERSONALIZATION_ANALYZE','PERSONALIZATION_APPLY','PERSONALIZATION_DISMISS','PERSONALIZATION_ROLLBACK','PERSONALIZATION_RESET','WORD_PREFERENCE_SET']);
@@ -62,7 +63,7 @@ const dataReady=ready.then(async()=>{
   catch{dataProblem='上次清理尚未完成，已暂停数据访问，请重试清理。';}
 });
 async function invalidateReadingProfile({keepDefinitions=false}={}){if(keepDefinitions){supportInFlight.clear();sentenceGroupInFlight.clear();translationCache.clear();translationInFlight.clear();providerGeneration++;void pruneBackgroundQueue();void clearEmergencySessions();}else{clearProviderState();invalidateClassification();domainCache.clear();await chrome.storage.session.remove('domainCache');}await mutate(state=>{state.supportDataGeneration++;},false,false);await persistSupportCache();await clearSupportSessions();void broadcast();}
-async function runHistoryModel(kind,payload,instructions,schema){const command={type:kind==='summary'?'HISTORY_SUMMARY':'PERSONALIZATION_ANALYZE'};return diagnostics.run(command,{id:chrome.runtime.id},async()=>{const {settings}=await load(false);if(!configured(settings))throw Object.assign(new Error('请先配置可用服务。'),{code:'NOT_READY'});const trace=diagnostics.trace(command);if(settings.providerKind==='chatgpt')return providerOperation(()=>historyModelSubscription(kind,payload,settings.subscriptionModel,trace?.traceId),trace,settings.subscriptionModel);return apiRequest(activeApiProvider(settings),payload,instructions,schema,{trace});});}
+async function runHistoryModel(kind,payload,instructions,schema){const command={type:kind==='summary'?'HISTORY_SUMMARY':'PERSONALIZATION_ANALYZE'};return diagnostics.run(command,{id:chrome.runtime.id},async()=>{const {settings}=await load(false);if(!configured(settings))throw Object.assign(new Error('请先配置可用服务。'),{code:'NOT_READY'});const trace=diagnostics.trace(command);if(isSubscriptionKind(settings.providerKind))return providerOperation(()=>historyModelSubscription(kind,payload,settings.subscriptionModel,trace?.traceId,nativeKind(settings)),trace,settings.subscriptionModel,nativeKind(settings));return apiRequest(activeApiProvider(settings),payload,instructions,schema,{trace});});}
 let writes = Promise.resolve();
 const supportCache = new Map();
 const supportInFlight = new Map();
@@ -110,22 +111,33 @@ function clearProviderState() {
   sentenceGroupCacheWrites=sentenceGroupCacheWrites.catch(()=>{}).then(()=>chrome.storage.session.remove('sentenceGroupCache'));void sentenceGroupCacheWrites.catch(()=>{});
   return clearEmergencySessions();
 }
-function configured(settings) { const provider=activeApiProvider(settings);return settings.providerKind === 'chatgpt' ? subscriptionStatus().authenticated : apiServiceReady(provider); }
- onSubscriptionStatus(subscription => {
+function configured(settings) { const provider=activeApiProvider(settings);return isSubscriptionKind(settings.providerKind) ? subscriptionStatus(nativeKind(settings)).authenticated : apiServiceReady(provider); }
+function handleSubscriptionStatus(kind,subscription) {
   if(subscription.connected)void diagnostics.connected();
-  const emergencyCleared=clearProviderState(); invalidateClassification();
-  if (subscription.connected) void chrome.storage.local.set({subscriptionLinked:subscription.authenticated});
-  void chrome.runtime.sendMessage({type:'SUBSCRIPTION_UPDATED',subscription}).catch(() => {});
-  void chrome.storage.local.get('settings').then(async({settings}) => { if (!settings?.providerKind || settings.providerKind === 'chatgpt') {await emergencyCleared;await broadcast();} });
+  if (kind==='grok') void chrome.storage.local.set({grokSubscriptionLinked:subscription.authenticated});
+  else if (kind==='antigravity') void chrome.storage.local.set({antigravitySubscriptionLinked:subscription.authenticated});
+  else void chrome.storage.local.set({subscriptionLinked:subscription.authenticated});
+  void chrome.runtime.sendMessage({type:'SUBSCRIPTION_UPDATED',kind,subscription}).catch(() => {});
+  void chrome.storage.local.get('settings').then(async({settings}) => {
+    if (nativeKind(settings)!==kind) return;
+    await clearProviderState();
+    invalidateClassification();
+    await broadcast();
+  });
   void reconcileAutomation().catch(error => console.error('更新自动开启策略失败',error));
-});
+}
+onSubscriptionStatus(subscription => handleSubscriptionStatus('chatgpt',subscription),'chatgpt');
+onSubscriptionStatus(subscription => handleSubscriptionStatus('grok',subscription),'grok');
+onSubscriptionStatus(subscription => handleSubscriptionStatus('antigravity',subscription),'antigravity');
 async function load(includeWords=true) {
   await dataReady;await readingHistory.ready;assertDataAvailable();
-  const keys=['settings','subscriptionLinked','supportDataGeneration','supportUsage','onDemandSuggestionShownAt'];
+  const keys=['settings','subscriptionLinked','grokSubscriptionLinked','antigravitySubscriptionLinked','supportDataGeneration','supportUsage','onDemandSuggestionShownAt'];
   if(includeWords)keys.push('words');
   const data = await chrome.storage.local.get(keys);
   const settings = normalizeSettings(data.settings);
-  if ((settings.providerKind === 'chatgpt' || settings.domainDetection.mode === 'chatgpt') && data.subscriptionLinked) await ensureSubscription();
+  if ((settings.providerKind === 'chatgpt' || settings.domainDetection.mode === 'chatgpt') && data.subscriptionLinked) await ensureSubscription('chatgpt');
+  if ((settings.providerKind === 'grok' || settings.domainDetection.mode === 'grok') && data.grokSubscriptionLinked) await ensureSubscription('grok');
+  if ((settings.providerKind === 'antigravity' || settings.domainDetection.mode === 'antigravity') && data.antigravitySubscriptionLinked) await ensureSubscription('antigravity');
   return {settings,words:includeWords&&schemaReady ? data.words || [] : [],supportDataGeneration:data.supportDataGeneration || 0,supportUsage:Array.isArray(data.supportUsage) ? data.supportUsage : [],onDemandSuggestionShownAt:Number.isFinite(data.onDemandSuggestionShownAt)?data.onDemandSuggestionShownAt:0};
 }
 function canRemember(state) { return schemaReady && !futureSchema && !cleanupPending && state.settings.rememberSupport; }
@@ -138,7 +150,7 @@ function publicState(state,trusted) {
     video:{fontSize:source.video.fontSize,theme:source.video.theme},
     readingHistory:readingHistory.publicConfig(),
   };
-  return {settings,providerConfigured,providerError,...(trusted ? {subscription:subscriptionStatus(),dataProblem} : {})};
+  return {settings,providerConfigured,providerError,...(trusted ? {subscription:isSubscriptionKind(source.providerKind)?subscriptionStatus(nativeKind(source)):subscriptionStatus('chatgpt'),dataProblem} : {})};
 }
 function text(value,name,max,required=true) { if (typeof value !== 'string' || value.length > max || (required && !value.trim())) throw new Error(name+'不能为空，且不能超过 '+max+' 个字符。'); return value.trim(); }
 function domain(value) { if (!Object.hasOwn(DOMAINS,value)) throw new Error('不支持的领域。'); return value; }
@@ -155,20 +167,21 @@ function validatePatch(patch,currentSettings) {
   if (patch.readingStyle !== undefined) result.readingStyle=globalThis.ShisuiReadingStyle.validate(patch.readingStyle);
   if (patch.rulePacks !== undefined) result.rulePacks=normalizeRulePacks(patch.rulePacks);
   if (patch.routing !== undefined) result.routing=normalizeRouting(patch.routing,currentSettings?.routing||DEFAULT_SETTINGS.routing);
+  if (patch.routing !== undefined) result.routing=normalizeRouting(patch.routing,currentSettings?.routing||DEFAULT_SETTINGS.routing);
   if (patch.rememberSupport !== undefined) { if (typeof patch.rememberSupport !== 'boolean') throw new Error('无效记忆设置。'); result.rememberSupport=patch.rememberSupport; }
   if (patch.domain !== undefined) result.domain=domain(patch.domain);
   if (patch.subscriptionModel !== undefined) result.subscriptionModel=text(patch.subscriptionModel,'订阅模型',150,false);
   if (patch.domainRules !== undefined) result.domainRules=normalizeDomainRules(patch.domainRules);
   if (patch.domainDetection !== undefined) {
-    const d=patch.domainDetection; if (!d || !['local','chatgpt','api','jev'].includes(d.mode) || typeof d.useTranslationApi !== 'boolean') throw new Error('无效的领域识别配置。');
+    const d=patch.domainDetection; if (!d || !['local','chatgpt','grok','antigravity','api','jev'].includes(d.mode) || typeof d.useTranslationApi !== 'boolean') throw new Error('无效的领域识别配置。');
     const api={baseUrl:text(d.api?.baseUrl,'识别 API 地址',2048),apiKey:text(d.api?.apiKey ?? '','识别 API Key',4096,false)}; apiServiceOrigins(customDetectionService(api));
     const jevBaseUrl=text(d.jevBaseUrl ?? 'https://router.requesty.ai/v1','Jev 接口地址',2048,false) || 'https://router.requesty.ai/v1';
     const jevModel=text(d.jevModel ?? 'typesafe/jev-1.13.0','Jev 模型',150,d.mode==='jev');
     const jevApiKey=text(d.jevApiKey ?? '','Jev API Key',4096,false);
     if(d.mode==='jev'||jevApiKey)apiServiceOrigins(normalizeApiService({id:'domain-detection-jev',name:'Jev 领域识别',providerId:'requesty',baseUrl:jevBaseUrl,model:jevModel,apiKey:jevApiKey||'pending',options:{}}));
-    result.domainDetection={mode:d.mode,subscriptionModel:text(d.subscriptionModel ?? '','识别订阅模型',150,d.mode==='chatgpt'),apiModel:text(d.apiModel ?? '','识别 API 模型',150,d.mode==='api'),useTranslationApi:d.useTranslationApi,api,jevModel,jevApiKey,jevBaseUrl};
+    result.domainDetection={mode:d.mode,subscriptionModel:text(d.subscriptionModel ?? '','识别订阅模型',150,isSubscriptionKind(d.mode)),apiModel:text(d.apiModel ?? '','识别 API 模型',150,d.mode==='api'),useTranslationApi:d.useTranslationApi,api,jevModel,jevApiKey,jevBaseUrl};
   }
-  if (patch.providerKind !== undefined) { if (!['chatgpt','api'].includes(patch.providerKind)) throw new Error('不支持的服务类型。'); result.providerKind=patch.providerKind; }
+  if (patch.providerKind !== undefined) { if (!['chatgpt','grok','antigravity','api'].includes(patch.providerKind)) throw new Error('不支持的服务类型。'); result.providerKind=patch.providerKind; }
   if (patch.apiServices !== undefined) {
     if (!Array.isArray(patch.apiServices) || patch.apiServices.length>20) throw new Error('API 服务最多保存 20 个。');
     const ids=new Set();result.apiServices=patch.apiServices.map(value=>{const service=normalizeApiService(value);service.id=text(service.id,'服务编号',128);service.name=text(service.name,'服务名称',60);service.baseUrl=text(service.baseUrl,'API 地址',2048);service.model=text(service.model,'模型',150);service.apiKey=text(service.apiKey,'API Key',4096,false);if(!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(service.id)||ids.has(service.id))throw new Error('API 服务编号必须安全且唯一。');if(!getApiProvider(service.providerId).keyOptional&&!service.apiKey)throw new Error('API Key 不能为空。');apiServiceOrigins(service);ids.add(service.id);return service;});
@@ -269,10 +282,10 @@ async function classifyText(settings,source,title,{force = false,guard = async (
   }
   await guard();
   try {
-    if (detection.mode === 'chatgpt') {
-      if (!subscriptionStatus().authenticated) throw new Error('请先连接 ChatGPT 订阅。');
+    if (isSubscriptionKind(detection.mode)) {
+      if (!subscriptionStatus(detection.mode).authenticated) throw new Error(detection.mode==='grok'?'请先连接 Grok 订阅。':detection.mode==='antigravity'?'请先连接 Google 订阅。':'请先连接 ChatGPT 订阅。');
       if (!detection.subscriptionModel) throw new Error('请选择领域识别使用的订阅模型。');
-      return await withBackgroundSlot(()=>providerOperation(()=>classifySubscription(source,title,detection.subscriptionModel,trace?.traceId),trace,detection.subscriptionModel),guard);
+      return await withBackgroundSlot(()=>providerOperation(()=>classifySubscription(source,title,detection.subscriptionModel,trace?.traceId,detection.mode),trace,detection.subscriptionModel,detection.mode),guard);
     }
     if (detection.mode === 'jev') {
       if (!detection.jevApiKey) throw new Error('请先填写 Jev API Key，再使用 Jev 增强识别。');
@@ -352,17 +365,17 @@ async function requireApiPermission(service) {
 async function apiRequest(provider,payload,instructions,schema,{onContent,trace,beforeRequest}={}) {
   const preferences=readingHistory.policy()?.translation;if(preferences&&[ASSISTANCE_INSTRUCTIONS,SUPPORT_INSTRUCTIONS,SUPPORT_CORRECTION_INSTRUCTIONS,EMERGENCY_INSTRUCTIONS,PAGE_TRANSLATION_INSTRUCTIONS].includes(instructions))payload={...payload,personalization:preferences};
   const service=normalizeApiService(provider);await requireApiPermission(service);
-  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),25000);
+  const timeoutMs=providerRequestTimeoutMs(service);
+  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),timeoutMs);
   const generation=providerGeneration;
   const checkRequest=async()=>{if(generation!==providerGeneration)throw staleWork();await beforeRequest?.();if(generation!==providerGeneration)throw staleWork();};
   try {
-    // 多 Key 服务在此轮询：每个快照绑定一个 Key，失败按类型冷却并换 Key；单 Key 服务零开销直连。
-    const output=await diagnostics.provider(trace,'api',service.model,new URL(service.baseUrl).origin,()=>runWithApiKeyRotation(service,snapshot=>performProviderRequest(snapshot,payload,instructions,schema,{signal:controller.signal,onContent,beforeRequest:checkRequest}),{signal:controller.signal}));
+    const output=await diagnostics.provider(trace,'api',service.model,new URL(service.baseUrl).origin,()=>performProviderRequest(service,payload,instructions,schema,{signal:controller.signal,onContent,beforeRequest:checkRequest}));
     if(instructions===ASSISTANCE_INSTRUCTIONS&&(!Object.hasOwn(output,'result')||Object.keys(output).length!==1))throw Object.assign(new Error('帮助服务返回的结果封装无效。'),{code:'OUTPUT_INVALID'});
     providerError='';return output;
   } catch(error) {
     let reported=error;
-    if(controller.signal.aborted||error.name==='AbortError')reported=new Error('请求超过 25 秒，请稍后重试。');else if(error instanceof TypeError)reported=new Error('无法连接服务，请检查网络、API 地址与服务跨域支持。');
+    if(controller.signal.aborted||error.name==='AbortError')reported=new Error(`请求超过 ${Math.round(timeoutMs/1000)} 秒，请稍后重试。${service.providerId==='stepfun'?'阶跃星辰推理较慢时，可把该服务的思考等级设为“低”。':''}`);else if(error instanceof TypeError)reported=new Error('无法连接服务，请检查网络、API 地址与服务跨域支持。');
     providerError=reported.message||'服务连接失败。';throw reported;
   } finally {clearTimeout(timeout);}
 }
@@ -373,7 +386,7 @@ async function apiModelsList(service) {
   catch(error){if(controller.signal.aborted||error.name==='AbortError')throw new Error('模型列表请求超过 25 秒，请稍后重试。');if(error instanceof TypeError)throw new Error('无法连接服务，请检查网络、API 地址与服务跨域支持。');throw error;}
   finally {clearTimeout(timeout);}
 }
-async function providerOperation(operation,trace,model=''){return diagnostics.provider(trace,'chatgpt',model,'chatgpt',async()=>{try{const result=await operation();providerError='';return result;}catch(error){providerError=error.message||'服务连接失败。';throw error;}});}
+async function providerOperation(operation,trace,model='',provider='chatgpt'){return diagnostics.provider(trace,provider,model,provider,async()=>{try{const result=await operation();providerError='';return result;}catch(error){providerError=error.message||'服务连接失败。';throw error;}});}
 function staleWork(){return Object.assign(new Error('页面或设置已变化，请在当前页面重新操作。'),{code:'STALE'});}
 async function requireLiveConsumer(guards){
   let failure;
@@ -508,7 +521,7 @@ async function supportBatch(message,sender){
           const payload=prepareSupportItems(group.map(({item})=>({...item,candidates:cachePayload(item).candidates})));
           const response=await requestSupportWithCorrection(payload,article,async(requestItems,corrections)=>{
             await requireLiveConsumer(backgroundGuards.get(operation));
-            if(state.settings.providerKind==='chatgpt')return providerOperation(()=>supportSubscription(requestItems,state.settings.subscriptionModel,article,diagnostics.trace(message)?.traceId,readingHistory.policy()?.translation,corrections),diagnostics.trace(message),state.settings.subscriptionModel);
+            if(isSubscriptionKind(state.settings.providerKind))return providerOperation(()=>supportSubscription(requestItems,state.settings.subscriptionModel,article,diagnostics.trace(message)?.traceId,readingHistory.policy()?.translation,corrections,nativeKind(state.settings)),diagnostics.trace(message),state.settings.subscriptionModel,nativeKind(state.settings));
             const instructions=corrections.length?SUPPORT_CORRECTION_INSTRUCTIONS:SUPPORT_INSTRUCTIONS;
             const raw=await apiRequest(activeApiProvider(state.settings),{items:requestItems,article,...(corrections.length?{corrections}:{})},instructions,SUPPORT_SCHEMA,{beforeRequest:()=>requireLiveConsumer(backgroundGuards.get(operation)),trace:diagnostics.trace(message)});
             return inspectSupportResponse(raw,requestItems,article);
@@ -577,8 +590,8 @@ async function sentenceGroupsBatch(message,sender){
   const serviceKey=await hashValue(JSON.stringify([state.settings.providerKind,service])),keys=await Promise.all(items.map(item=>hashValue(JSON.stringify([SENTENCE_GROUPS_POLICY_VERSION,serviceKey,item.sentence])))),groupsByKey=new Map(),newItems=[],claimed=new Set(),now=Date.now();
   for(let index=0;index<items.length;index++){const cached=sentenceGroupCache.get(keys[index]);if(cached&&now-cached.at<SENTENCE_GROUP_CACHE_TTL)groupsByKey.set(keys[index],cached.groups);else if(!sentenceGroupInFlight.has(keys[index])&&!claimed.has(keys[index])){claimed.add(keys[index]);newItems.push({item:items[index],key:keys[index]});}}
   if(newItems.length){
-    const operation=withBackgroundSlot(async()=>{const trace=diagnostics.trace(message),sourceItems=newItems.map(value=>value.item);let result;if(state.settings.providerKind==='chatgpt')result=await providerOperation(()=>sentenceGroupsSubscription(sourceItems,state.settings.subscriptionModel,trace?.traceId),trace,state.settings.subscriptionModel);else{result=await apiRequest(activeApiProvider(state.settings),{items:prepareSentenceGroupItems(sourceItems)},SENTENCE_GROUPS_INSTRUCTIONS,SENTENCE_GROUPS_SCHEMA,{trace,beforeRequest:()=>requireLiveConsumer(backgroundGuards.get(operation))});}
-      try{const validated=state.settings.providerKind==='chatgpt'?result:normalizeSentenceGroupsResult(result,sourceItems),mapped=new Map(validated.items.map((value,index)=>[newItems[index].key,value.groups]));await diagnostics.event(trace,'validation','ok');if(generation===providerGeneration){const at=Date.now();for(const [key,groups]of mapped){sentenceGroupCache.delete(key);sentenceGroupCache.set(key,{groups,at});}while(sentenceGroupCache.size>SENTENCE_GROUP_CACHE_LIMIT)sentenceGroupCache.delete(sentenceGroupCache.keys().next().value);await persistSentenceGroupCache(generation).catch(()=>{});}return mapped;}catch(error){await diagnostics.event(trace,'validation','error',diagnosticError(error));throw error;}},guard);
+    const operation=withBackgroundSlot(async()=>{const trace=diagnostics.trace(message),sourceItems=newItems.map(value=>value.item);let result;if(isSubscriptionKind(state.settings.providerKind))result=await providerOperation(()=>sentenceGroupsSubscription(sourceItems,state.settings.subscriptionModel,trace?.traceId,nativeKind(state.settings)),trace,state.settings.subscriptionModel,nativeKind(state.settings));else{result=await apiRequest(activeApiProvider(state.settings),{items:prepareSentenceGroupItems(sourceItems)},SENTENCE_GROUPS_INSTRUCTIONS,SENTENCE_GROUPS_SCHEMA,{trace,beforeRequest:()=>requireLiveConsumer(backgroundGuards.get(operation))});}
+      try{const validated=isSubscriptionKind(state.settings.providerKind)?result:normalizeSentenceGroupsResult(result,sourceItems),mapped=new Map(validated.items.map((value,index)=>[newItems[index].key,value.groups]));await diagnostics.event(trace,'validation','ok');if(generation===providerGeneration){const at=Date.now();for(const [key,groups]of mapped){sentenceGroupCache.delete(key);sentenceGroupCache.set(key,{groups,at});}while(sentenceGroupCache.size>SENTENCE_GROUP_CACHE_LIMIT)sentenceGroupCache.delete(sentenceGroupCache.keys().next().value);await persistSentenceGroupCache(generation).catch(()=>{});}return mapped;}catch(error){await diagnostics.event(trace,'validation','error',diagnosticError(error));throw error;}},guard);
     for(const value of newItems)sentenceGroupInFlight.set(value.key,operation);
     void operation.finally(()=>{for(const value of newItems)if(sentenceGroupInFlight.get(value.key)===operation)sentenceGroupInFlight.delete(value.key);}).catch(()=>{});
   }
@@ -664,9 +677,9 @@ async function translateItems(items,settings,trace,{scope,onProgress,origin,sour
   if(fresh.length){
     const operation=withBackgroundSlot(async()=>{const sourceItems=fresh.map(value=>value.item),idToKey=new Map(fresh.map(value=>[value.item.id,value.key]));let raw;
       const progress=value=>{if(!onProgress||!value?.items)return;const byKey=new Map(value.items.map(item=>[idToKey.get(item.id),item.translation]));onProgress({items:items.flatMap((item,index)=>byKey.has(keys[index])?[{id:item.id,translation:byKey.get(keys[index])}]:[])});};
-      if(settings.providerKind==='chatgpt')raw=await providerOperation(()=>emergencyTranslateSubscription({scope,items:sourceItems,model:settings.subscriptionModel,traceId:trace?.traceId,preferences:personalization,onProgress:progress}),trace,settings.subscriptionModel);else try{raw=await apiRequest(service,{items:sourceItems},instructions,EMERGENCY_SCHEMA,{trace,beforeRequest:()=>requireLiveConsumer(backgroundGuards.get(operation)),...(onProgress?{onContent:content=>progress(translationProgress(content,sourceItems))}:{})});}catch(error){if(scope!=='page'||(error?.code!=='INVALID_JSON'&&diagnosticError(error).code!=='JSON_INVALID'))throw error;providerError='';raw='';}
+      if(isSubscriptionKind(settings.providerKind))raw=await providerOperation(()=>emergencyTranslateSubscription({scope,items:sourceItems,model:settings.subscriptionModel,traceId:trace?.traceId,preferences:personalization,onProgress:progress,kind:nativeKind(settings)}),trace,settings.subscriptionModel,nativeKind(settings));else try{raw=await apiRequest(service,{items:sourceItems},instructions,EMERGENCY_SCHEMA,{trace,beforeRequest:()=>requireLiveConsumer(backgroundGuards.get(operation)),...(onProgress?{onContent:content=>progress(translationProgress(content,sourceItems))}:{})});}catch(error){if(scope!=='page'||(error?.code!=='INVALID_JSON'&&diagnosticError(error).code!=='JSON_INVALID'))throw error;providerError='';raw='';}
       try{
-        const result=scope==='page'?(settings.providerKind==='chatgpt'?normalizePageTranslationResult(raw,sourceItems):inspectPageTranslationResult(raw,sourceItems)):normalizeEmergencyResult(raw,sourceItems),mapped=new Map();
+        const result=scope==='page'?(isSubscriptionKind(settings.providerKind)?normalizePageTranslationResult(raw,sourceItems):inspectPageTranslationResult(raw,sourceItems)):normalizeEmergencyResult(raw,sourceItems),mapped=new Map();
         for(const value of result.items)mapped.set(idToKey.get(value.id),{translation:value.translation});
         for(const value of result.errors||[])mapped.set(idToKey.get(value.id),{error:value.code});
         await diagnostics.event(trace,'validation','ok');
@@ -757,13 +770,28 @@ async function loadReviewPlan(){
   return reviewPlanCache;
 }
 async function saveReviewPlan(){await chrome.storage.local.set({[REVIEW_PLAN_KEY]:reviewPlanCache});}
-// 首次预约：只在没有计划时写入；再次主动求助（known=false 的 ASSIST 提交）视为遗忘，重置到第 1 盒。
+// 首次预约：只在没有计划时写入；再次主动求助（ASSIST 提交）视为遗忘，重置到第 1 盒。
 async function noteReviewOpportunity(wordId,senseKey,{lapse=false}={}){
   if(typeof wordId!=='string'||typeof senseKey!=='string'||!wordId||!senseKey)return;
   const plan=await loadReviewPlan(),key=reviewKey(wordId,senseKey);
   const current=normalizeReview(plan[key]);
   if(!current){plan[key]=scheduleFirstReview();await saveReviewPlan();return;}
   if(lapse){plan[key]=advanceReview(current,'again');await saveReviewPlan();}
+}
+async function reviewDue(message){
+  const entries=Array.isArray(message?.entries)?message.entries.slice(0,40):[];
+  const plan=await loadReviewPlan();
+  const due=dueReviewEntries(plan,entries,Date.now(),20);
+  return {due:due.map(entry=>({key:entry.key,wordId:entry.wordId,senseKey:entry.senseKey,text:typeof entry.text==='string'?entry.text.slice(0,100):'',domain:typeof entry.domain==='string'?entry.domain.slice(0,32):'',box:entry.review.box}))};
+}
+async function reviewFeedback(message){
+  const wordId=text(message?.wordId,'词条',160,false),senseKey=text(message?.senseKey,'义项',200,false);
+  const outcome=message?.outcome;
+  if(!wordId||!senseKey||!['know','again'].includes(outcome))throw new Error('复习反馈无效。');
+  const plan=await loadReviewPlan(),key=reviewKey(wordId,senseKey),current=normalizeReview(plan[key]);
+  if(!current)return {updated:false};
+  plan[key]=advanceReview(current,outcome);await saveReviewPlan();
+  return {updated:true,box:plan[key].box,dueAt:plan[key].dueAt};
 }
 // 模型路由：判卷凭据复用领域识别的 Jev 配置（一份 Key），判断结果按 操作+内容+设置版本 缓存。
 const ROUTE_CACHE_KEY = 'routeDecisions';
@@ -858,10 +886,10 @@ async function conversationAsk(message,sender){
   if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(turnId))throw new Error('追问回合无效。');
   const source=await readingSource(sender),state=await load();
   // 本地记忆先收集再随请求一起过校验：内容有界，且只作为数据发送。
-  const command=normalizeConversationRequest({...message,memory:collectConversationMemory(state,{text:message.text,domain:message.domain})});
+  const command=normalizeConversationRequest({...message,memory:source.incognito?[]:collectConversationMemory(state,{text:message.text,domain:message.domain})});
   if(!configured(state.settings))throw new Error('请先配置可用的翻译或帮助服务。');
-  if(state.settings.providerKind==='chatgpt')throw new Error('当前登录服务暂不支持继续追问，请在设置里改用 API 服务。');
-  const persist=Boolean(conversationStore)&&!sender.tab?.incognito,startedAt=Date.now();
+  if(isSubscriptionKind(state.settings.providerKind))throw new Error('当前登录服务暂不支持继续追问，请在设置里改用 API 服务。');
+  const persist=Boolean(conversationStore)&&!source.incognito,startedAt=Date.now();
   const flight={stopped:false};conversationFlights.set(turnId,flight);
   let answer='',checkpoint=0;
   const tabTitle=(await chrome.tabs.get(source.tabId).catch(()=>null))?.title||'';
@@ -879,7 +907,7 @@ async function conversationAsk(message,sender){
       const now=Date.now();
       if(persist&&now-checkpoint>=500){checkpoint=now;void conversationStore.checkpoint(turnId,answer).catch(()=>{});}
     };
-    const result=await apiRequest(activeApiProvider(state.settings),{text:command.text,context:command.context,domain:command.domain,kind:command.kind,level:command.level,history:command.history,question:command.question,memory:command.memory},CONVERSATION_INSTRUCTIONS,conversationSchema(),{onContent,trace:diagnostics.trace(message)});
+    const result=await apiRequest(activeApiProvider(routed),{text:command.text,context:command.context,domain:command.domain,kind:command.kind,level:command.level,history:command.history,question:command.question,memory:command.memory},CONVERSATION_INSTRUCTIONS,conversationSchema(),{onContent,trace:diagnostics.trace(message)});
     const normalized=normalizeConversationResult(result);
     answer=normalized.answer;
     if(flight.stopped){await store(store=>store.finish(turnId,{status:'stopped',answer}));return {turnId,answer,status:'stopped'};}
@@ -901,31 +929,18 @@ async function conversationStop(message,sender){
 async function conversationHistory(message,sender){
   const sessionId=conversationSessionId(message.sessionId);
   if(!sessionId||!conversationStore)return {turns:[]};
+  if((await readingSource(sender)).incognito)return {turns:[]};
   const turns=await conversationStore.list(sessionId,40);
   return {turns:turns.map(turn=>({id:turn.id,question:turn.question,answer:turn.answer,status:turn.status,createdAt:turn.createdAt}))};
 }
 async function conversationDelete(message,sender){
   const sessionId=conversationSessionId(message.sessionId);
   if(!sessionId||!conversationStore)return {removed:0};
+  if(sender.tab&&(await readingSource(sender)).incognito)return {removed:0};
   await conversationStore.removeSession(sessionId);
   return {removed:1};
 }
-async function reviewDue(message){
-  const entries=Array.isArray(message?.entries)?message.entries.slice(0,40):[];
-  const plan=await loadReviewPlan();
-  const due=dueReviewEntries(plan,entries,Date.now(),20);
-  return {due:due.map(entry=>({key:entry.key,wordId:entry.wordId,senseKey:entry.senseKey,text:typeof entry.text==='string'?entry.text.slice(0,100):'',domain:typeof entry.domain==='string'?entry.domain.slice(0,32):'',box:entry.review.box}))};
-}
-async function reviewFeedback(message){
-  const wordId=text(message?.wordId,'词条',160,false),senseKey=text(message?.senseKey,'义项',200,false);
-  const outcome=message?.outcome;
-  if(!wordId||!senseKey||!['know','again'].includes(outcome))throw new Error('复习反馈无效。');
-  const plan=await loadReviewPlan(),key=reviewKey(wordId,senseKey),current=normalizeReview(plan[key]);
-  if(!current)return {updated:false};
-  plan[key]=advanceReview(current,outcome);await saveReviewPlan();
-  return {updated:true,box:plan[key].box,dueAt:plan[key].dueAt};
-}
-async function conversationList(message){
+async function conversationList(message,sender){
   if(!conversationStore)return {sessions:[]};
   const sessions=await conversationStore.sessions();
   return {sessions:sessions.map(session=>({sessionId:session.sessionId,text:session.text,source:session.source,updatedAt:session.updatedAt,turns:session.turns.map(turn=>({id:turn.id,question:turn.question,answer:turn.answer,status:turn.status,createdAt:turn.createdAt}))}))};
@@ -989,7 +1004,7 @@ const operation=previous.catch(()=>{}).then(async()=>{
               // 主动求助是高价值路径：先判卷，premium 档切到升级服务，其余按原设置。
               const route=await chooseRoute('assist',summarizeRequest('assist',{text:command.text,context:command.context,level:command.level,kind:command.kind}),{settings:state.settings});
               const routed=route.kind==='api'&&route.service?{...state.settings,providerKind:'api',activeApiServiceId:route.service.id}:state.settings;
-              if(routed.providerKind==='chatgpt')return await providerOperation(()=>assistSubscription(request,routed.subscriptionModel,diagnostics.trace(message)?.traceId,readingHistory.policy()?.translation,onProgress),diagnostics.trace(message),routed.subscriptionModel);
+              if(isSubscriptionKind(routed.providerKind))return await providerOperation(()=>assistSubscription(request,routed.subscriptionModel,diagnostics.trace(message)?.traceId,readingHistory.policy()?.translation,onProgress,nativeKind(routed)),diagnostics.trace(message),routed.subscriptionModel,nativeKind(routed));
               const onContent=content=>onProgress(assistanceProgress(content,request,{envelope:'result'}));
               const wrapped=await apiRequest(activeApiProvider(routed),request,ASSISTANCE_INSTRUCTIONS,assistanceSchema(request),{onContent,trace:diagnostics.trace(message)});
               return wrapped.result;
@@ -1258,11 +1273,11 @@ async function handle(message,sender) {
     case 'VIDEO_SETTINGS_PATCH':{if(!trusted&&(!Number.isInteger(sender.tab?.id)||sender.frameId!==0))throw new Error('视频设置只能由网页主框架更新。');const video=await mutate(state=>{const next=validateVideo(message.patch,state.settings.video);state.settings={...state.settings,video:next};return next;},false,false);await broadcastVideoSettings(video);return{video};}
     case 'YOUTUBE_CAPTIONS_BRIDGE':{if(!VIDEO_SUPPORT_ENABLED)throw new Error('视频字幕功能暂未开放。');if(!Number.isInteger(sender.tab?.id)||sender.frameId!==0)throw new Error('字幕桥只能由当前网页主框架启用。');const {url}=await tabPage(sender.tab.id);if(url.protocol!=='https:'||!['www.youtube.com','m.youtube.com'].includes(url.hostname))throw new Error('字幕桥仅适用于 YouTube。');await chrome.scripting.executeScript({target:{tabId:sender.tab.id,frameIds:[0]},world:'MAIN',files:['youtube-captions-bridge.js']});return{};}
     case 'STATE_GET':return {...publicState(await load(false),trusted),emergencyActive:Number.isInteger(sender.tab?.id)&&Boolean(await emergencySession(sender.tab.id))};
-    case 'SUBSCRIPTION_STATUS':return refreshSubscription();
-    case 'SUBSCRIPTION_LOGIN':return loginSubscription();
-    case 'SUBSCRIPTION_CANCEL':return cancelSubscription();
-    case 'SUBSCRIPTION_LOGOUT':return logoutSubscription();
-    case 'MODELS_LIST':return{models:await listSubscriptionModels(message.refresh===true)};
+    case 'SUBSCRIPTION_STATUS':return refreshSubscription(isSubscriptionKind(message.kind)?message.kind:nativeKind((await load(false)).settings));
+    case 'SUBSCRIPTION_LOGIN':return loginSubscription(isSubscriptionKind(message.kind)?message.kind:nativeKind((await load(false)).settings));
+    case 'SUBSCRIPTION_CANCEL':return cancelSubscription(isSubscriptionKind(message.kind)?message.kind:nativeKind((await load(false)).settings));
+    case 'SUBSCRIPTION_LOGOUT':return logoutSubscription(isSubscriptionKind(message.kind)?message.kind:nativeKind((await load(false)).settings));
+    case 'MODELS_LIST':return{models:await listSubscriptionModels(message.refresh===true,isSubscriptionKind(message.kind)?message.kind:nativeKind((await load(false)).settings))};
     case 'API_MODELS_LIST':{const optionsUrl=chrome.runtime.getURL('ui/options.html');if(sender.url!==optionsUrl&&!sender.url?.startsWith(optionsUrl+'?')&&!sender.url?.startsWith(optionsUrl+'#'))throw new Error('仅设置页可以读取 API 模型列表。');return apiModelsList(message.service);}
     case 'PAGE_DOMAIN_GET':{const page=await tabPage(message.tabId);return{domain:await pageDomain(message.tabId,page.key)};}
     case 'PAGE_DOMAIN_SET':return setPageDomain(message);
@@ -1300,10 +1315,7 @@ async function handle(message,sender) {
     case 'ASSIST':return assist(message,sender);
     case 'ASSIST_COMMIT':return assistCommit(message,sender);
     case 'PROVIDER_TEST':{
-      const state=await load();if(!configured(state.settings))throw new Error('请先连接服务。');const request={text:'index',context:'The database query uses an index.',domain:'data',kind:'word',level:'hint',detail:'full'};let raw;if(state.settings.providerKind==='chatgpt')raw=await providerOperation(()=>assistSubscription(request,state.settings.subscriptionModel,diagnostics.trace(message)?.traceId),diagnostics.trace(message),state.settings.subscriptionModel);else{const base=activeApiProvider(state.settings),keyIndex=Number.isSafeInteger(message.keyIndex)&&message.keyIndex>=0?message.keyIndex:null,key=keyIndex===null?null:(base.apiKeys||[])[keyIndex];
-        if(keyIndex!==null&&!key)throw new Error('这个 API Key 已更改或为空，请重新检查。');
-        raw=(await (key?checkSingleApiKey(base,key,service=>apiRequest(service,request,ASSISTANCE_INSTRUCTIONS,assistanceSchema(request),{trace:diagnostics.trace(message)})):apiRequest(base,request,ASSISTANCE_INSTRUCTIONS,assistanceSchema(request),{trace:diagnostics.trace(message)}))).result;}
-      return{hint:normalizeAssistanceResult(raw,request).hint};
+      const state=await load();if(!configured(state.settings))throw new Error('请先连接服务。');const request={text:'index',context:'The database query uses an index.',domain:'data',kind:'word',level:'hint',detail:'full'};let raw;if(isSubscriptionKind(state.settings.providerKind))raw=await providerOperation(()=>assistSubscription(request,state.settings.subscriptionModel,diagnostics.trace(message)?.traceId,undefined,undefined,nativeKind(state.settings)),diagnostics.trace(message),state.settings.subscriptionModel,nativeKind(state.settings));else{raw=(await apiRequest(activeApiProvider(state.settings), request, ASSISTANCE_INSTRUCTIONS, assistanceSchema(request),{trace:diagnostics.trace(message)})).result;}return{hint:normalizeAssistanceResult(raw,request).hint};
     }
     case 'ENCOUNTER':return encounterOffered(message,sender);
     case 'INTERACT':return interactOffered(message,sender);
