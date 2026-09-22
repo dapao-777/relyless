@@ -16,7 +16,7 @@ export const CATALOG_CATEGORIES = [
   {id: 'custom', label: '自定义 API'},
 ];
 
-// 订阅通道条目：与 subscription.js 的 SUBSCRIPTION_KINDS 保持一致，新增订阅时在此追加。
+// 订阅通道条目：与 subscription.js 的 SUBSCRIPTION_KINDS 保持一致。
 const SUBSCRIPTION_TEMPLATES = [
   {id: 'chatgpt', name: 'ChatGPT 订阅', category: 'subscription', icon: 'openai', desc: '免 API Key，通过本机连接器使用 Codex 权益', website: 'https://chatgpt.com', keyOptional: true},
   {id: 'grok', name: 'Grok 订阅', category: 'subscription', icon: 'xai', desc: '免 API Key，通过 SuperGrok 或 X Premium+ 直连', website: 'https://x.ai', keyOptional: true},
@@ -235,6 +235,9 @@ class ServiceCatalogController {
   }
 
   selectService(key) {
+    if (typeof globalThis.optionsDiscardProviderDraft === 'function' && !globalThis.optionsDiscardProviderDraft()) {
+      return;
+    }
     this.userSelected = true;
     this.selectedKey = key;
     this.railList?.querySelectorAll('.service-item').forEach(element => {
@@ -249,6 +252,9 @@ class ServiceCatalogController {
     if (this.isSubscriptionKey(key)) {
       if (subscriptionPanel) subscriptionPanel.hidden = false;
       if (apiPanel) apiPanel.hidden = true;
+      if (typeof globalThis.optionsSetDraftServiceId === 'function') {
+        globalThis.optionsSetDraftServiceId(null);
+      }
       this.syncHeroDetail();
       return;
     }
@@ -257,34 +263,44 @@ class ServiceCatalogController {
     if (apiPanel) apiPanel.hidden = false;
 
     if (key.startsWith('saved:')) {
-      this.switchSavedService(key.slice('saved:'.length));
+      const serviceId = key.slice('saved:'.length);
+      this.displaySavedService(serviceId);
     } else {
       const match = savedServices.find(service => service.providerId === key);
       if (match) {
-        this.switchSavedService(match.id);
+        this.displaySavedService(match.id);
       } else {
-        // 首次配置该服务商：以它预填新增表单，保存前不影响当前服务。
-        const cancelButton = document.querySelector('#cancel-api-service');
-        if (cancelButton?.hidden) document.querySelector('#new-api-service')?.click();
-        setTimeout(() => {
-          const providerSelect = document.querySelector('#provider-id');
-          if (providerSelect) {
-            providerSelect.value = key;
-            providerSelect.dispatchEvent(new Event('change', {bubbles: true}));
-          }
-          const editor = document.querySelector('#api-editor');
-          if (editor) editor.open = true;
-        }, 20);
+        this.startDraftProvider(key);
       }
     }
     this.syncHeroDetail();
   }
 
-  switchSavedService(serviceId) {
-    const select = document.querySelector('#api-service-select');
-    if (select && select.value !== serviceId) {
-      select.value = serviceId;
-      select.dispatchEvent(new Event('change', {bubbles: true}));
+  displaySavedService(serviceId) {
+    if (typeof globalThis.optionsShowSavedService === 'function') {
+      globalThis.optionsShowSavedService(serviceId);
+    } else {
+      const select = document.querySelector('#api-service-select');
+      if (select && select.value !== serviceId) {
+        select.value = serviceId;
+        select.dispatchEvent(new Event('change', {bubbles: true}));
+      }
+    }
+    const editor = document.querySelector('#api-editor');
+    if (editor) editor.open = true;
+  }
+
+  startDraftProvider(providerId) {
+    if (typeof globalThis.optionsStartDraftProvider === 'function') {
+      globalThis.optionsStartDraftProvider(providerId);
+    } else {
+      const cancelButton = document.querySelector('#cancel-api-service');
+      if (cancelButton?.hidden) document.querySelector('#new-api-service')?.click();
+      const providerSelect = document.querySelector('#provider-id');
+      if (providerSelect) {
+        providerSelect.value = providerId;
+        providerSelect.dispatchEvent(new Event('change', {bubbles: true}));
+      }
     }
     const editor = document.querySelector('#api-editor');
     if (editor) editor.open = true;
@@ -331,13 +347,18 @@ class ServiceCatalogController {
     const savedServices = settings.apiServices || [];
 
     if (this.isSubscriptionKey(key)) {
-      const radio = document.querySelector(`input[name="provider-kind"][value="${key}"]`);
-      if (radio) {
-        radio.checked = true;
-        radio.dispatchEvent(new Event('change', {bubbles: true}));
+      if (typeof globalThis.optionsSavePatch === 'function') {
+        const saved = await globalThis.optionsSavePatch({providerKind: key}, '已切换至 ' + (CATALOG_TEMPLATES.find(item=>item.id===key)?.name||'订阅服务'));
+        if (!saved) return;
+      } else {
+        const radio = document.querySelector(`input[name="provider-kind"][value="${key}"]`);
+        if (radio) {
+          radio.checked = true;
+          radio.dispatchEvent(new Event('change', {bubbles: true}));
+        }
       }
       this.userSelected = false;
-      this.renderRailList();
+      this.sync();
       return;
     }
 
@@ -345,18 +366,29 @@ class ServiceCatalogController {
       ? key.slice('saved:'.length)
       : savedServices.find(service => service.providerId === key)?.id || '';
     if (targetServiceId) {
-      this.switchSavedService(targetServiceId);
+      const target = savedServices.find(s => s.id === targetServiceId);
+      if (typeof globalThis.optionsSavePatch === 'function') {
+        const saved = await globalThis.optionsSavePatch({providerKind: 'api', activeApiServiceId: targetServiceId}, '已切换到 ' + (target?.name || '服务'));
+        if (!saved) return;
+      } else {
+        const select = document.querySelector('#api-service-select');
+        if (select) {
+          select.value = targetServiceId;
+          select.dispatchEvent(new Event('change', {bubbles: true}));
+        }
+      }
       this.userSelected = false;
-      this.renderRailList();
+      this.sync();
       return;
     }
+
     // 未保存过的服务商：提示先保存，再设为默认。
     const result = document.querySelector('#provider-result');
     if (result) {
       result.textContent = '请先填写接口信息并点击「保存并使用」，即可设为当前服务。';
       result.hidden = false;
     }
-    document.querySelector('#provider-key')?.focus();
+    document.querySelector('#provider-keys')?.focus();
   }
 
   triggerCheckConnection() {
@@ -368,9 +400,10 @@ class ServiceCatalogController {
   }
 
   triggerNewCustomService() {
-    document.querySelector('#new-api-service')?.click();
+    if (typeof globalThis.optionsDiscardProviderDraft === 'function' && !globalThis.optionsDiscardProviderDraft()) return;
     this.userSelected = true;
     this.selectedKey = 'openai-compatible';
+    this.startDraftProvider('openai-compatible');
     this.renderRailList();
     document.querySelector('#provider-trigger')?.focus();
   }
@@ -382,7 +415,7 @@ class ServiceCatalogController {
     const activeServiceId = settings.activeApiServiceId || '';
     const savedServices = settings.apiServices || [];
 
-    if (!this.userSelected) {
+    if (!this.userSelected || !this.selectedKey) {
       if (currentKind !== 'api') this.selectedKey = currentKind;
       else if (activeServiceId) {
         const active = savedServices.find(service => service.id === activeServiceId);

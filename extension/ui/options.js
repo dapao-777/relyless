@@ -45,7 +45,7 @@ let optionsState = null;
 const setOptionsState = value => { optionsState = value; globalThis.optionsState = value; };
 let optionsAutomation = null;
 let optionsModels = [];
-let optionsProviderDirty = false;let optionsDraftServiceId=null;
+let optionsProviderDirty = false;let optionsDraftServiceId=null;let optionsDisplayedServiceId=null;
 let optionsProviderModels=[];
 const optionsDraftPermissionPatterns=new Set();
 let optionsDetectionDirty = false;
@@ -94,6 +94,7 @@ function optionsNavigate() {
     optionsDiagnosticsTimer=setInterval(()=>void optionsRefreshDiagnostics(),5000);
   }
   if(section==='appearance')optionsRenderAppearance();
+  if(section==='service'&&serviceCatalog)serviceCatalog.sync();
   if(previous!==section){
     requestAnimationFrame(()=>window.scrollTo(0,0));
     if(previous)optionsEls.sectionTitle.focus({preventScroll:true});
@@ -170,24 +171,58 @@ function optionsPreviewReadingStyle(value){
   optionsEls.readingStylePreview.srcdoc='<!doctype html><html lang="en"><meta charset="utf-8"><style id="preview-style">'+css+'</style><body><p>The model uses <span id="preview-annotation" data-shisui-annotation="推理"><span id="preview-word">reasoning</span><span id="preview-hint" lang="zh-CN">推理</span></span> to compare possible answers.</p><div id="preview-translation" lang="zh-CN"><p>模型通过推理比较可能的答案。</p></div></body></html>';
 }
 function optionsRenderReadingStyle(){optionsBuildReadingPalettes();const value=globalThis.ShisuiReadingStyle.normalize(optionsReadingDraft||optionsState.settings.readingStyle);for(const layer of optionsReadingLayers){const controls=optionsReadingControls[layer],layerValue=value[layer];controls.style.value=layerValue.style;controls.size.value=String(layerValue.size);controls.group.dataset.color=layerValue.color;controls.color.value=layerValue.color==='auto'?globalThis.ShisuiReadingStyle.palettes[0].color:layerValue.color;optionsUpdateReadingColorUI(layer);}optionsPreviewReadingStyle(value);}
-function optionsDiscardProviderDraft(){return !optionsProviderDirty||confirm('表单有未保存的更改。确定放弃这些更改吗？');}
+function optionsDiscardProviderDraft(){
+  if(!optionsProviderDirty)return true;
+  return confirm('表单有未保存的更改。确定放弃这些更改吗？');
+}
 function optionsProviderOptions(){return Object.fromEntries([...optionsEls.providerFields.querySelectorAll('[data-provider-option]')].map(input=>[input.dataset.providerOption,input.value.trim()]));}
 function optionsRenderProviderFields(meta,values={}){
   optionsEls.providerFields.replaceChildren();
   for(const field of meta.fields||[]){const label=document.createElement('label');label.className='field';const title=document.createElement('span');title.textContent=field.label;let input;if(field.type==='select'){input=document.createElement('select');for(const choice of field.options||[])input.append(new Option(choice.label,choice.value));}else{input=document.createElement('input');input.type='text';input.autocomplete='off';input.spellcheck=false;if(field.placeholder)input.placeholder=field.placeholder;}input.dataset.providerOption=field.key;input.value=values[field.key]??field.defaultValue??'';input.required=true;input.addEventListener('input',()=>{optionsProviderDirty=true;if(meta.id==='azure'&&(field.key==='resourceName'||field.key==='apiMode'))optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());});input.addEventListener('change',()=>{optionsProviderDirty=true;if(meta.id==='azure'||meta.id==='bedrock')optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());});label.append(title,input);optionsEls.providerFields.append(label);}
 }
-function optionsRenderProvider(){const kind=optionsProviderKind(),radio=document.querySelector('input[name="provider-kind"][value="'+kind+'"]');if(radio)radio.checked=true;
-  optionsEls.subscriptionPanel.hidden=kind!=='chatgpt';optionsEls.apiPanel.hidden=kind!=='api';optionsRenderSubscription();
-  const services=optionsState.settings.apiServices||[],active=activeApiProvider(optionsState.settings),provider=optionsDraftServiceId?{id:optionsDraftServiceId,name:'',providerId:'openai',baseUrl:'',model:'',apiKey:'',options:{}}:active;
-  optionsEls.apiServiceSelect.replaceChildren(...services.map(service=>new Option(service.name+' · '+service.model,service.id)));if(!services.length)optionsEls.apiServiceSelect.append(new Option('尚未保存 API 服务',''));optionsEls.apiServiceSelect.value=optionsState.settings.activeApiServiceId||'';optionsEls.apiServiceSelect.disabled=!services.length;
-  if(!optionsProviderDirty){const providerId=provider?(provider.providerId||'openai-compatible'):'openai',meta=getApiProvider(providerId)||getApiProvider('openai-compatible');optionsEls.providerId.value=meta.id;optionsRenderProviderFields(meta,provider?.options||{});optionsEls.providerName.value=provider?.name||meta.name;optionsEls.providerUrl.value=provider?.baseUrl||apiProviderBaseUrl(meta.id,provider?.options||{});optionsEls.providerModel.value=provider?.model||meta.defaultModel||'';optionsEls.providerKeys.value=(provider?.apiKeys||[]).join('\n');optionsProviderModels=[];}
+function optionsRenderProvider(selectedServiceId = null){
+  if(selectedServiceId!==null)optionsDisplayedServiceId=selectedServiceId;
+  const kind=optionsProviderKind(),radio=document.querySelector('input[name="provider-kind"][value="'+kind+'"]');if(radio)radio.checked=true;
+  const isSubscription = serviceCatalog.isSubscriptionKey(serviceCatalog.selectedKey || optionsState.settings.providerKind);
+  optionsEls.subscriptionPanel.hidden = !isSubscription;
+  optionsEls.apiPanel.hidden = isSubscription;
+  optionsRenderSubscription();
+  const services=optionsState.settings.apiServices||[],active=activeApiProvider(optionsState.settings);
+  const displayed=(optionsDraftServiceId?null:(services.find(s=>s.id===optionsDisplayedServiceId)||active||services[0]))||null;
+  const isActiveDisplayed=Boolean(displayed&&active&&displayed.id===active.id);
+  const provider=optionsDraftServiceId?{id:optionsDraftServiceId,name:'',providerId:optionsEls.providerId.value||'openai',baseUrl:'',model:'',apiKey:'',options:{}}:displayed;
+  optionsEls.apiServiceSelect.replaceChildren(...services.map(service=>new Option(service.name+' · '+service.model,service.id)));
+  if(!services.length)optionsEls.apiServiceSelect.append(new Option('尚未保存 API 服务',''));
+  optionsEls.apiServiceSelect.value=displayed?.id||optionsState.settings.activeApiServiceId||'';
+  optionsEls.apiServiceSelect.disabled=!services.length;
+  if(!optionsProviderDirty){
+    const providerId=provider?(provider.providerId||'openai-compatible'):'openai',meta=getApiProvider(providerId)||getApiProvider('openai-compatible');
+    optionsEls.providerId.value=meta.id;
+    optionsRenderProviderFields(meta,provider?.options||{});
+    optionsEls.providerName.value=provider?.name||meta.name;
+    optionsEls.providerUrl.value=provider?.baseUrl||apiProviderBaseUrl(meta.id,provider?.options||{});
+    optionsEls.providerModel.value=provider?.model||meta.defaultModel||'';
+    optionsEls.providerKeys.value=(provider?.apiKeys||[]).join('\n');
+    optionsProviderModels=[];
+  }
   optionsProviderPicker.sync();
-  const meta=getApiProvider(optionsEls.providerId.value),hasKey=Boolean(provider?.apiKey);optionsEls.providerKeyLink.hidden=!meta?.apiKeyUrl;optionsEls.providerKeyLink.href=meta?.apiKeyUrl||'#';const keyCount=(provider?.apiKeys||[]).length;optionsEls.providerKeys.placeholder=meta?.keyOptional?'可选；本地服务可不填密钥':('每行一个密钥，最多 8 个'+(hasKey?'；当前已保存 '+keyCount+' 个':''));optionsEls.keyState.textContent=meta?.keyOptional?'本地服务可不填密钥；填写后也只用于此服务。':keyCount>1?'已保存 '+keyCount+' 个密钥；请求按权重轮询，失败自动切换，约 1 分钟后恢复。':hasKey?'密钥保存在本机；更换服务商或域名不会带入。':'密钥只用于此服务，不会复制到其他服务。';
-  optionsEls.providerModelList.replaceChildren(new Option(optionsProviderModels.length?'选择已获取的模型':'获取后选择',''),...optionsProviderModels.map(model=>new Option(model.name||model.id,model.id)));optionsEls.providerModelNote.textContent=optionsProviderModels.length?'已获取 '+optionsProviderModels.length+' 个模型；仍可手动填写模型 ID。':'也可直接填写模型 ID。';
-  optionsEls.testProvider.disabled=kind!=='api'||!active||Boolean(optionsDraftServiceId)||optionsProviderDirty;optionsEls.disconnectProvider.disabled=!active?.apiKey||Boolean(optionsDraftServiceId);optionsEls.deleteApiService.disabled=!active||Boolean(optionsDraftServiceId);optionsEls.cancelApiService.hidden=!optionsDraftServiceId;optionsEls.newApiService.disabled=services.length>=20;
+  const meta=getApiProvider(optionsEls.providerId.value),hasKey=Boolean(provider?.apiKey||(provider?.apiKeys&&provider.apiKeys.length));
+  optionsEls.providerKeyLink.hidden=!meta?.apiKeyUrl;
+  optionsEls.providerKeyLink.href=meta?.apiKeyUrl||'#';
+  const keyCount=(provider?.apiKeys||[]).length;
+  optionsEls.providerKeys.placeholder=meta?.keyOptional?'可选；本地服务可不填密钥':('每行一个密钥，最多 8 个'+(hasKey?'；当前已保存 '+keyCount+' 个':''));
+  optionsEls.keyState.textContent=meta?.keyOptional?'本地服务可不填密钥；填写后也只用于此服务。':keyCount>1?'已保存 '+keyCount+' 个密钥；请求按权重轮询，失败自动切换，约 1 分钟后恢复。':hasKey?'密钥保存在本机；更换服务商或域名不会带入。':'密钥只用于此服务，不会复制到其他服务。';
+  optionsEls.providerModelList.replaceChildren(new Option(optionsProviderModels.length?'选择已获取的模型':'获取后选择',''),...optionsProviderModels.map(model=>new Option(model.name||model.id,model.id)));
+  optionsEls.providerModelNote.textContent=optionsProviderModels.length?'已获取 '+optionsProviderModels.length+' 个模型；仍可手动填写模型 ID。':'也可直接填写模型 ID。';
+  optionsEls.testProvider.disabled=!isActiveDisplayed||!displayed?.apiKey||Boolean(optionsDraftServiceId)||optionsProviderDirty;
+  optionsEls.checkAllKeys.disabled=!isActiveDisplayed||!displayed?.apiKeys?.length||Boolean(optionsDraftServiceId)||optionsProviderDirty;
+  optionsEls.disconnectProvider.disabled=!displayed?.apiKey||Boolean(optionsDraftServiceId);
+  optionsEls.deleteApiService.disabled=!displayed||Boolean(optionsDraftServiceId);
+  optionsEls.cancelApiService.hidden=!optionsDraftServiceId;
+  optionsEls.newApiService.disabled=services.length>=20;
   const editor=document.getElementById('api-editor');
   if(!active||optionsDraftServiceId)editor.open=true;
-  editor.querySelector('summary').textContent=optionsDraftServiceId||!active?'配置 API 服务':'编辑当前服务';
+  editor.querySelector('summary').textContent=optionsDraftServiceId||!displayed?'配置 API 服务':'编辑当前服务';
 }
 function optionsRenderSentenceDensity(){for(const input of optionsSentenceDensityInputs)input.checked=input.value===optionsSentenceDensity;}
 function optionsRenderSentenceLineStyle(){for(const input of optionsSentenceLineInputs)input.checked=input.value===optionsSentenceLineStyle;}
@@ -272,7 +307,7 @@ function optionsCredentialPatterns(settings){const patterns=new Set();for(const 
 async function optionsRemoveUnusedPermissions(before,after){if(after.automation?.allSites||after.automation?.sentenceGroupsAllSites)return;const needed=optionsCredentialPatterns(after);for(const pattern of optionsCredentialPatterns(before))if(!needed.has(pattern))await chrome.permissions.remove({origins:[pattern]});}
 async function optionsEnsurePermission(pattern,needed){if(!needed)return false;const had=await chrome.permissions.contains({origins:[pattern]});const granted=had||await chrome.permissions.request({origins:[pattern]});if(!granted)throw new Error('未获得该服务域名的访问权限，配置尚未保存。');return !had;}
 function optionsCurrentProviderService({allowEmptyModel=false}={}){
-  const before=optionsState.settings,current=optionsDraftServiceId?null:activeApiProvider(before),providerId=optionsEls.providerId.value,options=optionsProviderOptions(),baseUrl=optionsEls.providerUrl.value.trim()||apiProviderBaseUrl(providerId,options),pattern=optionsOriginPattern(baseUrl),sameCredentialScope=(current?.providerId||'openai-compatible')===providerId&&optionsOriginPattern(current?.baseUrl)===pattern,enteredKey=optionsEls.providerKey.value.trim();
+  const before=optionsState.settings,current=optionsDraftServiceId?null:(optionsState.settings.apiServices?.find(s=>s.id===optionsDisplayedServiceId)||activeApiProvider(before)),providerId=optionsEls.providerId.value,options=optionsProviderOptions(),baseUrl=optionsEls.providerUrl.value.trim()||apiProviderBaseUrl(providerId,options),pattern=optionsOriginPattern(baseUrl),sameCredentialScope=(current?.providerId||'openai-compatible')===providerId&&optionsOriginPattern(current?.baseUrl)===pattern;
   const draftKeys=[...new Set(optionsEls.providerKeys.value.split('\n').map(line=>line.trim()).filter(Boolean))].slice(0,8);
   const priorKeys=sameCredentialScope?(current?.apiKeys||[]):[];
   const keptKeys=draftKeys.length?draftKeys:priorKeys;
@@ -282,9 +317,34 @@ function optionsCurrentProviderService({allowEmptyModel=false}={}){
 async function optionsCleanupDraftPermissions(){for(const pattern of optionsDraftPermissionPatterns){if(!optionsCredentialPatterns(optionsState.settings).has(pattern))await chrome.permissions.remove({origins:[pattern]}).catch(()=>{});}optionsDraftPermissionPatterns.clear();}
 async function optionsListProviderModels(){setResult(optionsEls.providerResult,'正在获取模型…');optionsEls.listProviderModels.disabled=true;let service,pattern,granted=false;try{service=optionsCurrentProviderService({allowEmptyModel:true});pattern=apiServiceOrigins(service)[0]+'/*';granted=await optionsEnsurePermission(pattern,true);if(granted)optionsDraftPermissionPatterns.add(pattern);const result=await request('API_MODELS_LIST',{service});optionsProviderModels=Array.isArray(result.models)?result.models.filter(model=>model&&typeof model.id==='string'):[];optionsRenderProvider();setResult(optionsEls.providerResult,optionsProviderModels.length?'已获取模型。可从列表选择，或继续手动填写 ID。':'服务商返回了空模型列表，请手动填写模型 ID。');}catch(error){if(granted){optionsDraftPermissionPatterns.delete(pattern);await chrome.permissions.remove({origins:[pattern]}).catch(()=>{});}setResult(optionsEls.providerResult,'无法获取模型：'+errorText(error)+' 仍可手动填写模型 ID。',true);}finally{optionsEls.listProviderModels.disabled=false;}}
 async function optionsSaveProvider(event){
-  event.preventDefault();setResult(optionsEls.providerResult,'');let service,pattern,granted=false;const before=structuredClone(optionsState.settings),current=optionsDraftServiceId?null:activeApiProvider(before);
-  try{service=optionsCurrentProviderService();pattern=apiServiceOrigins(service)[0]+'/*';granted=await optionsEnsurePermission(pattern,true);const services=before.apiServices||[],apiServices=services.some(item=>item.id===service.id)?services.map(item=>item.id===service.id?service:item):[...services,service];if(!await optionsSavePatch({providerKind:'api',apiServices,activeApiServiceId:service.id},'服务已保存并切换')){if(granted&&!optionsCredentialPatterns(before).has(pattern))await chrome.permissions.remove({origins:[pattern]});return;}optionsDraftPermissionPatterns.delete(pattern);optionsDraftServiceId=null;optionsProviderDirty=false;await optionsRemoveUnusedPermissions(before,optionsState.settings);optionsRenderProvider();document.getElementById('api-editor').open=false;setResult(optionsEls.providerResult,'已保存；其他服务配置保持不变。');}
-  catch(error){if(granted&&!optionsCredentialPatterns(optionsState.settings).has(pattern))await chrome.permissions.remove({origins:[pattern]}).catch(()=>{});setResult(optionsEls.providerResult,errorText(error),true);}
+  event.preventDefault();setResult(optionsEls.providerResult,'');let service,pattern,granted=false;const before=structuredClone(optionsState.settings),current=optionsDraftServiceId?null:(optionsState.settings.apiServices?.find(s=>s.id===optionsDisplayedServiceId)||activeApiProvider(before));
+  try{
+    service=optionsCurrentProviderService();
+    pattern=apiServiceOrigins(service)[0]+'/*';
+    granted=await optionsEnsurePermission(pattern,true);
+    const services=before.apiServices||[],apiServices=services.some(item=>item.id===service.id)?services.map(item=>item.id===service.id?service:item):[...services,service];
+    if(!await optionsSavePatch({providerKind:'api',apiServices,activeApiServiceId:service.id},'服务已保存并切换')){
+      if(granted&&!optionsCredentialPatterns(before).has(pattern))await chrome.permissions.remove({origins:[pattern]});
+      return;
+    }
+    optionsDraftPermissionPatterns.delete(pattern);
+    optionsDraftServiceId=null;
+    optionsDisplayedServiceId=service.id;
+    optionsProviderDirty=false;
+    await optionsRemoveUnusedPermissions(before,optionsState.settings);
+    if(serviceCatalog){
+      serviceCatalog.userSelected=false;
+      serviceCatalog.selectedKey=service.providerId||`saved:${service.id}`;
+      serviceCatalog.sync();
+    }
+    optionsRenderProvider();
+    document.getElementById('api-editor').open=false;
+    setResult(optionsEls.providerResult,'已保存；其他服务配置保持不变。');
+  }
+  catch(error){
+    if(granted&&!optionsCredentialPatterns(optionsState.settings).has(pattern))await chrome.permissions.remove({origins:[pattern]}).catch(()=>{});
+    setResult(optionsEls.providerResult,errorText(error),true);
+  }
 }
 async function optionsSaveDetection(){const mode=document.querySelector('input[name="domain-detection-mode"]:checked')?.value||'local',before=structuredClone(optionsState.settings),current=optionsDetectionSettings(),useTranslationApi=optionsEls.detectionUseTranslationApi.checked;let api=current.api||{baseUrl:'https://api.openai.com/v1',apiKey:''},parsed=null,granted=false,jevParsed=null,jevGranted=false;try{if(mode==='api'&&!useTranslationApi){parsed=optionsParseProviderURL(optionsEls.detectionApiUrl.value);const entered=optionsEls.detectionApiKey.value.trim();if(entered.length>4096)throw new Error('识别 API Key 过长。');api={baseUrl:parsed.baseUrl,apiKey:entered||(optionsOriginPattern(api.baseUrl)===`${parsed.url.origin}/*`?api.apiKey||'':'')};if(!optionsEls.detectionApiModel.value.trim())throw new Error('请填写识别模型。');granted=await optionsEnsurePermission(`${parsed.url.origin}/*`,Boolean(api.apiKey));}let jevBaseUrl=current.jevBaseUrl||'https://router.requesty.ai/v1',jevModel=optionsEls.detectionJevModel.value.trim()||current.jevModel||'typesafe/jev-1.13.0',jevApiKey=current.jevApiKey||'';
     if(mode==='jev'){
@@ -337,12 +397,12 @@ async function optionsClearDiagnostics(){if(!confirm('确定清空全部诊断�
 optionsEls.readingStylePreview.addEventListener('load',optionsObserveStylePreview);
 for(const layer of optionsReadingLayers){const controls=optionsReadingControls[layer];for(const input of [controls.style,controls.size])input.addEventListener('change',()=>{const readingStyle=optionsReadingStyleValue();optionsPreviewReadingStyle(readingStyle);void optionsSaveReadingStyle(readingStyle);});controls.palette.addEventListener('click',event=>{const button=event.target.closest('button[data-color]');if(!button)return;const color=button.dataset.color;controls.group.dataset.color=color;if(color!=='auto'){controls.color.value=color;if(controls.style.value==='plain'||(layer!=='original'&&controls.style.value==='default'))controls.style.value='color';}optionsUpdateReadingColorUI(layer);const readingStyle=optionsReadingStyleValue();optionsPreviewReadingStyle(readingStyle);void optionsSaveReadingStyle(readingStyle);});controls.color.addEventListener('input',()=>{controls.group.dataset.color=controls.color.value;if(controls.style.value==='plain'||(layer!=='original'&&controls.style.value==='default'))controls.style.value='color';optionsUpdateReadingColorUI(layer);optionsPreviewReadingStyle(optionsReadingStyleValue());});controls.color.addEventListener('change',()=>{const readingStyle=optionsReadingStyleValue();optionsPreviewReadingStyle(readingStyle);void optionsSaveReadingStyle(readingStyle);});}
 optionsEls.resetReadingStyle.addEventListener('click',()=>void optionsSaveReadingStyle(structuredClone(globalThis.ShisuiReadingStyle.defaults),'已恢复默认样式'));
-optionsEls.newApiService.addEventListener('click',async()=>{if(!optionsDiscardProviderDraft())return;await optionsCleanupDraftPermissions();optionsDraftServiceId=crypto.randomUUID();optionsProviderDirty=false;optionsProviderModels=[];optionsRenderProvider();setResult(optionsEls.providerResult,'正在新增服务；保存前不会改变当前服务。');document.getElementById('provider-trigger').focus();});
-optionsEls.cancelApiService.addEventListener('click',async()=>{if(!optionsDiscardProviderDraft())return;await optionsCleanupDraftPermissions();optionsDraftServiceId=null;optionsProviderDirty=false;optionsProviderModels=[];optionsRenderProvider();setResult(optionsEls.providerResult,'');});
-optionsEls.apiServiceSelect.addEventListener('change',async()=>{const id=optionsEls.apiServiceSelect.value;if(!optionsDiscardProviderDraft()){optionsEls.apiServiceSelect.value=optionsState.settings.activeApiServiceId||'';return;}const service=optionsState.settings.apiServices.find(item=>item.id===id);if(!service)return;try{await optionsCleanupDraftPermissions();await optionsEnsurePermission(optionsOriginPattern(service.baseUrl),true);optionsDraftServiceId=null;optionsProviderDirty=false;optionsProviderModels=[];await optionsSavePatch({providerKind:'api',activeApiServiceId:id},'已切换到 '+service.name);optionsRenderProvider();}catch(error){optionsShowError(error);optionsRenderProvider();}});
-optionsEls.deleteApiService.addEventListener('click',async()=>{const current=activeApiProvider(optionsState.settings);if(!current)return;const before=structuredClone(optionsState.settings),apiServices=before.apiServices.filter(service=>service.id!==current.id),next=apiServices[0];if(!confirm('删除“'+current.name+'”及其密钥？'+(next?'当前服务将切换到“'+next.name+'”。':'将不再使用任何 API 服务。')+'其他服务配置不会删除。'))return;if(await optionsSavePatch({apiServices,activeApiServiceId:next?.id||''},'服务已删除')){optionsProviderDirty=false;await optionsRemoveUnusedPermissions(before,optionsState.settings);optionsRenderProvider();}});
+optionsEls.newApiService.addEventListener('click',async()=>{if(!optionsDiscardProviderDraft())return;await optionsCleanupDraftPermissions();optionsDraftServiceId=crypto.randomUUID();optionsDisplayedServiceId=null;optionsProviderDirty=false;optionsProviderModels=[];if(serviceCatalog){serviceCatalog.userSelected=true;serviceCatalog.selectedKey='openai-compatible';serviceCatalog.renderRailList();}optionsRenderProvider();setResult(optionsEls.providerResult,'正在新增服务；保存前不会改变当前服务。');document.getElementById('provider-trigger').focus();});
+optionsEls.cancelApiService.addEventListener('click',async()=>{if(!optionsDiscardProviderDraft())return;await optionsCleanupDraftPermissions();optionsDraftServiceId=null;optionsProviderDirty=false;optionsProviderModels=[];if(serviceCatalog){serviceCatalog.userSelected=false;serviceCatalog.sync();}optionsRenderProvider();setResult(optionsEls.providerResult,'');});
+optionsEls.apiServiceSelect.addEventListener('change',async()=>{const id=optionsEls.apiServiceSelect.value;if(!optionsDiscardProviderDraft()){optionsEls.apiServiceSelect.value=optionsDisplayedServiceId||optionsState.settings.activeApiServiceId||'';return;}const service=optionsState.settings.apiServices.find(item=>item.id===id);if(!service)return;try{await optionsCleanupDraftPermissions();await optionsEnsurePermission(optionsOriginPattern(service.baseUrl),true);optionsDraftServiceId=null;optionsDisplayedServiceId=id;optionsProviderDirty=false;optionsProviderModels=[];await optionsSavePatch({providerKind:'api',activeApiServiceId:id},'已切换到 '+service.name);if(serviceCatalog){serviceCatalog.userSelected=false;serviceCatalog.selectedKey=service.providerId||`saved:${service.id}`;serviceCatalog.sync();}optionsRenderProvider();}catch(error){optionsShowError(error);optionsRenderProvider();}});
+optionsEls.deleteApiService.addEventListener('click',async()=>{const services=optionsState.settings.apiServices||[];const target=services.find(s=>s.id===optionsDisplayedServiceId)||activeApiProvider(optionsState.settings);if(!target)return;const before=structuredClone(optionsState.settings),apiServices=before.apiServices.filter(service=>service.id!==target.id),next=apiServices[0];if(!confirm('删除“'+target.name+'”及其密钥？'+(next?'当前服务将切换到“'+next.name+'”。':'将不再使用任何 API 服务。')+'其他服务配置不会删除。'))return;const activeApiServiceId=optionsState.settings.activeApiServiceId===target.id?(next?.id||''):optionsState.settings.activeApiServiceId;if(await optionsSavePatch({apiServices,activeApiServiceId},'服务已删除')){optionsDisplayedServiceId=next?.id||null;optionsProviderDirty=false;await optionsRemoveUnusedPermissions(before,optionsState.settings);if(serviceCatalog){serviceCatalog.userSelected=false;serviceCatalog.sync();}optionsRenderProvider();}});
 optionsEls.providerName.addEventListener('input',()=>{optionsProviderDirty=true;});
-optionsEls.providerId.addEventListener('change',async()=>{if(!optionsDiscardProviderDraft()){optionsProviderDirty=false;optionsRenderProvider();return;}await optionsCleanupDraftPermissions();const meta=getApiProvider(optionsEls.providerId.value);optionsRenderProviderFields(meta);optionsEls.providerName.value=meta.name;optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());optionsEls.providerModel.value=meta.defaultModel||'';optionsEls.providerKeys.value='';optionsProviderModels=[];optionsProviderDirty=true;optionsRenderProvider();setResult(optionsEls.providerResult,'服务商已更改；密钥不会从原服务带入。');});
+optionsEls.providerId.addEventListener('change',async()=>{if(!optionsDiscardProviderDraft()){optionsProviderDirty=false;optionsRenderProvider();return;}await optionsCleanupDraftPermissions();const meta=getApiProvider(optionsEls.providerId.value);optionsRenderProviderFields(meta);optionsEls.providerName.value=meta.name;optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());optionsEls.providerModel.value=meta.defaultModel||'';optionsEls.providerKeys.value='';optionsProviderModels=[];optionsProviderDirty=false;optionsRenderProvider();setResult(optionsEls.providerResult,'服务商已更改；密钥不会从原服务带入。');});
 
 window.addEventListener('hashchange',optionsNavigate);
 for(const tab of optionsAppearanceTabs){
@@ -415,8 +475,9 @@ async function optionsCheckAllKeys(){
   } finally { optionsEls.checkAllKeys.disabled=false; }
 }
 optionsEls.checkAllKeys.addEventListener('click',()=>void optionsCheckAllKeys());
-optionsEls.disconnectProvider.addEventListener('click',async()=>{const current=activeApiProvider(optionsState.settings);if(!current?.apiKey||!confirm('只清除“'+current.name+'”的密钥？其他服务不受影响。'))return;const before=structuredClone(optionsState.settings);if(await optionsSavePatch({apiServices:before.apiServices.map(service=>service.id===current.id?{...service,apiKey:'',...(Array.isArray(service.apiKeys)?{apiKeys:[]}:{})}:service)},'此服务密钥已清除')){optionsProviderDirty=false;await optionsRemoveUnusedPermissions(before,optionsState.settings);optionsRenderProvider();}});
- (Fix conversation privacy, storage races, and provider disconnect)
+
+optionsEls.disconnectProvider.addEventListener('click',async()=>{const current=optionsState.settings.apiServices?.find(service=>service.id===optionsDisplayedServiceId)||activeApiProvider(optionsState.settings);if(!current?.apiKey||!confirm('只清除“'+current.name+'”的密钥？其他服务不受影响。'))return;const before=structuredClone(optionsState.settings);if(await optionsSavePatch({apiServices:before.apiServices.map(service=>service.id===current.id?{...service,apiKey:'',apiKeys:[]}:service)},'此服务密钥已清除')){optionsProviderDirty=false;await optionsRemoveUnusedPermissions(before,optionsState.settings);optionsRenderProvider();}});
+ (Integrate local settings fixes and preserve release metadata)
 optionsEls.copyInstallCommand.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(optionsEls.installCommand.textContent);optionsEls.copyInstallCommand.textContent='已复制';setTimeout(()=>{optionsEls.copyInstallCommand.textContent='复制';},1600);}catch(error){setResult(optionsEls.subscriptionResult,`复制失败：${errorText(error)}`,true);}});
 optionsEls.exportData.addEventListener('click',()=>void optionsExportData());optionsEls.clearMemory.addEventListener('click',async()=>{if(!confirm('确定删除词档案、阅读记录、摘要、统计和全部个性化数据吗？此操作无法撤销；服务配置、网站权限和采集开关保持不变。'))return;try{await request('MEMORY_CLEAR');setResult(optionsEls.dataResult,'全部阅读数据已清空；服务配置、网站权限和采集开关保持不变。');}catch(error){setResult(optionsEls.dataResult,errorText(error),true);}});optionsEls.openExtensionManager.addEventListener('click',()=>chrome.tabs.create({url:'chrome://extensions/?id='+chrome.runtime.id}));
 optionsEls.diagnosticsEnabled.addEventListener('change',()=>void optionsSetDiagnosticsEnabled());
@@ -429,6 +490,36 @@ window.addEventListener('focus',()=>void optionsRefreshStructurePreview());
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change',optionsRenderStructurePreview);
 chrome.storage.onChanged.addListener((changes,area)=>{if(area!=='local')return;if(changes.sentenceGroupsDensity){optionsSentenceDensity=['coarse','medium','fine'].includes(changes.sentenceGroupsDensity.newValue)?changes.sentenceGroupsDensity.newValue:'medium';optionsRenderSentenceDensity();}if(changes.sentenceGroupsLineStyle){optionsSentenceLineStyle=['solid','dashed','dotted','wavy'].includes(changes.sentenceGroupsLineStyle.newValue)?changes.sentenceGroupsLineStyle.newValue:'solid';optionsRenderSentenceLineStyle();}if(changes.sentenceGroupsDensity||changes.sentenceGroupsLineStyle)queueMicrotask(optionsRenderStructurePreview);if(!changes.settings&&!changes.subscriptionLinked)return;clearTimeout(optionsSyncTimer);optionsSyncTimer=setTimeout(()=>void optionsSyncState().catch(optionsShowError),30);});chrome.runtime.onMessage.addListener(message=>{if(message?.type==='SUBSCRIPTION_UPDATED'&&optionsState){optionsState.subscription=message.subscription||{};optionsRenderSubscription();}});
 window.addEventListener('pagehide',()=>{void optionsCleanupDraftPermissions();});
+
+globalThis.optionsDiscardProviderDraft = optionsDiscardProviderDraft;
+globalThis.optionsSavePatch = optionsSavePatch;
+globalThis.optionsSetDraftServiceId = id => {
+  optionsDraftServiceId = id;
+  optionsProviderDirty = false;
+};
+globalThis.optionsShowSavedService = serviceId => {
+  optionsDraftServiceId = null;
+  optionsDisplayedServiceId = serviceId;
+  optionsProviderDirty = false;
+  optionsProviderModels = [];
+  optionsRenderProvider(serviceId);
+};
+globalThis.optionsStartDraftProvider = providerId => {
+  void optionsCleanupDraftPermissions();
+  optionsDraftServiceId = crypto.randomUUID();
+  optionsDisplayedServiceId = null;
+  optionsProviderDirty = false;
+  optionsProviderModels = [];
+  const meta = getApiProvider(providerId) || getApiProvider('openai-compatible');
+  optionsEls.providerId.value = meta.id;
+  optionsRenderProviderFields(meta);
+  optionsEls.providerName.value = meta.name;
+  optionsEls.providerUrl.value = apiProviderBaseUrl(meta.id, optionsProviderOptions());
+  optionsEls.providerModel.value = meta.defaultModel || '';
+  optionsEls.providerKeys.value = '';
+  optionsRenderProvider();
+  setResult(optionsEls.providerResult, '请填写此服务的 API Key；保存后生效。');
+};
 
 async function optionsInit(){optionsFillDomains(optionsEls.readingDomain,true);optionsFillDomains(optionsEls.ruleDomain,false);optionsFillDomains(optionsEls.termDomain,false);optionsEls.installCommand.textContent=`node connector/install.mjs --extension-id ${chrome.runtime.id}`;optionsNavigate();try{const densityData=await chrome.storage.local.get(['sentenceGroupsDensity','sentenceGroupsLineStyle']);optionsSentenceDensity=['coarse','medium','fine'].includes(densityData.sentenceGroupsDensity)?densityData.sentenceGroupsDensity:'medium';optionsSentenceLineStyle=['solid','dashed','dotted','wavy'].includes(densityData.sentenceGroupsLineStyle)?densityData.sentenceGroupsLineStyle:'solid';await optionsSyncState();if(!['diagnostics','history','personalization'].includes(optionsCurrentSection))await optionsRefreshSubscription();}catch(error){optionsShowError(error);}}
 void optionsInit();
