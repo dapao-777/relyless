@@ -562,20 +562,6 @@
 </span>
 </label>
             <label>
-<input type="radio" name="domain-detection-mode" value="grok">
-<span>
-<b>Grok 增强</b>
-<small>本地不明确时发送摘录</small>
-</span>
-</label>
-            <label>
-<input type="radio" name="domain-detection-mode" value="antigravity">
-<span>
-<b>Google 增强</b>
-<small>本地不明确时发送摘录</small>
-</span>
-</label>
-            <label>
 <input type="radio" name="domain-detection-mode" value="api">
 <span>
 <b>API 增强</b>
@@ -711,20 +697,6 @@
 <span>
 <b>ChatGPT 订阅</b>
 <small>使用账户可用的 Codex 权益</small>
-</span>
-</label>
-<label>
-<input type="radio" name="provider-kind" value="grok">
-<span>
-<b>Grok 订阅</b>
-<small>使用 SuperGrok 或 X Premium+</small>
-</span>
-</label>
-<label>
-<input type="radio" name="provider-kind" value="antigravity">
-<span>
-<b>Google 订阅</b>
-<small>使用 Google AI Pro / Ultra 的 Antigravity 权益</small>
 </span>
 </label>
 <label>
@@ -875,10 +847,12 @@
             <label class="field">
 <span>API Key <a id="provider-key-link" class="field-link" href="#" target="_blank" rel="noreferrer" hidden="">获取密钥</a>
 </span>
-<input id="provider-key" type="password" autocomplete="new-password">
+<textarea id="provider-keys" rows="3" autocomplete="off" spellcheck="false" placeholder="每行一个密钥；保存后多个密钥按权重轮询，失败自动切换">
+</textarea>
 <small id="key-state">
 </small>
 </label>
+            <button id="check-all-keys" class="secondary-button narrow" type="button">逐项检查密钥</button>
             <div id="provider-fields" class="form-grid provider-fields">
 </div>
             <div class="model-field">

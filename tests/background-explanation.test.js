@@ -62,10 +62,10 @@ test('lookup key normalization migrates lowercase and rejects unsafe stored valu
 });
 test('legacy API settings migrate once and named services remain independent and private',async()=>{
   expect(stored.settings.provider).toBeUndefined();
-  expect(stored.settings.apiServices).toEqual([{id:'legacy-api',name:'原有 API 服务',providerId:'openai-compatible',baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key',options:{}}]);
+  expect(stored.settings.apiServices).toEqual([{id:'legacy-api',name:'原有 API 服务',providerId:'openai-compatible',baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key',apiKeys:['fixture-key'],options:{}}]);
   expect(stored.settings.activeApiServiceId).toBe('legacy-api');
   expect(stored.settings.lookupKey).toBe('D');
-  const services=[stored.settings.apiServices[0],{id:'second-api',name:'Second API',providerId:'openai-compatible',baseUrl:'https://second.example/v1',model:'second-model',apiKey:'second-key',options:{}}];
+  const services=[stored.settings.apiServices[0],{id:'second-api',name:'Second API',providerId:'openai-compatible',baseUrl:'https://second.example/v1',model:'second-model',apiKey:'second-key',apiKeys:['second-key'],options:{}}];
   await send({type:'STATE_PATCH',patch:{apiServices:services,activeApiServiceId:'second-api'}},extensionSender);
   expect(stored.settings.apiServices).toEqual(services);expect(stored.settings.activeApiServiceId).toBe('second-api');
   await send({type:'STATE_PATCH',patch:{activeApiServiceId:'legacy-api'}},extensionSender);
@@ -316,6 +316,7 @@ test('usage aggregation enforces UTC window, blockers, foreground memory, and on
   expect(stored.words).toEqual([]);expect(stored.supportUsage).toEqual([]);expect(stored.onDemandSuggestionShownAt).toBe(0);
   expect(stored.legacyReadingArchive).toBeUndefined();
 });
+
 
 async function queuedSupportFixture(run){
   const previous=globalThis.chrome,previousFetch=globalThis.fetch,gate=Promise.withResolvers(),pending=[],requests=[];
@@ -1097,5 +1098,32 @@ test('domain detection accepts a jev mode with bounded fields', async () => {
   expect(saved.settings.domainDetection).toMatchObject({mode:'jev',jevModel:'typesafe/jev-1.13.0',jevApiKey:'jev-secret',jevBaseUrl:'https://router.requesty.ai/v1'});
   await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevApiKey:'x'.repeat(4097)}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('Jev API Key');
   await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'nope',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''}}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('无效的领域识别配置');
+  globalThis.chrome=chromeBefore;
+});
+
+test('multi-key services fail over to the next key after an auth error', async () => {
+  const fixture=isolatedChrome({
+    wordSchemaVersion:5,productSchemaVersion:1,words:[],supportDataGeneration:0,supportUsage:[],onDemandSuggestionShownAt:0,
+    settings:{providerKind:'api',apiServices:[{id:'multi',name:'Multi',providerId:'openai',baseUrl:'https://multi.example/v1',model:'m',apiKey:'bad-key',apiKeys:['bad-key','good-key']}],activeApiServiceId:'multi',domainDetection:{mode:'local',jevApiKey:'',jevModel:'typesafe/jev-1.13.0',jevBaseUrl:'https://router.requesty.ai/v1'},rememberSupport:false},
+  },{id:'backend-fixture'});
+  globalThis.chrome=fixture.api;
+  // 按请求体区分 Key，验证两个 Key 都被实际使用。
+  const calls=[];
+  globalThis.fetch=async(url,init)=>{
+    const body = JSON.parse(init.body);
+    const isProbe = body.response_format?.json_schema?.name === 'relyless_capability' || body.text?.format?.name === 'relyless_capability';
+    if (isProbe) {
+      const probeEnum = (body.response_format?.json_schema?.schema || body.text?.format?.schema)?.properties?.probe?.enum?.[0] || 'probe';
+      return Response.json(body.text?.format ? {status: 'completed', output_text: JSON.stringify({probe: probeEnum})} : {choices: [{finish_reason: 'stop', message: {content: JSON.stringify({probe: probeEnum})}}]});
+    }
+    const isBad = init.headers?.Authorization?.includes('bad-key') || JSON.stringify(init).includes('bad-key');
+    calls.push(isBad ? 'bad' : 'good');
+    if (isBad) return new Response('{"error":"unauthorized"}', {status: 401, headers: {'Content-Type': 'application/json'}});
+    const result = {level: 'hint', hint: 'except if this happens', sense: 'introduces an exception', details: {meaning: {en: 'except on the condition that the token has not expired', zh: '在令牌未过期这一条件下表示例外'}, sentenceTranslation: '除非令牌已过期，否则会重试。'}};
+    return Response.json(body.text?.format ? {status: 'completed', output_text: JSON.stringify({result})} : {choices: [{finish_reason: 'stop', message: {content: JSON.stringify({result})}}]});
+  };
+  const result=await send({type:'ASSIST',detail:'full',requestId:'multi-1',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint'},{id:'backend-fixture',url:'https://isolated.example/read',tab:{id:91,url:'https://isolated.example/read',active:true},frameId:0});
+  expect(result.hint).toBeTruthy();
+  expect(calls).toEqual(['bad','good']);
   globalThis.chrome=chromeBefore;
 });
