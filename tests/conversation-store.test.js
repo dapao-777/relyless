@@ -92,6 +92,23 @@ test('a session cannot grow past the turn cap', async () => {
   await expect(store.begin(turn({id: 'f'.repeat(36), createdAt: 1_799_999_999_999}))).rejects.toThrow('上限');
 });
 
+test('concurrent starts still enforce the per-session turn cap', async () => {
+  const store = storeFor('db-concurrent-cap');
+  const attempts = await Promise.allSettled(Array.from({length: CONVERSATION_LIMITS.MAX_TURNS_PER_SESSION + 1}, (_, index) =>
+    store.begin(turn({id: String(index).padStart(36, '0'), createdAt: 1_700_000_000_000 + index}))));
+  expect(attempts.filter(result => result.status === 'fulfilled')).toHaveLength(CONVERSATION_LIMITS.MAX_TURNS_PER_SESSION);
+  expect(attempts.filter(result => result.status === 'rejected')).toHaveLength(1);
+  expect(await store.list('a'.repeat(64))).toHaveLength(CONVERSATION_LIMITS.MAX_TURNS_PER_SESSION);
+});
+
+test('removing a session after a queued start removes that new turn', async () => {
+  const store = storeFor('db-concurrent-remove');
+  const started = store.begin(turn());
+  const removed = store.removeSession('a'.repeat(64));
+  await Promise.all([started, removed]);
+  expect(await store.list('a'.repeat(64))).toHaveLength(0);
+});
+
 test('invalid turns are rejected at the boundary', () => {
   expect(normalizeConversationTurn(turn(), 1)).not.toBeNull();
   expect(normalizeConversationTurn(null, 1)).toBeNull();
