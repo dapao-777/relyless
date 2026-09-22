@@ -370,7 +370,7 @@ async function apiRequest(provider,payload,instructions,schema,{onContent,trace,
   const generation=providerGeneration;
   const checkRequest=async()=>{if(generation!==providerGeneration)throw staleWork();await beforeRequest?.();if(generation!==providerGeneration)throw staleWork();};
   try {
-    const output=await diagnostics.provider(trace,'api',service.model,new URL(service.baseUrl).origin,()=>performProviderRequest(service,payload,instructions,schema,{signal:controller.signal,onContent,beforeRequest:checkRequest}));
+    const output=await diagnostics.provider(trace,'api',service.model,new URL(service.baseUrl).origin,()=>runWithApiKeyRotation(service,snapshot=>performProviderRequest(snapshot,payload,instructions,schema,{signal:controller.signal,onContent,beforeRequest:checkRequest}),{signal:controller.signal}));
     if(instructions===ASSISTANCE_INSTRUCTIONS&&(!Object.hasOwn(output,'result')||Object.keys(output).length!==1))throw Object.assign(new Error('帮助服务返回的结果封装无效。'),{code:'OUTPUT_INVALID'});
     providerError='';return output;
   } catch(error) {

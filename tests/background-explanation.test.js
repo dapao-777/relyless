@@ -2,7 +2,7 @@ import {afterAll,beforeAll,expect,test} from 'bun:test';
 import {normalizeSettings,wordId} from '../extension/shared.js';
 
 import {event,pick,remove,isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
-import {createConversationStore} from '../extension/conversation-store.js'; (Fix conversation privacy, storage races, and provider disconnect)
+import {createConversationStore} from '../extension/conversation-store.js';
 import 'fake-indexeddb/auto';
 
 function capabilityResponse(body){const format=body.response_format?.json_schema;if(format?.name!=='relyless_capability')return null;return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({probe:format.schema.properties.probe.enum[0]})}}]});}

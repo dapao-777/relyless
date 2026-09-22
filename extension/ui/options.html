@@ -875,10 +875,12 @@
             <label class="field">
 <span>API Key <a id="provider-key-link" class="field-link" href="#" target="_blank" rel="noreferrer" hidden="">获取密钥</a>
 </span>
-<input id="provider-key" type="password" autocomplete="new-password">
+<textarea id="provider-keys" rows="3" autocomplete="off" spellcheck="false" placeholder="每行一个密钥；保存后多个密钥按权重轮询，失败自动切换">
+</textarea>
 <small id="key-state">
 </small>
 </label>
+            <button id="check-all-keys" class="secondary-button narrow" type="button">逐项检查密钥</button>
             <div id="provider-fields" class="form-grid provider-fields">
 </div>
             <div class="model-field">
