@@ -81,12 +81,13 @@ test('legacy API settings migrate once and named services remain independent and
 test('a saved API service can be disconnected while new keyless services remain invalid',async()=>{
   const original=structuredClone(stored.settings.apiServices);
   const active=stored.settings.activeApiServiceId;
-  const disconnected=original.map(service=>service.id===active?{...service,apiKey:''}:service);
+  const disconnected=original.map(service=>service.id===active?{...service,apiKey:'',apiKeys:[]}:service);
   try{
     const result=await send({type:'STATE_PATCH',patch:{apiServices:disconnected}},extensionSender);
     expect(result.settings.apiServices.find(service=>service.id===active).apiKey).toBe('');
+    expect(result.settings.apiServices.find(service=>service.id===active).apiKeys).toEqual([]);
     expect(result.settings.apiServices.find(service=>service.id!==active).apiKey).toBe('second-key');
-    await expect(send({type:'STATE_PATCH',patch:{apiServices:[...disconnected,{...original[0],id:'new-service',apiKey:''}]}},extensionSender)).rejects.toThrow('API Key');
+    await expect(send({type:'STATE_PATCH',patch:{apiServices:[...disconnected,{...original[0],id:'new-service',apiKey:'',apiKeys:[]}]}},extensionSender)).rejects.toThrow('API Key');
   }finally{
     await send({type:'STATE_PATCH',patch:{apiServices:original}},extensionSender);
   }

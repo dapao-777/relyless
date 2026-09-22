@@ -113,8 +113,8 @@
 ## 7. 测试与构建
 
 ```bash
-npm run check   # 39 个文件语法检查
-bun test        # 308 个测试；3 个 connector 失败为 Windows 环境问题（POSIX 文件模式/临时文件重命名），与本项目改动无关
+npm run check   # 语法检查与完整测试
+bun test        # 单独运行全部测试；Windows 不执行 POSIX 文件模式断言
 ```
 
 ## 已知边界（不是bug）
