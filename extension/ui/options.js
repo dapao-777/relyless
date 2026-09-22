@@ -73,20 +73,23 @@ function optionsFillDomains(select,includeAuto) { select.replaceChildren();for(c
 function optionsNavigate() {
   const previous=optionsCurrentSection, requested=location.hash.slice(1);
   const section=optionsSections.includes(requested)?requested:'assistance';
-  for(const name of optionsSections)document.getElementById(name).hidden=name!==section;
-  const parent=['advanced','terms','diagnostics'].includes(section)?'advanced':section;
-  for(const link of document.querySelectorAll('[data-section]')){
-    const active=link.dataset.section===parent;
-    link.classList.toggle('active',active);
-    if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
-  }
-  for(const link of document.querySelectorAll('.section-links a')){
-    if(link.hash==='#'+section)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
-  }
-  optionsEls.sectionTitle.textContent=optionsLabels[section];
-  document.title='RelyLess · '+optionsLabels[section];
-  if(requested!==section)history.replaceState(null,'','#'+section);
-  optionsCurrentSection=section;
+  const apply=()=>{
+    for(const name of optionsSections)document.getElementById(name).hidden=name!==section;
+    const parent=['advanced','terms','diagnostics'].includes(section)?'advanced':section;
+    for(const link of document.querySelectorAll('[data-section]')){
+      const active=link.dataset.section===parent;
+      link.classList.toggle('active',active);
+      if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
+    }
+    for(const link of document.querySelectorAll('.section-links a')){
+      if(link.hash==='#'+section)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
+    }
+    optionsEls.sectionTitle.textContent=optionsLabels[section];
+    document.title='RelyLess · '+optionsLabels[section];
+    if(requested!==section)history.replaceState(null,'','#'+section);
+    optionsCurrentSection=section;
+  };
+  if(previous!==section&&typeof document.startViewTransition==='function')document.startViewTransition(apply);else apply();
   if(previous==='diagnostics'&&section!=='diagnostics')void optionsSyncState().catch(optionsShowError);
   clearInterval(optionsDiagnosticsTimer);optionsDiagnosticsTimer=0;
   if(section==='diagnostics'){
