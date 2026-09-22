@@ -12,6 +12,8 @@ import {SOURCE_DATA_INSTRUCTIONS,SUPPORT_POLICY_VERSION,SUPPORT_INSTRUCTIONS,SUP
 import {AUTO_SCRIPT_ID,ALL_HOSTS,VIDEO_SUPPORT_ENABLED,pageOrigin,sitePattern,validateAutomation,validateVideo,resolveAutomation,registrationMatches,requiredPermissionOrigins} from './activation.js';
 import {createDiagnostics} from './diagnostic-service.js';
 import {createConversationStore} from './conversation-store.js';
+import {collectConversationMemory} from './conversation-memory.js';
+import {normalizeReview,advanceReview,scheduleFirstReview,dueReviewEntries,reviewKey} from './srs.js';
 import {diagnosticError} from './diagnostics.mjs';
 import {createReadingHistory} from './history-service.js';
 import {createSpeechHandler} from './speech.js';
@@ -454,6 +456,7 @@ async function refreshRequestedDefinitions(items,decisions,state,expectedProvide
       const label=normalizeSenseLabel(target.sense),senseKey=word.senses.find(value=>value.label===label)?.key||await hashValue(id+':'+label),index=word.senses.findIndex(value=>value.key===senseKey),definition={hint:target.hint,translation:target.translation};
       const senses=index<0?[...word.senses,{key:senseKey,label,stage:'hint',locked:false,lastHelpAt:0,opportunityDays:0,quietUntil:0,quietCycles:0,quietOpportunityDays:0,hintPreference:null,assistedPageKey:'',definition}]:word.senses.map((sense,senseIndex)=>senseIndex===index?{...sense,label,definition}:sense);
       await saveRecord(current,{...word,senses,revision:(word.revision||0)+1,lastSeen:Date.now()});
+      void noteReviewOpportunity(id,senseKey);
     }
   },false);
 }
@@ -724,12 +727,48 @@ const assistQueues=new Map(),assistResultFlights=new Map(),commitFlights=new Map
 const conversationStore=typeof indexedDB!=='undefined'?createConversationStore():null;
 const conversationFlights=new Map();
 const conversationSessionId=value=>{const id=text(value,'会话',64,false);return /^[a-f0-9]{64}$/.test(id)?id:'';};
+// 复习计划：与本机词条分离的轻量存储，键为 wordId#senseKey；只服务间隔重复，不含任何页面内容。
+const REVIEW_PLAN_KEY='wordReviewPlan';
+let reviewPlanCache=null;
+async function loadReviewPlan(){
+  if(reviewPlanCache)return reviewPlanCache;
+  const data=await chrome.storage.local.get(REVIEW_PLAN_KEY);
+  const plan=data[REVIEW_PLAN_KEY];
+  reviewPlanCache=plan&&typeof plan==='object'&&!Array.isArray(plan)?plan:{};
+  return reviewPlanCache;
+}
+async function saveReviewPlan(){await chrome.storage.local.set({[REVIEW_PLAN_KEY]:reviewPlanCache});}
+// 首次预约：只在没有计划时写入；再次主动求助（ASSIST 提交）视为遗忘，重置到第 1 盒。
+async function noteReviewOpportunity(wordId,senseKey,{lapse=false}={}){
+  if(typeof wordId!=='string'||typeof senseKey!=='string'||!wordId||!senseKey)return;
+  const plan=await loadReviewPlan(),key=reviewKey(wordId,senseKey);
+  const current=normalizeReview(plan[key]);
+  if(!current){plan[key]=scheduleFirstReview();await saveReviewPlan();return;}
+  if(lapse){plan[key]=advanceReview(current,'again');await saveReviewPlan();}
+}
+async function reviewDue(message){
+  const entries=Array.isArray(message?.entries)?message.entries.slice(0,40):[];
+  const plan=await loadReviewPlan();
+  const due=dueReviewEntries(plan,entries,Date.now(),20);
+  return {due:due.map(entry=>({key:entry.key,wordId:entry.wordId,senseKey:entry.senseKey,text:typeof entry.text==='string'?entry.text.slice(0,100):'',domain:typeof entry.domain==='string'?entry.domain.slice(0,32):'',box:entry.review.box}))};
+}
+async function reviewFeedback(message){
+  const wordId=text(message?.wordId,'词条',160,false),senseKey=text(message?.senseKey,'义项',200,false);
+  const outcome=message?.outcome;
+  if(!wordId||!senseKey||!['know','again'].includes(outcome))throw new Error('复习反馈无效。');
+  const plan=await loadReviewPlan(),key=reviewKey(wordId,senseKey),current=normalizeReview(plan[key]);
+  if(!current)return {updated:false};
+  plan[key]=advanceReview(current,outcome);await saveReviewPlan();
+  return {updated:true,box:plan[key].box,dueAt:plan[key].dueAt};
+}
 async function conversationAsk(message,sender){
   const sessionId=conversationSessionId(message.sessionId);
   if(!sessionId)throw new Error('追问会话无效。');
   const turnId=text(message.turnId,'回合',36,false);
   if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(turnId))throw new Error('追问回合无效。');
-  const command=normalizeConversationRequest(message),source=await readingSource(sender),state=await load();
+  const source=await readingSource(sender),state=await load();
+  // 本地记忆先收集再随请求一起过校验：内容有界，且只作为数据发送。
+  const command=normalizeConversationRequest({...message,memory:collectConversationMemory(state,{text:message.text,domain:message.domain})});
   if(!configured(state.settings))throw new Error('请先配置可用的翻译或帮助服务。');
   if(state.settings.providerKind==='chatgpt')throw new Error('当前登录服务暂不支持继续追问，请在设置里改用 API 服务。');
   const persist=Boolean(conversationStore)&&!sender.tab?.incognito,startedAt=Date.now();
@@ -748,12 +787,12 @@ async function conversationAsk(message,sender){
       const now=Date.now();
       if(persist&&now-checkpoint>=500){checkpoint=now;void conversationStore.checkpoint(turnId,answer).catch(()=>{});}
     };
-    const result=await apiRequest(activeApiProvider(state.settings),{text:command.text,context:command.context,domain:command.domain,kind:command.kind,level:command.level,history:command.history,question:command.question},CONVERSATION_INSTRUCTIONS,conversationSchema(),{onContent,trace:diagnostics.trace(message)});
+    const result=await apiRequest(activeApiProvider(state.settings),{text:command.text,context:command.context,domain:command.domain,kind:command.kind,level:command.level,history:command.history,question:command.question,memory:command.memory},CONVERSATION_INSTRUCTIONS,conversationSchema(),{onContent,trace:diagnostics.trace(message)});
     const normalized=normalizeConversationResult(result);
     answer=normalized.answer;
     if(flight.stopped){await store(store=>store.finish(turnId,{status:'stopped',answer}));return {turnId,answer,status:'stopped'};}
     await store(store=>store.finish(turnId,{answer,status:'complete'}));
-    return {turnId,answer,status:'complete'};
+    return {turnId,answer,status:'complete',memoryCount:command.memory.length};
   }catch(error){
     await store(store=>store.finish(turnId,{status:'error',answer}));
     throw error;
@@ -872,7 +911,7 @@ async function assistCommit(message,sender){
   const operation=mutate(async current=>{
     const [currentSource,currentPending]=await Promise.all([readingSource(sender),sessionMap(key,5*60000,128)]),latest=currentPending[requestId];
     if(!latest||latest.status!=='complete'||latest.requestHash!==entry.requestHash||latest.sourceHash!==currentSource.sourceHash||latest.generation!==current.supportDataGeneration)throw new Error('帮助结果已过期，请重新求助。');if(latest.committed)return {support:latest.commitSupport||null};let support=null;
-    if(latest.committable&&latest.support&&canRemember(current)){const info=latest.support;let word=current.words.find(v=>v.id===info.wordId);if(!word)word=freshWord(info.canonicalTerm,info.domain,info.kind);if(!word.senses.some(s=>s.key===info.senseKey)){if(word.senses.length>=8)return {support:null};word={...word,senses:[...word.senses,{key:info.senseKey,label:info.label,opportunityDays:0,lastOpportunityAt:0,lastHelpAt:0,quietUntil:0,quietCycles:0,quietOpportunityDays:0,hintPreference:null,assistedPageKey:'',definition:{hint:'',translation:''}}]};}const si=word.senses.findIndex(v=>v.key===info.senseKey),definition={hint:latest.result?.hint||word.senses[si].definition?.hint||'',translation:latest.result?.translation||word.senses[si].definition?.translation||''};word={...word,requestedAt:Date.now(),senses:word.senses.map((v,i)=>i===si?{...v,definition}:v)};word=interact(word,'help',Date.now(),currentSource.pageKey,info.senseKey);if(!await saveRecord(current,word))return {support:null};support=publicSupport(word,info.senseKey,current);}
+    if(latest.committable&&latest.support&&canRemember(current)){const info=latest.support;let word=current.words.find(v=>v.id===info.wordId);if(!word)word=freshWord(info.canonicalTerm,info.domain,info.kind);if(!word.senses.some(s=>s.key===info.senseKey)){if(word.senses.length>=8)return {support:null};word={...word,senses:[...word.senses,{key:info.senseKey,label:info.label,opportunityDays:0,lastOpportunityAt:0,lastHelpAt:0,quietUntil:0,quietCycles:0,quietOpportunityDays:0,hintPreference:null,assistedPageKey:'',definition:{hint:'',translation:''}}]};}const si=word.senses.findIndex(v=>v.key===info.senseKey),definition={hint:latest.result?.hint||word.senses[si].definition?.hint||'',translation:latest.result?.translation||word.senses[si].definition?.translation||''};word={...word,requestedAt:Date.now(),senses:word.senses.map((v,i)=>i===si?{...v,definition}:v)};word=interact(word,'help',Date.now(),currentSource.pageKey,info.senseKey);if(!await saveRecord(current,word))return {support:null};void noteReviewOpportunity(info.wordId,info.senseKey,{lapse:true});support=publicSupport(word,info.senseKey,current);}
     const verified=(await sessionMap(key,5*60000,128))[requestId];if(!verified||verified.requestHash!==entry.requestHash||verified.generation!==current.supportDataGeneration)throw new Error('帮助结果已过期，请重新求助。');return {support};
   },false).then(async result=>{const current=await sessionMap(key,5*60000,128),latest=current[requestId];if(latest?.requestHash===entry.requestHash){latest.committed=true;latest.commitSupport=result.support;latest.at=Date.now();current[requestId]=latest;await chrome.storage.session.set({[key]:current});}await readingHistory.commit(sender,requestId);return result;}).finally(()=>commitFlights.delete(flightId));commitFlights.set(flightId,operation);return operation;
 }
@@ -1023,7 +1062,7 @@ async function reconcileAutoScript(settings) {
   if (matches.length) await chrome.scripting.registerContentScripts([{id:AUTO_SCRIPT_ID,matches,js:['auto-start.js'],runAt:'document_start',allFrames:false,persistAcrossSessions:true}]);
 }
 
-const PAGE_UI_FILES=['design.js',...(VIDEO_SUPPORT_ENABLED?['vendor/youtube-caption-json3.js','video-subtitles.js']:[]),'reading-style.js','content.js'];
+const PAGE_UI_FILES=['design.js',...(VIDEO_SUPPORT_ENABLED?['vendor/youtube-caption-json3.js','video-subtitles.js']:[]),'content/kernel.js','content/paragraph-copy.js','content/conversation-card.js','content/review.js','reading-style.js','content.js'];
 async function injectPageUI(tabId) {
   const probe = await chrome.scripting.executeScript({target:{tabId,frameIds:[0]},func:() => !globalThis.__SHISUI_CONTENT__?.isAlive?.()});
   if (probe[0]?.result === false) return;
@@ -1070,7 +1109,7 @@ async function handle(message,sender) {
   if(sender.id!==chrome.runtime.id)throw new Error('不受信任的请求。');
   await dataReady;if(!['MEMORY_CLEAR','HISTORY_CLEAR'].includes(message.type))assertDataAvailable();if(futureSchema&&HISTORY_MUTATIONS.has(message.type))throw new Error('不支持的数据版本，请更新扩展');
   const trusted=Boolean(sender.url?.startsWith(chrome.runtime.getURL('')));
-  const contentAllowed=['HISTORY_BEGIN','HISTORY_TICK','HISTORY_COMMIT','HISTORY_ANNOTATION','DIAGNOSTICS_RENDER','STATE_GET','RESOLVE_DOMAIN','ANALYZE','SUPPORT_BATCH','SENTENCE_GROUPS_GET','SENTENCE_GROUPS_SET','SENTENCE_GROUPS_BATCH','ASSIST','ASSIST_PREVIEW','ASSIST_COMMIT','ENCOUNTER','INTERACT','READING_ACTIVITY','YOUTUBE_CAPTIONS_BRIDGE','OPEN_OPTIONS','AUTO_BOOTSTRAP_CHECK','PAGE_ACTIVITY_SET','VIDEO_SETTINGS_PATCH','PREPARED_SUPPORT','PREPARED_ASSIST','PASSAGE_TRANSLATE', 'EMERGENCY_TRANSLATE', 'EMERGENCY_CANCEL_REQUEST', 'EMERGENCY_END','LANGUAGE_PROFILE','CONVERSATION_ASK','CONVERSATION_STOP','CONVERSATION_HISTORY','CONVERSATION_DELETE']
+  const contentAllowed=['HISTORY_BEGIN','HISTORY_TICK','HISTORY_COMMIT','HISTORY_ANNOTATION','DIAGNOSTICS_RENDER','STATE_GET','RESOLVE_DOMAIN','ANALYZE','SUPPORT_BATCH','SENTENCE_GROUPS_GET','SENTENCE_GROUPS_SET','SENTENCE_GROUPS_BATCH','ASSIST','ASSIST_PREVIEW','ASSIST_COMMIT','ENCOUNTER','INTERACT','READING_ACTIVITY','YOUTUBE_CAPTIONS_BRIDGE','OPEN_OPTIONS','AUTO_BOOTSTRAP_CHECK','PAGE_ACTIVITY_SET','VIDEO_SETTINGS_PATCH','PREPARED_SUPPORT','PREPARED_ASSIST','PASSAGE_TRANSLATE', 'EMERGENCY_TRANSLATE', 'EMERGENCY_CANCEL_REQUEST', 'EMERGENCY_END','LANGUAGE_PROFILE','CONVERSATION_ASK','CONVERSATION_STOP','CONVERSATION_HISTORY','CONVERSATION_DELETE','REVIEW_DUE','REVIEW_FEEDBACK']
   if(!trusted&&!contentAllowed.includes(message.type)&&message.type!=='WORD_PREFERENCE_SET')throw new Error('此操作不能从网页执行。');
   switch(message.type){
     case 'HISTORY_GET':return readingHistory.snapshot({days:message.days,search:message.search,domain:message.domain,type:message.eventType||'',cursor:message.cursor,limit:Number.isSafeInteger(message.limit)&&message.limit>0?message.limit:300});
@@ -1129,6 +1168,8 @@ async function handle(message,sender) {
     }
     case 'ANALYZE':{const source=text(message.text,'正文',200000,false),state=await load();if(state.settings.assistanceMode!=='ambient')throw new Error('当前为仅在需要时模式。');const history=canRemember(state)?state.words:[],result=withoutKnownTerms(analyze(source,analysisSettings(state),history,message.domain?domain(message.domain):undefined),state.words);return{...result,languageStats:englishTokenStats(source)};}
     case 'LANGUAGE_PROFILE':return identifyPageLanguage(text(message.text,'正文',40000,false));
+    case 'REVIEW_DUE':return reviewDue(message);
+    case 'REVIEW_FEEDBACK':return reviewFeedback(message);
     case 'CONVERSATION_ASK':return conversationAsk(message,sender);
     case 'CONVERSATION_STOP':return conversationStop(message,sender);
     case 'CONVERSATION_HISTORY':return conversationHistory(message,sender);
