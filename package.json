@@ -26,7 +26,8 @@
   },
   "devDependencies": {
     "@huggingface/transformers": "3.7.3",
-    "fake-indexeddb": "^6.2.4"
+    "fake-indexeddb": "^6.2.4",
+    "happy-dom": "^20.14.5"
   },
   "overrides": {
     "sharp": "0.35.4"
