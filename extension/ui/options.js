@@ -2,6 +2,7 @@ import {DOMAINS, request, activeApiProvider, errorText, setResult, parseOrigin, 
 import {parseRulePack} from '../rule-pack.js';
 import {API_PROVIDERS, getApiProvider, apiProviderBaseUrl, normalizeApiService, apiServiceOrigins} from '../api-providers.mjs';
 import {createProviderPicker} from './provider-picker.js';
+import {serviceCatalog} from './options-service-catalog.js';
 import {VIDEO_SUPPORT_ENABLED} from '../activation.js';
 
 const optionsSections = ['assistance','appearance','sites','service','privacy','history','personalization','advanced','terms','diagnostics','guide'];
@@ -40,6 +41,8 @@ const optionsReadingControls = Object.fromEntries(optionsReadingLayers.map(layer
 let optionsSentenceDensity='medium';
 let optionsSentenceLineStyle='solid';
 let optionsState = null;
+// 目录控制器通过全局状态读取当前服务；赋值时同步，避免两份真实来源。
+const setOptionsState = value => { optionsState = value; globalThis.optionsState = value; };
 let optionsAutomation = null;
 let optionsModels = [];
 let optionsProviderDirty = false;let optionsDraftServiceId=null;
@@ -235,9 +238,8 @@ function optionsRenderAll(){
   setResult(optionsEls.dataProblem,optionsState.dataProblem||'',Boolean(optionsState.dataProblem));
   const video=optionsState.settings.video||{fontSize:20,theme:'auto'};
   optionsEls.videoFontSize.value=String(video.fontSize||20);optionsEls.videoTheme.value=video.theme||'auto';
-  optionsRenderAutomation();optionsRenderSentenceAllSites();optionsRenderPassageAction();optionsRenderDetection();optionsRenderReadingStyle();optionsRenderSentenceDensity();optionsRenderSentenceLineStyle();optionsRenderRules();optionsRenderTerms();optionsRenderRulePacks();optionsRenderProvider();void optionsRefreshStructurePreview();
-}
-async function optionsSavePatch(patch,message='已保存'){optionsClearError();try{optionsState=await request('STATE_PATCH',{patch});optionsRenderAll();optionsShowSaved(message);return true;}catch(error){optionsShowError(error);optionsRenderAll();return false;}}
+  optionsRenderAutomation();optionsRenderSentenceAllSites();optionsRenderPassageAction();optionsRenderDetection();optionsRenderReadingStyle();optionsRenderSentenceDensity();optionsRenderSentenceLineStyle();optionsRenderRules();optionsRenderTerms();optionsRenderRulePacks();optionsRenderProvider();serviceCatalog.sync();void optionsRefreshStructurePreview();}
+async function optionsSavePatch(patch,message='已保存'){optionsClearError();try{setOptionsState(await request('STATE_PATCH',{patch}));optionsRenderAll();optionsShowSaved(message);return true;}catch(error){optionsShowError(error);optionsRenderAll();return false;}}
 async function optionsPatchAutomation(patch,message){optionsClearError();try{optionsAutomation=await request('AUTOMATION_PATCH',{patch});optionsState.settings.automation=optionsAutomation.automation;optionsRenderAutomation();optionsRenderSentenceAllSites();void optionsRefreshStructurePreview();optionsShowSaved(message);return true;}catch(error){optionsShowError(error);optionsRenderAutomation();optionsRenderSentenceAllSites();void optionsRefreshStructurePreview();return false;}}
 async function optionsSetSentenceLineStyle(lineStyle){
   if(!['solid','dashed','dotted','wavy'].includes(lineStyle))return;
@@ -275,7 +277,7 @@ async function optionsSaveProvider(event){
 }
 async function optionsSaveDetection(){const mode=document.querySelector('input[name="domain-detection-mode"]:checked')?.value||'local',before=structuredClone(optionsState.settings),current=optionsDetectionSettings(),useTranslationApi=optionsEls.detectionUseTranslationApi.checked;let api=current.api||{baseUrl:'https://api.openai.com/v1',apiKey:''},parsed=null,granted=false;try{if(mode==='api'&&!useTranslationApi){parsed=optionsParseProviderURL(optionsEls.detectionApiUrl.value);const entered=optionsEls.detectionApiKey.value.trim();if(entered.length>4096)throw new Error('识别 API Key 过长。');api={baseUrl:parsed.baseUrl,apiKey:entered||(optionsOriginPattern(api.baseUrl)===`${parsed.url.origin}/*`?api.apiKey||'':'')};if(!optionsEls.detectionApiModel.value.trim())throw new Error('请填写识别模型。');granted=await optionsEnsurePermission(`${parsed.url.origin}/*`,Boolean(api.apiKey));}const saved=await optionsSavePatch({domainDetection:{mode,subscriptionModel:optionsEls.detectionSubscriptionModel.value,apiModel:optionsEls.detectionApiModel.value.trim(),useTranslationApi,api}},'领域识别设置已保存');if(!saved){if(granted)await chrome.permissions.remove({origins:[`${parsed.url.origin}/*`]});return;}optionsDetectionDirty=false;await optionsRemoveUnusedPermissions(before,optionsState.settings);optionsRenderDetection();}catch(error){optionsShowError(error);}}
 async function optionsTestProvider(element){setResult(element,'正在测试当前服务…');optionsEls.testProvider.disabled=true;optionsEls.testSubscription.disabled=true;try{const result=await request('PROVIDER_TEST');setResult(element,`测试提示：${result.hint}`);}catch(error){setResult(element,`测试失败：${errorText(error)}`,true);}finally{optionsRenderProvider();}}
-async function optionsSyncState(){if(optionsCurrentSection==='diagnostics')return;[optionsState,optionsAutomation]=await Promise.all([request('STATE_GET'),request('AUTOMATION_GET')]);optionsState.settings.automation=optionsAutomation.automation;optionsRenderAll();}
+async function optionsSyncState(){if(optionsCurrentSection==='diagnostics')return;[optionsState,optionsAutomation]=await Promise.all([request('STATE_GET'),request('AUTOMATION_GET')]);globalThis.optionsState=optionsState;optionsState.settings.automation=optionsAutomation.automation;optionsRenderAll();}
 async function optionsLoadModels(refresh=false){let loaded=true;try{const result=await request('MODELS_LIST',{refresh});optionsModels=Array.isArray(result.models)?result.models:[];}catch(error){loaded=false;setResult(optionsEls.subscriptionResult,'模型列表刷新失败：'+errorText(error),true);}if(optionsState){optionsRenderSubscription();optionsRenderDetection();}return loaded;}
 async function optionsRefreshSubscription(refresh=false){if(optionsSubscriptionBusy)return;optionsSubscriptionBusy=true;optionsRenderSubscription();try{const subscription=await request('SUBSCRIPTION_STATUS');optionsState.subscription=subscription;await optionsSyncState();if(!subscription.connected||subscription.error){setResult(optionsEls.subscriptionResult,'');return;}if(await optionsLoadModels(refresh))setResult(optionsEls.subscriptionResult,'账户与模型已更新。');}catch(error){setResult(optionsEls.subscriptionResult,errorText(error),true);}finally{optionsSubscriptionBusy=false;optionsRenderSubscription();}}
 async function optionsSubscriptionAction(type){if(optionsSubscriptionBusy)return;optionsSubscriptionBusy=true;optionsRenderSubscription();try{optionsState.subscription=await request(type);await optionsSyncState();const label=optionsSubscriptionLabel(optionsProviderKind());setResult(optionsEls.subscriptionResult,type==='SUBSCRIPTION_LOGOUT'?`已退出 ${label} 登录。`:'状态已更新。');}catch(error){setResult(optionsEls.subscriptionResult,errorText(error),true);}finally{optionsSubscriptionBusy=false;optionsRenderSubscription();}}
