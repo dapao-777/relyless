@@ -15,12 +15,25 @@ const LEVELS = new Set(['hint', 'rescue']);
 
 function openDatabase(factory, name) {
   return new Promise((resolve, reject) => {
-    const request = factory.open(name, 1);
-    request.onupgradeneeded = () => {
+    const request = factory.open(name, 2);
+    request.onupgradeneeded = event => {
       const db = request.result;
-      const turns = db.createObjectStore('turns', { keyPath: 'id' });
-      turns.createIndex('sessionAt', ['sessionId', 'createdAt']);
-      turns.createIndex('at', 'createdAt');
+      if (event.oldVersion < 1) {
+        const turns = db.createObjectStore('turns', { keyPath: 'id' });
+        turns.createIndex('sessionAt', ['sessionId', 'createdAt']);
+        turns.createIndex('at', 'createdAt');
+      } else {
+        const turns = request.transaction.objectStore('turns');
+        const cursor = turns.openCursor();
+        cursor.onsuccess = () => {
+          const entry = cursor.result;
+          if (!entry) return;
+          const source = entry.value?.source;
+          const url = safeSourceUrl(source?.url);
+          if (source?.url !== url) entry.update({...entry.value, source:{...source, url}});
+          entry.continue();
+        };
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -33,6 +46,19 @@ function bounded(value, max) {
   const trimmed = value.trim();
   if (!trimmed || trimmed.length > max) return null;
   return trimmed;
+}
+function safeSourceUrl(value) {
+  const input = bounded(value, 2048);
+  if (!input) return '';
+  try {
+    const url = new URL(input);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    return url.href;
+  } catch { return ''; }
 }
 
 /** 归一化一条问答回合；返回 null 表示拒绝。隐私窗口的写入在调用方就拦下，这里只做数据边界。 */
@@ -51,7 +77,7 @@ export function normalizeConversationTurn(input, now = Date.now()) {
   if (!Number.isSafeInteger(input.createdAt) || input.createdAt <= 0) return null;
   const answer = typeof input.answer === 'string' ? input.answer.slice(0, MAX_ANSWER) : '';
   const source = input.source && typeof input.source === 'object' && !Array.isArray(input.source)
-    ? { url: bounded(input.source.url, 2048) || '', title: bounded(input.source.title, 300) || '' }
+    ? { url: safeSourceUrl(input.source.url), title: bounded(input.source.title, 300) || '' }
     : { url: '', title: '' };
   return {
     id, sessionId, createdAt: input.createdAt, updatedAt: Number.isSafeInteger(input.updatedAt) ? input.updatedAt : input.createdAt,
@@ -98,9 +124,9 @@ export function createConversationStore({ name = 'shisui-conversations', indexed
     async begin(turnInput) {
       const turn = normalizeConversationTurn({ ...turnInput, status: 'generating', answer: '', updatedAt: now() }, now());
       if (!turn) throw new Error('追问内容无效。');
-      const existing = await allBySession(turn.sessionId);
-      if (existing.length >= MAX_TURNS_PER_SESSION) throw new Error('这段文字的追问已达上限，请稍后再试。');
       await serialize(async () => {
+        const existing = await allBySession(turn.sessionId);
+        if (existing.length >= MAX_TURNS_PER_SESSION) throw new Error('这段文字的追问已达上限，请稍后再试。');
         const transaction = (await ensure()).transaction('turns', 'readwrite');
         transaction.objectStore('turns').put(turn);
         await commit(transaction);
@@ -141,8 +167,8 @@ export function createConversationStore({ name = 'shisui-conversations', indexed
       return turns.sort((a, b) => a.createdAt - b.createdAt).slice(-limit);
     },
     async removeSession(sessionId) {
-      const turns = await allBySession(sessionId);
       await serialize(async () => {
+        const turns = await allBySession(sessionId);
         const transaction = (await ensure()).transaction('turns', 'readwrite');
         const store = transaction.objectStore('turns');
         for (const turn of turns) store.delete(turn.id);
@@ -165,16 +191,16 @@ export function createConversationStore({ name = 'shisui-conversations', indexed
     /** 过期清理：每轮按自己的 createdAt 计算 30 天；清完后不再有回合的会话自然消失。 */
     async prune(reference = now()) {
       const cutoff = reference - TTL_MS;
-      const transaction = (await ensure()).transaction('turns', 'readonly');
-      const expired = await ask(transaction.objectStore('turns'), store => store.index('at').getAll(globalThis.IDBKeyRange.upperBound(cutoff)));
-      if (!expired.length) return 0;
-      await serialize(async () => {
+      return serialize(async () => {
+        const transaction = (await ensure()).transaction('turns', 'readonly');
+        const expired = await ask(transaction.objectStore('turns'), store => store.index('at').getAll(globalThis.IDBKeyRange.upperBound(cutoff)));
+        if (!expired.length) return 0;
         const write = (await ensure()).transaction('turns', 'readwrite');
         const store = write.objectStore('turns');
         for (const turn of expired) store.delete(turn.id);
         await commit(write);
+        return expired.length;
       });
-      return expired.length;
     },
   };
 }

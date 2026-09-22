@@ -1,18 +1,18 @@
 import {afterAll,beforeAll,expect,test} from 'bun:test';
 import {normalizeSettings,wordId} from '../extension/shared.js';
+
+import {event,pick,remove,isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
+import {createConversationStore} from '../extension/conversation-store.js';
 import 'fake-indexeddb/auto';
 
 function capabilityResponse(body){const format=body.response_format?.json_schema;if(format?.name!=='relyless_capability')return null;return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({probe:format.schema.properties.probe.enum[0]})}}]});}
 function withCapabilityProbe(handler){return async(url,options)=>capabilityResponse(JSON.parse(options.body))||handler(url,options);}
 
-const event=()=>({listeners:[],addListener(listener){this.listeners.push(listener);}});
 const runtimeMessage=event(),stored={
   wordSchemaVersion:5,productSchemaVersion:1,words:[],legacyReadingArchive:[{term:'legacy',sentence:'private old sentence'}],supportDataGeneration:0,supportUsage:[],onDemandSuggestionShownAt:0,
   settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'},rememberSupport:true,assistanceMode:'ambient',lookupKey:'Shift'},
 };
 const session={},tab={id:7,url:'https://reading.example/article?private=yes#part',title:'Private title',active:true};
-const pick=(source,keys)=>keys===null?{...source}:Object.fromEntries((Array.isArray(keys)?keys:[keys]).filter(key=>Object.hasOwn(source,key)).map(key=>[key,source[key]]));
-const remove=(source,keys)=>{for(const key of Array.isArray(keys)?keys:[keys])delete source[key];};
 const fixtureTarget=item=>(item.focus?item.targets.find(target=>target.first===item.focus.first&&target.last===item.focus.last):item.targets.find(target=>target.text.toLowerCase()==='unless'))||item.targets[0];
 const pageItem=(id,text,context={title:'Private title',heading:'',before:'',after:''})=>({id,text,context});
 const chromeBefore=globalThis.chrome,fetchBefore=globalThis.fetch;
@@ -64,10 +64,10 @@ test('lookup key normalization migrates lowercase and rejects unsafe stored valu
 });
 test('legacy API settings migrate once and named services remain independent and private',async()=>{
   expect(stored.settings.provider).toBeUndefined();
-  expect(stored.settings.apiServices).toEqual([{id:'legacy-api',name:'原有 API 服务',providerId:'openai-compatible',baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key',options:{}}]);
+  expect(stored.settings.apiServices).toEqual([{id:'legacy-api',name:'原有 API 服务',providerId:'openai-compatible',baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key',apiKeys:['fixture-key'],options:{}}]);
   expect(stored.settings.activeApiServiceId).toBe('legacy-api');
   expect(stored.settings.lookupKey).toBe('D');
-  const services=[stored.settings.apiServices[0],{id:'second-api',name:'Second API',providerId:'openai-compatible',baseUrl:'https://second.example/v1',model:'second-model',apiKey:'second-key',options:{}}];
+  const services=[stored.settings.apiServices[0],{id:'second-api',name:'Second API',providerId:'openai-compatible',baseUrl:'https://second.example/v1',model:'second-model',apiKey:'second-key',apiKeys:['second-key'],options:{}}];
   await send({type:'STATE_PATCH',patch:{apiServices:services,activeApiServiceId:'second-api'}},extensionSender);
   expect(stored.settings.apiServices).toEqual(services);expect(stored.settings.activeApiServiceId).toBe('second-api');
   await send({type:'STATE_PATCH',patch:{activeApiServiceId:'legacy-api'}},extensionSender);
@@ -78,6 +78,57 @@ test('legacy API settings migrate once and named services remain independent and
   await expect(send({type:'STATE_PATCH',patch:{apiServices:[services[0],{...services[1],id:'bad id'}]}},extensionSender)).rejects.toThrow('安全');
   await expect(send({type:'STATE_PATCH',patch:{activeApiServiceId:'missing'}},extensionSender)).rejects.toThrow('引用');
   await expect(send({type:'STATE_PATCH',patch:{apiServices:[services[1]]}},extensionSender)).rejects.toThrow('移除当前');
+});
+test('a saved API service can be disconnected while new keyless services remain invalid',async()=>{
+  const original=structuredClone(stored.settings.apiServices);
+  const active=stored.settings.activeApiServiceId;
+  const disconnected=original.map(service=>service.id===active?{...service,apiKey:'',apiKeys:[]}:service);
+  try{
+    const result=await send({type:'STATE_PATCH',patch:{apiServices:disconnected}},extensionSender);
+    expect(result.settings.apiServices.find(service=>service.id===active).apiKey).toBe('');
+    expect(result.settings.apiServices.find(service=>service.id===active).apiKeys).toEqual([]);
+    expect(result.settings.apiServices.find(service=>service.id!==active).apiKey).toBe('second-key');
+    await expect(send({type:'STATE_PATCH',patch:{apiServices:[...disconnected,{...original[0],id:'new-service',apiKey:'',apiKeys:[]}]}},extensionSender)).rejects.toThrow('API Key');
+  }finally{
+    await send({type:'STATE_PATCH',patch:{apiServices:original}},extensionSender);
+  }
+});
+test('private pages cannot read or delete ordinary-window conversation history',async()=>{
+  const store=createConversationStore(),sessionId='c'.repeat(64),turnId='d'.repeat(36);
+  await store.begin({id:turnId,sessionId,createdAt:Date.now(),question:'Why?',text:'a word',context:'a word in context',domain:'general',kind:'word',level:'hint'});
+  await store.finish(turnId,{answer:'Because of the context.',status:'complete'});
+  try{
+    expect((await send({type:'CONVERSATION_HISTORY',sessionId})).turns).toHaveLength(1);
+    tab.incognito=true;
+    expect(await send({type:'CONVERSATION_HISTORY',sessionId})).toEqual({turns:[]});
+    expect(await send({type:'CONVERSATION_DELETE',sessionId})).toEqual({removed:0});
+    tab.incognito=false;
+    expect((await send({type:'CONVERSATION_HISTORY',sessionId})).turns).toHaveLength(1);
+    expect(await send({type:'CONVERSATION_DELETE',sessionId},extensionSender)).toEqual({removed:1});
+    expect(await store.list(sessionId)).toHaveLength(0);
+  }finally{
+    tab.incognito=false;
+    await store.removeSession(sessionId);
+  }
+});
+test('incognito assistance does not read or persist ordinary-window word memory',async()=>{
+  const words=structuredClone(stored.words),usage=structuredClone(stored.supportUsage);
+  try{
+    await send({type:'ASSIST',detail:'brief',requestId:'privacy-regular',text:'index',context:'The database query uses an index.',domain:'data',kind:'word',level:'hint'});
+    await send({type:'ASSIST_COMMIT',requestId:'privacy-regular'});
+    const preview={type:'ASSIST_PREVIEW',detail:'full',text:'index',context:'The database query uses an index.',domain:'data',kind:'word',level:'hint'};
+    expect((await send(preview))?.source).toBe('saved-reference');
+    const beforeWords=structuredClone(stored.words),beforeUsage=structuredClone(stored.supportUsage);
+    tab.incognito=true;
+    expect(await send(preview)).toBeNull();
+    await send({type:'ASSIST',detail:'brief',requestId:'privacy-incognito',text:'novel',context:'A novel condition applies.',domain:'general',kind:'word',level:'hint'});
+    expect((await send({type:'ASSIST_COMMIT',requestId:'privacy-incognito'})).support).toBeNull();
+    expect(await send({type:'READING_ACTIVITY',event:'eligible'})).toEqual({recorded:false});
+    expect(await send({type:'REVIEW_FEEDBACK',wordId:'private',senseKey:'private',outcome:'know'})).toEqual({updated:false});
+    await expect(send({type:'WORD_PREFERENCE_SET',wordId:stored.words[0].id,known:true})).rejects.toThrow('无痕');
+    expect(stored.words).toEqual(beforeWords);
+    expect(stored.supportUsage).toEqual(beforeUsage);
+  }finally{tab.incognito=false;stored.words=words;stored.supportUsage=usage;}
 });
 test('API model discovery is settings-only and never invents a custom Responses catalog',async()=>{
   const service={id:'draft',name:'Draft',providerId:'open-responses',baseUrl:'https://models.example/v1/responses',model:'',apiKey:'draft-key',options:{}};
@@ -319,12 +370,6 @@ test('usage aggregation enforces UTC window, blockers, foreground memory, and on
   expect(stored.legacyReadingArchive).toBeUndefined();
 });
 
-function isolatedChrome(data,{failMigration=false,id='isolated-fixture'}={}){
-  const messages=event(),local=data,isolatedSession={};let failed=false;const select=(source,keys)=>keys===null?{...source}:pick(source,keys);
-  const api={runtime:{id,getURL:path=>'chrome-extension://'+id+'/'+path,lastError:null,onMessage:messages,onConnect:event(),onInstalled:event(),onStartup:event(),sendMessage:async()=>{},openOptionsPage:async()=>{}},storage:{local:{QUOTA_BYTES:10_000_000,setAccessLevel:async()=>{},get:async keys=>select(local,keys),set:async values=>{if(failMigration&&!failed&&values.wordSchemaVersion===5){failed=true;throw new Error('quota');}Object.assign(local,structuredClone(values));},remove:async keys=>remove(local,keys),getBytesInUse:async()=>JSON.stringify(local).length},session:{get:async keys=>select(isolatedSession,keys),set:async values=>Object.assign(isolatedSession,structuredClone(values)),remove:async keys=>remove(isolatedSession,keys)}},permissions:{contains:async()=>true,remove:async()=>true,onAdded:event(),onRemoved:event()},tabs:{onRemoved:event(),onUpdated:event(),query:async()=>[],sendMessage:async()=>{},get:async()=>({id:91,url:'https://isolated.example/read',active:true,title:'Never stored'})},contextMenus:{onClicked:event(),removeAll:async()=>{},create:(_o,cb)=>cb()},scripting:{executeScript:async()=>[{result:true}],getRegisteredContentScripts:async()=>[],unregisterContentScripts:async()=>{},registerContentScripts:async()=>{}},commands:{onCommand:event()},action:{setBadgeText:async()=>{},setTitle:async()=>{},setBadgeBackgroundColor:async()=>{}}};
-  return {api,messages,local,session:isolatedSession,id};
-}
-const isolatedSend=(fixture,message,sender={})=>new Promise((resolve,reject)=>fixture.messages.listeners.at(-1)(message,{id:fixture.id,url:'chrome-extension://'+fixture.id+'/ui/options.html',...sender},response=>response.ok?resolve(response.data):reject(new Error(response.error))));
 
 async function queuedSupportFixture(run){
   const previous=globalThis.chrome,previousFetch=globalThis.fetch,gate=Promise.withResolvers(),pending=[],requests=[];
@@ -1106,5 +1151,32 @@ test('domain detection accepts a jev mode with bounded fields', async () => {
   expect(saved.settings.domainDetection).toMatchObject({mode:'jev',jevModel:'typesafe/jev-1.13.0',jevApiKey:'jev-secret',jevBaseUrl:'https://router.requesty.ai/v1'});
   await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevApiKey:'x'.repeat(4097)}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('Jev API Key');
   await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'nope',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''}}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('无效的领域识别配置');
+  globalThis.chrome=chromeBefore;
+});
+
+test('multi-key services fail over to the next key after an auth error', async () => {
+  const fixture=isolatedChrome({
+    wordSchemaVersion:5,productSchemaVersion:1,words:[],supportDataGeneration:0,supportUsage:[],onDemandSuggestionShownAt:0,
+    settings:{providerKind:'api',apiServices:[{id:'multi',name:'Multi',providerId:'openai',baseUrl:'https://multi.example/v1',model:'m',apiKey:'bad-key',apiKeys:['bad-key','good-key']}],activeApiServiceId:'multi',domainDetection:{mode:'local',jevApiKey:'',jevModel:'typesafe/jev-1.13.0',jevBaseUrl:'https://router.requesty.ai/v1'},rememberSupport:false},
+  },{id:'backend-fixture'});
+  globalThis.chrome=fixture.api;
+  // 按请求体区分 Key，验证两个 Key 都被实际使用。
+  const calls=[];
+  globalThis.fetch=async(url,init)=>{
+    const body = JSON.parse(init.body);
+    const isProbe = body.response_format?.json_schema?.name === 'relyless_capability' || body.text?.format?.name === 'relyless_capability';
+    if (isProbe) {
+      const probeEnum = (body.response_format?.json_schema?.schema || body.text?.format?.schema)?.properties?.probe?.enum?.[0] || 'probe';
+      return Response.json(body.text?.format ? {status: 'completed', output_text: JSON.stringify({probe: probeEnum})} : {choices: [{finish_reason: 'stop', message: {content: JSON.stringify({probe: probeEnum})}}]});
+    }
+    const isBad = init.headers?.Authorization?.includes('bad-key') || JSON.stringify(init).includes('bad-key');
+    calls.push(isBad ? 'bad' : 'good');
+    if (isBad) return new Response('{"error":"unauthorized"}', {status: 401, headers: {'Content-Type': 'application/json'}});
+    const result = {level: 'hint', hint: 'except if this happens', sense: 'introduces an exception', details: {meaning: {en: 'except on the condition that the token has not expired', zh: '在令牌未过期这一条件下表示例外'}, sentenceTranslation: '除非令牌已过期，否则会重试。'}};
+    return Response.json(body.text?.format ? {status: 'completed', output_text: JSON.stringify({result})} : {choices: [{finish_reason: 'stop', message: {content: JSON.stringify({result})}}]});
+  };
+  const result=await send({type:'ASSIST',detail:'full',requestId:'multi-1',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint'},{id:'backend-fixture',url:'https://isolated.example/read',tab:{id:91,url:'https://isolated.example/read',active:true},frameId:0});
+  expect(result.hint).toBeTruthy();
+  expect(calls).toEqual(['bad','good']);
   globalThis.chrome=chromeBefore;
 });

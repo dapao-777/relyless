@@ -23,6 +23,7 @@ export function createDiagnostics({storage,session,sync,nativeStatus}) {
     trace:message=>traces.get(message),
     event,
     async run(message,sender,operation){
+      if(sender.tab?.incognito)return operation();
       if(!OPERATIONS.has(message.type))return operation();
       const trace={traceId:validTraceId(message.traceId)?message.traceId:crypto.randomUUID(),operation:message.type,epoch:store.epoch,at:Date.now(),metadata:{kind:message.kind,level:message.level}};
       delete message.traceId;traces.set(message,trace);

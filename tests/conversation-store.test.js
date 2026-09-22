@@ -32,6 +32,28 @@ test('a turn round-trips through begin, checkpoint and finish', async () => {
   expect(turns[0].answer).toBe('因为强调从过去持续到现在。');
 });
 
+test('conversation source drops URL credentials, query and fragment before storage', async () => {
+  const store=storeFor('db-private-url');
+  await store.begin(turn({source:{url:'https://user:password@reading.example/article?access_token=private#secret',title:'Article'}}));
+  const [stored]=await store.list('a'.repeat(64));
+  expect(stored.source).toEqual({url:'https://reading.example/article',title:'Article'});
+});
+test('opening an older conversation database removes saved URL secrets', async () => {
+  const name='db-old-private-url',request=indexedDB.open(name,1);
+  request.onupgradeneeded=()=>{
+    const turns=request.result.createObjectStore('turns',{keyPath:'id'});
+    turns.createIndex('sessionAt',['sessionId','createdAt']);
+    turns.createIndex('at','createdAt');
+  };
+  const db=await new Promise((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+  const transaction=db.transaction('turns','readwrite');
+  transaction.objectStore('turns').put(turn({source:{url:'https://reading.example/article?secret=old#fragment',title:'Old'}}));
+  await new Promise((resolve,reject)=>{transaction.oncomplete=resolve;transaction.onerror=()=>reject(transaction.error);});
+  db.close();
+  const [stored]=await storeFor(name).list('a'.repeat(64));
+  expect(stored.source.url).toBe('https://reading.example/article');
+});
+
 test('checkpoints never overwrite a finished or stopped turn', async () => {
   const store = storeFor('db-checkpoint-race');
   const created = await store.begin(turn());
@@ -90,6 +112,23 @@ test('a session cannot grow past the turn cap', async () => {
     await store.begin(turn({id: String(index).padStart(36, '0'), createdAt: 1_700_000_000_000 + index}));
   }
   await expect(store.begin(turn({id: 'f'.repeat(36), createdAt: 1_799_999_999_999}))).rejects.toThrow('上限');
+});
+
+test('concurrent starts still enforce the per-session turn cap', async () => {
+  const store = storeFor('db-concurrent-cap');
+  const attempts = await Promise.allSettled(Array.from({length: CONVERSATION_LIMITS.MAX_TURNS_PER_SESSION + 1}, (_, index) =>
+    store.begin(turn({id: String(index).padStart(36, '0'), createdAt: 1_700_000_000_000 + index}))));
+  expect(attempts.filter(result => result.status === 'fulfilled')).toHaveLength(CONVERSATION_LIMITS.MAX_TURNS_PER_SESSION);
+  expect(attempts.filter(result => result.status === 'rejected')).toHaveLength(1);
+  expect(await store.list('a'.repeat(64))).toHaveLength(CONVERSATION_LIMITS.MAX_TURNS_PER_SESSION);
+});
+
+test('removing a session after a queued start removes that new turn', async () => {
+  const store = storeFor('db-concurrent-remove');
+  const started = store.begin(turn());
+  const removed = store.removeSession('a'.repeat(64));
+  await Promise.all([started, removed]);
+  expect(await store.list('a'.repeat(64))).toHaveLength(0);
 });
 
 test('invalid turns are rejected at the boundary', () => {

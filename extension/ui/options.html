@@ -24,6 +24,7 @@
 <a href="#privacy" data-section="privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m12 3 8 3v5c0 5-8 10-8 10S4 16 4 11V6l8-3Z"></path><path d="m8 12 3 3 5-6"></path></svg><span>数据与隐私</span></a>
 <a href="#advanced" data-section="advanced"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 14h3l2-7 4 12 2-5h5"></path><path d="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"></path></svg><span>领域识别</span></a>
 <a href="#guide" data-section="guide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 5v15M12 5C9 3 5 3 3 4v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-2-1-6-1-9 1Z"></path></svg><span>使用说明</span></a>
+<a href="#about" data-section="about"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"></path></svg><span>关于作者</span></a>
 </nav></aside>
   <main class="main-panel">
     <header class="workspace-header"><h1 id="section-title" tabindex="-1">阅读偏好</h1><p id="save-state" class="save-state" aria-live="polite"></p></header>
@@ -87,6 +88,7 @@
 </select>
 <small>按住所选字母并单击单词；在输入区按键不会触发查词。</small>
 </label>
+        <div class="pair-grid">
         <fieldset>
 <legend>查词显示方式</legend>
 <div class="choice-cards two">
@@ -140,6 +142,8 @@
 <small>200–3000 毫秒；点击动作仍然立即打开，移开鼠标可取消等待。</small>
 </label>
 </fieldset>
+        </div>
+        <div class="pair-grid">
         <label class="field setting-select">
 <span>默认领域</span>
 <select id="reading-domain">
@@ -154,6 +158,7 @@
 </select>
 <small>用于词义和语境；本句翻译仍为中文。</small>
 </label>
+        </div>
       </div>
       
       
@@ -875,10 +880,12 @@
             <label class="field">
 <span>API Key <a id="provider-key-link" class="field-link" href="#" target="_blank" rel="noreferrer" hidden="">获取密钥</a>
 </span>
-<input id="provider-key" type="password" autocomplete="new-password">
+<textarea id="provider-keys" rows="3" autocomplete="off" spellcheck="false" placeholder="每行一个密钥；保存后多个密钥按权重轮询，失败自动切换">
+</textarea>
 <small id="key-state">
 </small>
 </label>
+            <button id="check-all-keys" class="secondary-button narrow" type="button">逐项检查密钥</button>
             <div id="provider-fields" class="form-grid provider-fields">
 </div>
             <div class="model-field">
@@ -929,6 +936,90 @@
           </section>
         </div>
       </div>
+      <div class="paper-card form-stack" id="routing-card">
+<div class="adaptive-setting">
+<div>
+<b>模型路由（实验）</b>
+<p>开启后，目标词句或上下文等请求摘要（最多 2,000 字符）会先发送到「领域识别 → Jev 判定」设置的接口，可能是 Requesty。判定使用同一份密钥；普通窗口会在本机按内容缓存判断结果，无痕窗口不留此缓存。判卷失败或目标不可用时自动走原服务。</p>
+</div>
+<label class="switch">
+<input id="routing-enabled" type="checkbox">
+<span aria-hidden="true">
+</span>
+<span class="sr-only">启用模型路由</span>
+</label>
+</div>
+        <div id="routing-fields" hidden="">
+<label class="field">
+<span>升级目标</span>
+<select id="routing-premium">
+</select>
+<small>被判为 premium 档（或 elevated 档把握度不足）时切换到该服务。</small>
+</label>
+          <fieldset>
+<legend>参与路由的操作</legend>
+<div class="choice-cards two">
+<label>
+<input type="checkbox" name="routing-operation" value="assist" checked="">
+<span>
+<b>主动求助</b>
+<small>查词、救援级解释</small>
+</span>
+</label>
+<label>
+<input type="checkbox" name="routing-operation" value="passage" checked="">
+<span>
+<b>选段翻译</b>
+<small>浮动条译段</small>
+</span>
+</label>
+<label>
+<input type="checkbox" name="routing-operation" value="emergency" checked="">
+<span>
+<b>整页翻译</b>
+<small>双语对照</small>
+</span>
+</label>
+<label>
+<input type="checkbox" name="routing-operation" value="conversation" checked="">
+<span>
+<b>继续追问</b>
+<small>卡片问答</small>
+</span>
+</label>
+<label>
+<input type="checkbox" name="routing-operation" value="sentenceGroups">
+<span>
+<b>阅读解构</b>
+<small>频次高，默认不判</small>
+</span>
+</label>
+</div>
+</fieldset>
+          <label class="field">
+<span>最低把握度</span>
+<select id="routing-confidence">
+<option value="0.5">0.5 · 更易升级</option>
+<option value="0.6">0.6</option>
+<option value="0.7">0.7 · 默认</option>
+<option value="0.8">0.8</option>
+<option value="0.9">0.9 · 更少升级</option>
+</select>
+<small>elevated 档的把握度低于该值时才升级到目标服务。</small>
+</label>
+          <label class="field">
+<span>判断缓存</span>
+<select id="routing-ttl">
+<option value="60">1 小时</option>
+<option value="360">6 小时</option>
+<option value="1440">24 小时 · 默认</option>
+<option value="4320">3 天</option>
+</select>
+<small>同一操作 + 同一内容在缓存期内不再重复判卷。</small>
+</label>
+          <p class="field-help" id="routing-stats">尚未启用。</p>
+</div>
+</div>
       <aside class="privacy-note">
 <b>发送哪些内容？</b>
 <p>辅助会发送标题、章节及附近的有限上下文，不发送页面网址。</p>
@@ -1201,6 +1292,31 @@
     </div>
   </details>
   <nav class="related-settings" aria-label="说明相关设置"><a href="#assistance">调整注释与查词</a><a href="#appearance">调整显示与解构</a><a href="#service">连接模型服务</a></nav>
+</section>
+<section id="about" class="settings-section about-section" aria-labelledby="about-heading" hidden>
+  <div class="section-intro">
+    <h2 id="about-heading" class="sr-only">关于作者</h2>
+    <p>RelyLess 由「停车拾穗」设计并维护。反馈问题、提建议或交流，可以通过下面的方式联系。</p>
+  </div>
+  <article class="paper-card about-card">
+    <h3 class="about-name">停车拾穗</h3>
+    <p class="about-intro">英语阅读辅助扩展 RelyLess 的作者。项目的想法是「少一点依赖，多一点直接读懂」：保留英文原文，只在需要的位置给最少的支撑。</p>
+    <dl class="about-contacts">
+      <div class="about-contact">
+        <dt>哔哩哔哩</dt>
+        <dd><a href="https://search.bilibili.com/all?keyword=%E5%81%9C%E8%BD%A6%E6%8B%BE%E7%A9%97" target="_blank" rel="noopener noreferrer">停车拾穗</a></dd>
+      </div>
+      <div class="about-contact">
+        <dt>微信</dt>
+        <dd><code class="about-code">shisuidata</code></dd>
+      </div>
+      <div class="about-contact">
+        <dt>GitHub</dt>
+        <dd><a href="https://github.com/rockythink/relyless" target="_blank" rel="noopener noreferrer">rockythink/relyless</a><small>源码、问题反馈与版本发布</small></dd>
+      </div>
+    </dl>
+  </article>
+  <nav class="related-settings" aria-label="关于相关设置"><a href="#guide">阅读使用说明</a><a href="#service">连接模型服务</a></nav>
 </section>
   </main>
 </div>

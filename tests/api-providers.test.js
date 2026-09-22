@@ -12,7 +12,7 @@ test('catalog exposes the complete unique supported LLM provider set',()=>{
 
 test('legacy service migration preserves its endpoint and assigns only the historical compatible protocol',()=>{
   expect(normalizeApiService({id:'legacy',name:'Legacy',baseUrl:'https://private.example/custom/v7/',model:'private-model',apiKey:'secret'})).toEqual({
-    id:'legacy',name:'Legacy',providerId:'openai-compatible',baseUrl:'https://private.example/custom/v7',model:'private-model',apiKey:'secret',options:{},
+    id:'legacy',name:'Legacy',providerId:'openai-compatible',baseUrl:'https://private.example/custom/v7',model:'private-model',apiKey:'secret',apiKeys:['secret'],options:{},
   });
 });
 
