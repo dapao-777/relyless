@@ -929,6 +929,90 @@
           </section>
         </div>
       </div>
+      <div class="paper-card form-stack" id="routing-card">
+<div class="adaptive-setting">
+<div>
+<b>模型路由（实验）</b>
+<p>用 Jev 结构化判定把高价值请求分流到更强的模型：判卷使用「领域识别 → Jev 判定」的同一份接口与密钥，判断结果按内容缓存。判卷失败或目标不可用时自动走原服务。</p>
+</div>
+<label class="switch">
+<input id="routing-enabled" type="checkbox">
+<span aria-hidden="true">
+</span>
+<span class="sr-only">启用模型路由</span>
+</label>
+</div>
+        <div id="routing-fields" hidden="">
+<label class="field">
+<span>升级目标</span>
+<select id="routing-premium">
+</select>
+<small>被判为 premium 档（或 elevated 档把握度不足）时切换到该服务。</small>
+</label>
+          <fieldset>
+<legend>参与路由的操作</legend>
+<div class="choice-cards two">
+<label>
+<input type="checkbox" name="routing-operation" value="assist" checked="">
+<span>
+<b>主动求助</b>
+<small>查词、救援级解释</small>
+</span>
+</label>
+<label>
+<input type="checkbox" name="routing-operation" value="passage" checked="">
+<span>
+<b>选段翻译</b>
+<small>浮动条译段</small>
+</span>
+</label>
+<label>
+<input type="checkbox" name="routing-operation" value="emergency" checked="">
+<span>
+<b>整页翻译</b>
+<small>双语对照</small>
+</span>
+</label>
+<label>
+<input type="checkbox" name="routing-operation" value="conversation" checked="">
+<span>
+<b>继续追问</b>
+<small>卡片问答</small>
+</span>
+</label>
+<label>
+<input type="checkbox" name="routing-operation" value="sentenceGroups">
+<span>
+<b>阅读解构</b>
+<small>频次高，默认不判</small>
+</span>
+</label>
+</div>
+</fieldset>
+          <label class="field">
+<span>最低把握度</span>
+<select id="routing-confidence">
+<option value="0.5">0.5 · 更易升级</option>
+<option value="0.6">0.6</option>
+<option value="0.7">0.7 · 默认</option>
+<option value="0.8">0.8</option>
+<option value="0.9">0.9 · 更少升级</option>
+</select>
+<small>elevated 档的把握度低于该值时才升级到目标服务。</small>
+</label>
+          <label class="field">
+<span>判断缓存</span>
+<select id="routing-ttl">
+<option value="60">1 小时</option>
+<option value="360">6 小时</option>
+<option value="1440">24 小时 · 默认</option>
+<option value="4320">3 天</option>
+</select>
+<small>同一操作 + 同一内容在缓存期内不再重复判卷。</small>
+</label>
+          <p class="field-help" id="routing-stats">尚未启用。</p>
+</div>
+</div>
       <aside class="privacy-note">
 <b>发送哪些内容？</b>
 <p>辅助会发送标题、章节及附近的有限上下文，不发送页面网址。</p>
