@@ -111,6 +111,25 @@ test('private pages cannot read or delete ordinary-window conversation history',
     await store.removeSession(sessionId);
   }
 });
+test('incognito assistance does not read or persist ordinary-window word memory',async()=>{
+  const words=structuredClone(stored.words),usage=structuredClone(stored.supportUsage);
+  try{
+    await send({type:'ASSIST',detail:'brief',requestId:'privacy-regular',text:'index',context:'The database query uses an index.',domain:'data',kind:'word',level:'hint'});
+    await send({type:'ASSIST_COMMIT',requestId:'privacy-regular'});
+    const preview={type:'ASSIST_PREVIEW',detail:'full',text:'index',context:'The database query uses an index.',domain:'data',kind:'word',level:'hint'};
+    expect((await send(preview))?.source).toBe('saved-reference');
+    const beforeWords=structuredClone(stored.words),beforeUsage=structuredClone(stored.supportUsage);
+    tab.incognito=true;
+    expect(await send(preview)).toBeNull();
+    await send({type:'ASSIST',detail:'brief',requestId:'privacy-incognito',text:'novel',context:'A novel condition applies.',domain:'general',kind:'word',level:'hint'});
+    expect((await send({type:'ASSIST_COMMIT',requestId:'privacy-incognito'})).support).toBeNull();
+    expect(await send({type:'READING_ACTIVITY',event:'eligible'})).toEqual({recorded:false});
+    expect(await send({type:'REVIEW_FEEDBACK',wordId:'private',senseKey:'private',outcome:'know'})).toEqual({updated:false});
+    await expect(send({type:'WORD_PREFERENCE_SET',wordId:stored.words[0].id,known:true})).rejects.toThrow('无痕');
+    expect(stored.words).toEqual(beforeWords);
+    expect(stored.supportUsage).toEqual(beforeUsage);
+  }finally{tab.incognito=false;stored.words=words;stored.supportUsage=usage;}
+});
 test('API model discovery is settings-only and never invents a custom Responses catalog',async()=>{
   const service={id:'draft',name:'Draft',providerId:'open-responses',baseUrl:'https://models.example/v1/responses',model:'',apiKey:'draft-key',options:{}};
   await expect(send({type:'API_MODELS_LIST',service})).rejects.toThrow('不能从网页执行');

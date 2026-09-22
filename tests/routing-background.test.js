@@ -84,6 +84,19 @@ test('a routine judgment keeps the primary service and caches the decision', asy
   globalThis.chrome = chromeBefore;
 });
 
+test('incognito routing does not retain a decision in shared local storage', async () => {
+  const fixture = routingFixture();
+  fixture.api.tabs.get = async () => ({...pageSender.tab, incognito: true});
+  globalThis.chrome = fixture.api;
+  globalThis.fetch = withCapabilityProbe(async (url, init) => String(url).includes('router.requesty.ai') ? judgeReply('routine', 0.8) : assistReply(init));
+  try {
+    await import(`../extension/background.js?routing-incognito=${Date.now()}`);
+    const sender={...pageSender,tab:{...pageSender.tab,incognito:true}};
+    await isolatedSend(fixture, {type:'ASSIST',requestId:'private-route',text:'index',context:'The database query uses an index.',domain:'tech',kind:'word',level:'hint',detail:'full'}, sender);
+    expect(fixture.local.routeDecisions).toBeUndefined();
+  } finally { globalThis.chrome = chromeBefore; }
+});
+
 test('a failing judge falls back to the primary service without breaking the request', async () => {
   const fixture = routingFixture();
   globalThis.chrome = fixture.api;
