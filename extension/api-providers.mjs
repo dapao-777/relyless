@@ -39,7 +39,6 @@ export const API_PROVIDERS = [
   {id:'volcengine',name:'Volcengine',protocol:'chat',baseUrl:'https://ark.cn-beijing.volces.com/api/v3',defaultModel:'doubao-seed-1-6-flash-250828',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'alibaba',name:'Alibaba Cloud',protocol:'chat',baseUrl:'https://dashscope.aliyuncs.com/compatible-mode/v1',defaultModel:'qwen3.8-flash',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'moonshotai',name:'Moonshot AI',protocol:'chat',baseUrl:'https://api.moonshot.ai/v1',defaultModel:'kimi-k2.6',apiKeyUrl:'',keyOptional:false,fields:[]},
-  {id:'stepfun',name:'StepFun (阶跃星辰)',protocol:'chat',baseUrl:'https://api.stepfun.com/v1',defaultModel:'step-1-flash',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'huggingface',name:'Hugging Face',protocol:'chat',baseUrl:'https://router.huggingface.co/v1',defaultModel:'Qwen/Qwen2.5-7B-Instruct-1M',apiKeyUrl:'',keyOptional:false,fields:[]},
 ];
 
@@ -98,17 +97,39 @@ function normalizedBaseUrl(value) {
   return url.href.replace(/\/$/,'');
 }
 
+// 多 Key 归一化：去空白、去重、保序、限量；空列表等价于未配置。apiKey 继续作为首个 Key 的镜像，
+// 让既有的单 Key 读取路径无需改动，轮询以 apiKeys 为源。
+export const API_KEY_LIMIT = 8;
+export function normalizeApiKeys(value, fallbackKey='') {
+  const raw = Array.isArray(value) ? value : [];
+  const keys = [];
+  const seen = new Set();
+  for (const entry of raw) {
+    if (typeof entry!=='string') continue;
+    const key = entry.trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    keys.push(key);
+    if (keys.length >= API_KEY_LIMIT) break;
+  }
+  if (keys.length) return keys;
+  const fallback = typeof fallbackKey==='string' ? fallbackKey.trim() : '';
+  return fallback ? [fallback] : [];
+}
+
 export function normalizeApiService(row) {
   if (!row || typeof row!=='object' || Array.isArray(row)) throw new Error('无效的 API 服务。');
   const legacy=!Object.hasOwn(row,'providerId');
-  const allowed=new Set(legacy?['id','name','baseUrl','model','apiKey']:['id','name','providerId','baseUrl','model','apiKey','options']);
+  const allowed=new Set(legacy?['id','name','baseUrl','model','apiKey','apiKeys']:['id','name','providerId','baseUrl','model','apiKey','apiKeys','options']);
   for (const key of Object.keys(row)) if (!allowed.has(key)) throw new Error('API 服务包含未知字段。');
   for (const key of ['id','name','baseUrl','model','apiKey']) if (typeof row[key]!=='string') throw new Error('无效的 API 服务。');
+  if (row.apiKeys!==undefined && !Array.isArray(row.apiKeys)) throw new Error('无效的 API 密钥列表。');
   const providerId=legacy?'openai-compatible':row.providerId;
   if (typeof providerId!=='string' || !getApiProvider(providerId)) throw new Error('不支持的 API 服务商。');
   const provider=getApiProvider(providerId),options=normalizedOptions(provider,legacy?{}:row.options);
   const configuredBase=row.baseUrl.trim() || apiProviderBaseUrl(providerId,options);
-  return {id:row.id.trim(),name:row.name.trim(),providerId,baseUrl:normalizedBaseUrl(configuredBase),model:row.model.trim(),apiKey:row.apiKey.trim(),options};
+  const apiKeys=normalizeApiKeys(row.apiKeys,row.apiKey);
+  return {id:row.id.trim(),name:row.name.trim(),providerId,baseUrl:normalizedBaseUrl(configuredBase),model:row.model.trim(),apiKey:apiKeys[0]||'',apiKeys,options};
 }
 
 export function apiServiceReady(service) {
