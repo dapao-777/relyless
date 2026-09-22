@@ -167,7 +167,6 @@ function validatePatch(patch,currentSettings) {
   if (patch.readingStyle !== undefined) result.readingStyle=globalThis.ShisuiReadingStyle.validate(patch.readingStyle);
   if (patch.rulePacks !== undefined) result.rulePacks=normalizeRulePacks(patch.rulePacks);
   if (patch.routing !== undefined) result.routing=normalizeRouting(patch.routing,currentSettings?.routing||DEFAULT_SETTINGS.routing);
-  if (patch.routing !== undefined) result.routing=normalizeRouting(patch.routing,currentSettings?.routing||DEFAULT_SETTINGS.routing);
   if (patch.rememberSupport !== undefined) { if (typeof patch.rememberSupport !== 'boolean') throw new Error('无效记忆设置。'); result.rememberSupport=patch.rememberSupport; }
   if (patch.domain !== undefined) result.domain=domain(patch.domain);
   if (patch.subscriptionModel !== undefined) result.subscriptionModel=text(patch.subscriptionModel,'订阅模型',150,false);
@@ -823,9 +822,9 @@ function judgeService(settings) {
   if (!apiKey || !model) return null;
   try { return normalizeApiService({id: 'route-judge', name: '路由判定', providerId: 'requesty', baseUrl, model, apiKey, options: {}}); } catch { return null; }
 }
-function premiumTarget(settings, routing) {
+function premiumTarget(settings, routing, operation) {
   if (!routing.premiumServiceId) return null;
-  if (routing.premiumServiceId === ROUTING_LIMITS.SUBSCRIPTION_TARGET) return subscriptionStatus().authenticated ? {kind: 'subscription', service: null} : null;
+  if (routing.premiumServiceId === ROUTING_LIMITS.SUBSCRIPTION_TARGET) return operation!=='conversation'&&subscriptionStatus().authenticated ? {kind: 'subscription', service: null} : null;
   const found = (settings.apiServices || []).find(service => service.id === routing.premiumServiceId);
   if (!found || !apiServiceReady(found)) return null;
   return {kind: 'api', service: found};
@@ -848,7 +847,7 @@ async function chooseRoute(operation, summary, {settings, guard = async () => {}
   if (hit && now - hit.at < routing.cacheTtlMinutes * 60000) {
     routingStats.cacheHits++;
     if (hit.route === 'premium') {
-      const premium = premiumTarget(settings, routing);
+      const premium = premiumTarget(settings, routing, operation);
       if (premium) { routingStats.escalated++; return {...premium, reason: hit.reason}; }
     }
     return {...primary, reason: 'cached-primary'};
@@ -865,7 +864,7 @@ async function chooseRoute(operation, summary, {settings, guard = async () => {}
   const decision = decideRoute(answers, routing);
   routingStats.judged++;
   if (decision.route === 'premium') {
-    const premium = premiumTarget(settings, routing);
+    const premium = premiumTarget(settings, routing, operation);
     if (!premium) {
       await remember('primary', 'premium-unavailable');
       return {...primary, reason: 'premium-unavailable'};
@@ -895,8 +894,8 @@ async function conversationAsk(message,sender){
   await store(async store=>store.begin({id:turnId,sessionId,createdAt:startedAt,question:command.question,text:command.text,context:command.context,domain:command.domain,kind:command.kind,level:command.level,source:{url:source.url||'',title:tabTitle}}));
   try{
     const route=await chooseRoute('conversation',summarizeRequest('conversation',{text:command.text,context:command.context,question:command.question}),{settings:state.settings,incognito:source.incognito});
-  if(route.kind==='api'&&route.service)state.settings={...state.settings,providerKind:'api',activeApiServiceId:route.service.id};
-  const onContent=content=>{
+    const routedSettings=route.kind==='api'&&route.service?{...state.settings,providerKind:'api',activeApiServiceId:route.service.id}:state.settings;
+    const onContent=content=>{
       if(flight.stopped)return;
       const progress=conversationProgress(content);
       if(!progress.answer)return;
@@ -905,7 +904,7 @@ async function conversationAsk(message,sender){
       const now=Date.now();
       if(persist&&now-checkpoint>=500){checkpoint=now;void conversationStore.checkpoint(turnId,answer).catch(()=>{});}
     };
-    const result=await apiRequest(activeApiProvider(routed),{text:command.text,context:command.context,domain:command.domain,kind:command.kind,level:command.level,history:command.history,question:command.question,memory:command.memory},CONVERSATION_INSTRUCTIONS,conversationSchema(),{onContent,trace:diagnostics.trace(message)});
+    const result=await apiRequest(activeApiProvider(routedSettings),{text:command.text,context:command.context,domain:command.domain,kind:command.kind,level:command.level,history:command.history,question:command.question,memory:command.memory},CONVERSATION_INSTRUCTIONS,conversationSchema(),{onContent,trace:diagnostics.trace(message)});
     const normalized=normalizeConversationResult(result);
     answer=normalized.answer;
     if(flight.stopped){await store(store=>store.finish(turnId,{status:'stopped',answer}));return {turnId,answer,status:'stopped'};}
