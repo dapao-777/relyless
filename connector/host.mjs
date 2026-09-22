@@ -4,6 +4,8 @@ import { endianness } from "node:os";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CodexClient } from "./codex.mjs";
+import { GrokClient } from "./grok.mjs";
+import { AntigravityClient } from "./antigravity.mjs";
 import { DiagnosticStore } from "./diagnostics.mjs";
 import { diagnosticError, validTraceId } from "../extension/diagnostics.mjs";
 
@@ -92,23 +94,35 @@ async function loadConfiguration(configPath, actualOrigin) {
   let config;
   try { config = JSON.parse(await readFile(resolve(configPath), "utf8")); }
   catch { throw new Error("无法读取连接器配置"); }
+  const backend = config?.backend === "grok" ? "grok" : config?.backend === "antigravity" ? "antigravity" : "chatgpt";
+  const cliPath = backend === "grok" ? config.grokPath : backend === "antigravity" ? config.agyPath : config.codexPath;
   if (!config || typeof config !== "object" || Array.isArray(config)
-    || typeof config.codexPath !== "string" || !config.codexPath
+    || typeof cliPath !== "string" || !cliPath
     || typeof config.dataDir !== "string" || !config.dataDir
     || !validateExtensionOrigin(config.extensionOrigin, actualOrigin)) {
     throw new Error("连接器配置或扩展来源无效");
   }
-  return {
-    codexPath: resolve(config.codexPath),
-    dataDir: resolve(config.dataDir),
-  };
+  return backend === "grok"
+    ? { backend, grokPath: resolve(cliPath), dataDir: resolve(config.dataDir) }
+    : backend === "antigravity"
+    ? { backend, agyPath: resolve(cliPath), dataDir: resolve(config.dataDir) }
+    : { backend, codexPath: resolve(cliPath), dataDir: resolve(config.dataDir) };
 }
 
-export async function runHost({ argv = process.argv.slice(2), input = process.stdin, output = process.stdout, clientFactory = options => new CodexClient(options) } = {}) {
-  if (argv.length !== 3 || argv[0] !== "--config") throw new Error("连接器启动参数无效");
-  const configuration = await loadConfiguration(argv[1], argv[2]);
+function parseHostArgv(argv) {
+  if (!Array.isArray(argv) || argv.length < 3 || argv[0] !== "--config") throw new Error("连接器启动参数无效");
+  for (const extra of argv.slice(3)) {
+    if (typeof extra !== "string" || !/^--parent-window=\d+$/.test(extra)) throw new Error("连接器启动参数无效");
+  }
+  return { configPath: argv[1], origin: argv[2] };
+}
+
+export async function runHost({ argv = process.argv.slice(2), input = process.stdin, output = process.stdout, clientFactory } = {}) {
+  const { configPath, origin } = parseHostArgv(argv);
+  const configuration = await loadConfiguration(configPath, origin);
   const diagnostics = await DiagnosticStore.create(configuration.dataDir);
-  const client = clientFactory({ ...configuration, diagnostic: record => diagnostics.append(record) });
+  const createClient = clientFactory || (options => configuration.backend === "grok" ? new GrokClient(options) : configuration.backend === "antigravity" ? new AntigravityClient(options) : new CodexClient(options));
+  const client = createClient({ ...configuration, diagnostic: record => diagnostics.append(record) });
   let closing = false;
 
   const write = (message) => {
@@ -189,7 +203,7 @@ export async function runHost({ argv = process.argv.slice(2), input = process.st
   process.once("SIGTERM", onSignal);
   process.once("SIGHUP", onSignal);
 
-  // Configuration and diagnostic setup are asynchronous; do not launch Codex if Chrome closed stdin meanwhile.
+  // Configuration and diagnostic setup are asynchronous; do not launch the CLI if Chrome closed stdin meanwhile.
   if (input.readableEnded || input.destroyed) { await close(0); return; }
 
   try { await client.start(); }

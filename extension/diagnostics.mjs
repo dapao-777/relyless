@@ -21,7 +21,7 @@ export function sanitizeDiagnostic(value) {
   if(['word','phrase','passage'].includes(value.kind))record.kind=value.kind;
   if(['hint','rescue'].includes(value.level))record.level=value.level;
   for (const key of ['modelRef','providerRef']) if (typeof value[key] === 'string' && /^[a-f0-9]{64}$/.test(value[key])) record[key] = value[key];
-  if (['api','chatgpt'].includes(value.provider)) record.provider = value.provider;
+  if (['api','chatgpt','grok','antigravity'].includes(value.provider)) record.provider = value.provider;
   if (typeof value.expectsRender === 'boolean') record.expectsRender = value.expectsRender;
   return record;
 }

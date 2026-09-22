@@ -13,7 +13,7 @@ export function normalizeSettings(value = {}) {
   settings.lookupKey = typeof value.lookupKey === 'string' && /^[A-Za-z]$/.test(value.lookupKey) ? value.lookupKey.toUpperCase() : DEFAULT_SETTINGS.lookupKey;
   settings.lookupDisplay = value.lookupDisplay === 'annotation' ? 'annotation' : 'card';
   settings.readingStyle = globalThis.ShisuiReadingStyle.normalize(value.readingStyle);
-  settings.providerKind = ['chatgpt','api'].includes(value.providerKind) ? value.providerKind : (value.provider?.apiKey ? 'api' : 'chatgpt');
+  settings.providerKind = ['chatgpt','grok','antigravity','api'].includes(value.providerKind) ? value.providerKind : (value.provider?.apiKey ? 'api' : 'chatgpt');
   const legacyProvider = !Array.isArray(value.apiServices) && Object.hasOwn(value,'provider');
   const rows = Array.isArray(value.apiServices) ? value.apiServices : (legacyProvider ? [{id:'legacy-api',name:'原有 API 服务',baseUrl:value.provider?.baseUrl,model:value.provider?.model,apiKey:value.provider?.apiKey}] : []);
   const seen=new Set();settings.apiServices=rows.flatMap(row=>{try{const service=normalizeApiService(row);if(!service.id||seen.has(service.id))return [];seen.add(service.id);return [service];}catch{return [];}});
