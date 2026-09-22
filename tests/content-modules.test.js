@@ -1,9 +1,11 @@
-import {expect,test,beforeAll} from 'bun:test';
+import {expect,test,beforeAll,afterAll} from 'bun:test';
 import {Window} from 'happy-dom';
 import {readFileSync} from 'node:fs';
 
+const originalGlobals = {};
 beforeAll(async () => {
   const window = new Window({url: 'https://reading.example/article'});
+  for (const key of ['location', 'getComputedStyle', 'navigator', 'document', 'Node', 'NodeFilter', 'window']) originalGlobals[key] = globalThis[key];
   const scope = {
     window, document: window.document, Node: window.Node, NodeFilter: window.NodeFilter,
     getComputedStyle: value => window.getComputedStyle(value), location: window.location,
@@ -169,4 +171,9 @@ test('stopping asks the background once and marks the turn stopped', async () =>
   expect(asked).toEqual(['CONVERSATION_STOP']);
   expect(view.convoRow).toBeNull();
   kernel().state.card = null;
+});
+
+afterAll(() => {
+  Object.assign(globalThis, originalGlobals);
+  delete globalThis.__clipboardWrites;
 });
