@@ -462,3 +462,13 @@ details.history-event { padding: 0; }
   .personalization-row b { text-align: left; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+.conversation-sessions:not(:empty) { margin-top: var(--space-4); }
+.conversation-session { padding-block: var(--space-4); border-top: 1px solid var(--line); }
+.conversation-session:first-child { border-top: 0; padding-top: 0; }
+.conversation-session-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
+.conversation-session-head b { overflow-wrap: anywhere; }
+.conversation-source { margin: var(--space-2) 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); background: var(--accent-soft); color: var(--accent); font-size: var(--type-support); overflow-wrap: anywhere; }
+.conversation-turn { margin: var(--space-3) 0; }
+.conversation-q { margin: 0 0 var(--space-1); font-weight: var(--weight-medium); overflow-wrap: anywhere; }
+.conversation-a { margin: 0; color: var(--muted-strong); white-space: pre-wrap; overflow-wrap: anywhere; }
+.conversation-a:empty { display: none; }

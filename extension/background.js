@@ -1,15 +1,17 @@
 import { DEFAULT_SETTINGS, DOMAINS, wordId, normalizeSettings, activeApiProvider } from './shared.js';
 import {apiServiceOrigins,apiServiceReady,getApiProvider,normalizeApiService} from './api-providers.mjs';
 import {listProviderModels,performProviderRequest,providerRequestTimeoutMs} from './api-transport.mjs';
-import { analyze, analyzeBatch, englishTokenStats, historyMatches, isKnownTerm, localReferenceFor, resolveCanonicalTerm } from './lexicon.js';
+import { analyze, analyzeBatch, englishTokenStats, historyMatches, identifyPageLanguage, isKnownTerm, localReferenceFor, resolveCanonicalTerm } from './lexicon.js';
 import { encounter, interact, migrateSupportWord, normalizeKnownAt, normalizeSenseLabel, readingEvidence } from './reading.js';
 import {historyModelSubscription,subscriptionStatus,onNativeDiagnostic,syncNativeDiagnostics,onSubscriptionStatus,ensureSubscription,refreshSubscription,loginSubscription,cancelSubscription,logoutSubscription,listSubscriptionModels,classifySubscription,supportSubscription,assistSubscription,emergencyTranslateSubscription,sentenceGroupsSubscription,isSubscriptionKind,nativeKind} from './subscription.js';
 import {ROUTE_VERSION,normalizeDomainRules,resolveRuleDomain} from './domain-routing.js';
+import {normalizeRulePacks} from './rule-pack.js';
 import {classifyLocal} from './local-classifier.js';
-import {assistanceProgress,translationProgress} from './assistance-stream.mjs';
-import {SOURCE_DATA_INSTRUCTIONS,SUPPORT_POLICY_VERSION,SUPPORT_INSTRUCTIONS,SUPPORT_SCHEMA,ASSISTANCE_INSTRUCTIONS,assistanceSchema,normalizeSupportItems,prepareSupportItems,inspectSupportResponse,requestSupportWithCorrection,SUPPORT_CORRECTION_INSTRUCTIONS,normalizeSupportResult,normalizeAssistanceCommand,normalizeAssistanceRequest,normalizeAssistanceResult,normalizePreparationContext,EMERGENCY_SCHEMA,EMERGENCY_INSTRUCTIONS,normalizeEmergencyItems,normalizeEmergencyResult,PAGE_TRANSLATION_INSTRUCTIONS,normalizePageTranslationItems,inspectPageTranslationResult,normalizePageTranslationResult} from './gloss.mjs';
+import {assistanceProgress,translationProgress,conversationProgress} from './assistance-stream.mjs';
+import {SOURCE_DATA_INSTRUCTIONS,SUPPORT_POLICY_VERSION,SUPPORT_INSTRUCTIONS,SUPPORT_SCHEMA,ASSISTANCE_INSTRUCTIONS,assistanceSchema,normalizeSupportItems,prepareSupportItems,inspectSupportResponse,requestSupportWithCorrection,SUPPORT_CORRECTION_INSTRUCTIONS,normalizeSupportResult,normalizeAssistanceCommand,normalizeAssistanceRequest,normalizeAssistanceResult,normalizePreparationContext,EMERGENCY_SCHEMA,EMERGENCY_INSTRUCTIONS,normalizeEmergencyItems,normalizeEmergencyResult,PAGE_TRANSLATION_INSTRUCTIONS,normalizePageTranslationItems,inspectPageTranslationResult,normalizePageTranslationResult,CONVERSATION_INSTRUCTIONS,conversationSchema,normalizeConversationRequest,normalizeConversationResult} from './gloss.mjs';
 import {AUTO_SCRIPT_ID,ALL_HOSTS,VIDEO_SUPPORT_ENABLED,pageOrigin,sitePattern,validateAutomation,validateVideo,resolveAutomation,registrationMatches,requiredPermissionOrigins} from './activation.js';
 import {createDiagnostics} from './diagnostic-service.js';
+import {createConversationStore} from './conversation-store.js';
 import {diagnosticError} from './diagnostics.mjs';
 import {createReadingHistory} from './history-service.js';
 import {createSpeechHandler} from './speech.js';
@@ -157,7 +159,9 @@ function validatePatch(patch,currentSettings) {
   if (patch.lookupDisplay !== undefined) { if (!['card','annotation'].includes(patch.lookupDisplay)) throw new Error('无效查词展示方式。'); result.lookupDisplay=patch.lookupDisplay; }
   if (patch.helpLanguage !== undefined) { if (!['zh','en'].includes(patch.helpLanguage)) throw new Error('无效的帮助语言。'); result.helpLanguage=patch.helpLanguage; }
   if (patch.lookupKey !== undefined) { if (typeof patch.lookupKey !== 'string' || !/^[A-Z]$/.test(patch.lookupKey)) throw new Error('查词键必须是大写 A-Z 单字符。'); result.lookupKey=patch.lookupKey; }
+  if (patch.passageAction !== undefined) { const a=patch.passageAction; if (!a || typeof a !== 'object' || Array.isArray(a) || Object.keys(a).some(key=>!['open','delay'].includes(key))) throw new Error('无效的划词动作设置。'); const current=currentSettings?.passageAction||{}; result.passageAction={open:a.open===undefined?current.open:a.open==='hover'?'hover':'click',delay:a.delay===undefined?current.delay:Number.isSafeInteger(a.delay)&&a.delay>=0&&a.delay<=3000?a.delay:current.delay}; }
   if (patch.readingStyle !== undefined) result.readingStyle=globalThis.ShisuiReadingStyle.validate(patch.readingStyle);
+  if (patch.rulePacks !== undefined) result.rulePacks=normalizeRulePacks(patch.rulePacks);
   if (patch.rememberSupport !== undefined) { if (typeof patch.rememberSupport !== 'boolean') throw new Error('无效记忆设置。'); result.rememberSupport=patch.rememberSupport; }
   if (patch.domain !== undefined) result.domain=domain(patch.domain);
   if (patch.subscriptionModel !== undefined) result.subscriptionModel=text(patch.subscriptionModel,'订阅模型',150,false);
@@ -711,6 +715,70 @@ async function emergencyEnd(message,sender,trusted){
 function cancelSuppression(word,senseKey,pageKey){const index=word.senses.findIndex(s=>s.key===senseKey);if(index<0)return word;const senses=word.senses.map((s,i)=>i===index?{...s,opportunityDays:0,lastHelpAt:Date.now(),quietUntil:0,quietCycles:0,quietOpportunityDays:0,hintPreference:null,assistedPageKey:pageKey}:s);return {...word,hintPreference:null,senses,revision:(word.revision||0)+1,lastSeen:Date.now()};}
 async function recordUsage(state,event,source,requestId){if(!canRemember(state))return;const cutoffDate=new Date();cutoffDate.setUTCHours(0,0,0,0);cutoffDate.setUTCDate(cutoffDate.getUTCDate()-27);const cutoff=cutoffDate.toISOString().slice(0,10),usage=state.supportUsage.filter(row=>typeof row.day==='string'&&row.day>=cutoff),day=source.day;let row=usage.find(v=>v.day===day);if(!row){row={day,eligiblePages:0,helpRequests:0,hintsShown:0,errors:0,pageKeys:[]};usage.push(row);}if(event==='eligible'){if(!row.pageKeys.includes(source.sourceHash)&&row.pageKeys.length<50){row.pageKeys=[...row.pageKeys,source.sourceHash];row.eligiblePages++;}}else if(event==='hint')row.hintsShown++;else if(event==='error')row.errors++;else if(event==='help')row.helpRequests++;state.supportUsage=usage.slice(-28);}
 const assistQueues=new Map(),assistResultFlights=new Map(),commitFlights=new Map();
+// 追问会话：本机 30 天问答仓库。服务Worker 里 indexedDB 可用；隐私窗口与不可用环境都不落盘。
+const conversationStore=typeof indexedDB!=='undefined'?createConversationStore():null;
+const conversationFlights=new Map();
+const conversationSessionId=value=>{const id=text(value,'会话',64,false);return /^[a-f0-9]{64}$/.test(id)?id:'';};
+async function conversationAsk(message,sender){
+  const sessionId=conversationSessionId(message.sessionId);
+  if(!sessionId)throw new Error('追问会话无效。');
+  const turnId=text(message.turnId,'回合',36,false);
+  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(turnId))throw new Error('追问回合无效。');
+  const command=normalizeConversationRequest(message),source=await readingSource(sender),state=await load();
+  if(!configured(state.settings))throw new Error('请先配置可用的翻译或帮助服务。');
+  if(state.settings.providerKind==='chatgpt')throw new Error('当前登录服务暂不支持继续追问，请在设置里改用 API 服务。');
+  const persist=Boolean(conversationStore)&&!sender.tab?.incognito,startedAt=Date.now();
+  const flight={stopped:false};conversationFlights.set(turnId,flight);
+  let answer='',checkpoint=0;
+  const tabTitle=(await chrome.tabs.get(source.tabId).catch(()=>null))?.title||'';
+  const store=async task=>{if(!persist)return;try{await task(conversationStore);}catch{}};
+  await store(async store=>store.begin({id:turnId,sessionId,createdAt:startedAt,question:command.question,text:command.text,context:command.context,domain:command.domain,kind:command.kind,level:command.level,source:{url:source.url||'',title:tabTitle}}));
+  try{
+    const onContent=content=>{
+      if(flight.stopped)return;
+      const progress=conversationProgress(content);
+      if(!progress.answer)return;
+      answer=progress.answer;
+      void chrome.tabs.sendMessage(source.tabId,{type:'SS_CONVERSATION_PROGRESS',turnId,answer},{frameId:0,...(sender.documentId?{documentId:sender.documentId}:{})}).catch(()=>{});
+      const now=Date.now();
+      if(persist&&now-checkpoint>=500){checkpoint=now;void conversationStore.checkpoint(turnId,answer).catch(()=>{});}
+    };
+    const result=await apiRequest(activeApiProvider(state.settings),{text:command.text,context:command.context,domain:command.domain,kind:command.kind,level:command.level,history:command.history,question:command.question},CONVERSATION_INSTRUCTIONS,conversationSchema(),{onContent,trace:diagnostics.trace(message)});
+    const normalized=normalizeConversationResult(result);
+    answer=normalized.answer;
+    if(flight.stopped){await store(store=>store.finish(turnId,{status:'stopped',answer}));return {turnId,answer,status:'stopped'};}
+    await store(store=>store.finish(turnId,{answer,status:'complete'}));
+    return {turnId,answer,status:'complete'};
+  }catch(error){
+    await store(store=>store.finish(turnId,{status:'error',answer}));
+    throw error;
+  }finally{conversationFlights.delete(turnId);}
+}
+async function conversationStop(message,sender){
+  const turnId=text(message.turnId,'回合',64,false);
+  const flight=conversationFlights.get(turnId);
+  if(!flight)return {turnId,status:'unknown'};
+  flight.stopped=true;
+  if(conversationStore&&!sender.tab?.incognito)await conversationStore.finish(turnId,{status:'stopped'}).catch(()=>{});
+  return {turnId,status:'stopped'};
+}
+async function conversationHistory(message,sender){
+  const sessionId=conversationSessionId(message.sessionId);
+  if(!sessionId||!conversationStore)return {turns:[]};
+  const turns=await conversationStore.list(sessionId,40);
+  return {turns:turns.map(turn=>({id:turn.id,question:turn.question,answer:turn.answer,status:turn.status,createdAt:turn.createdAt}))};
+}
+async function conversationDelete(message,sender){
+  const sessionId=conversationSessionId(message.sessionId);
+  if(!sessionId||!conversationStore)return {removed:0};
+  await conversationStore.removeSession(sessionId);
+  return {removed:1};
+}
+async function conversationList(message,sender){
+  if(!conversationStore)return {sessions:[]};
+  const sessions=await conversationStore.sessions();
+  return {sessions:sessions.map(session=>({sessionId:session.sessionId,text:session.text,source:session.source,updatedAt:session.updatedAt,turns:session.turns.map(turn=>({id:turn.id,question:turn.question,answer:turn.answer,status:turn.status,createdAt:turn.createdAt}))}))};
+}
 async function assistPreview(message,sender) {
   await readingSource(sender);
   const request=normalizeAssistanceRequest(message);
@@ -997,7 +1065,7 @@ async function handle(message,sender) {
   if(sender.id!==chrome.runtime.id)throw new Error('不受信任的请求。');
   await dataReady;if(!['MEMORY_CLEAR','HISTORY_CLEAR'].includes(message.type))assertDataAvailable();if(futureSchema&&HISTORY_MUTATIONS.has(message.type))throw new Error('不支持的数据版本，请更新扩展');
   const trusted=Boolean(sender.url?.startsWith(chrome.runtime.getURL('')));
-  const contentAllowed=['HISTORY_BEGIN','HISTORY_TICK','HISTORY_COMMIT','HISTORY_ANNOTATION','DIAGNOSTICS_RENDER','STATE_GET','RESOLVE_DOMAIN','ANALYZE','SUPPORT_BATCH','SENTENCE_GROUPS_GET','SENTENCE_GROUPS_SET','SENTENCE_GROUPS_BATCH','ASSIST','ASSIST_PREVIEW','ASSIST_COMMIT','ENCOUNTER','INTERACT','READING_ACTIVITY','YOUTUBE_CAPTIONS_BRIDGE','OPEN_OPTIONS','AUTO_BOOTSTRAP_CHECK','PAGE_ACTIVITY_SET','VIDEO_SETTINGS_PATCH','PREPARED_SUPPORT','PREPARED_ASSIST','PASSAGE_TRANSLATE', 'EMERGENCY_TRANSLATE', 'EMERGENCY_CANCEL_REQUEST', 'EMERGENCY_END']
+  const contentAllowed=['HISTORY_BEGIN','HISTORY_TICK','HISTORY_COMMIT','HISTORY_ANNOTATION','DIAGNOSTICS_RENDER','STATE_GET','RESOLVE_DOMAIN','ANALYZE','SUPPORT_BATCH','SENTENCE_GROUPS_GET','SENTENCE_GROUPS_SET','SENTENCE_GROUPS_BATCH','ASSIST','ASSIST_PREVIEW','ASSIST_COMMIT','ENCOUNTER','INTERACT','READING_ACTIVITY','YOUTUBE_CAPTIONS_BRIDGE','OPEN_OPTIONS','AUTO_BOOTSTRAP_CHECK','PAGE_ACTIVITY_SET','VIDEO_SETTINGS_PATCH','PREPARED_SUPPORT','PREPARED_ASSIST','PASSAGE_TRANSLATE', 'EMERGENCY_TRANSLATE', 'EMERGENCY_CANCEL_REQUEST', 'EMERGENCY_END','LANGUAGE_PROFILE','CONVERSATION_ASK','CONVERSATION_STOP','CONVERSATION_HISTORY','CONVERSATION_DELETE']
   if(!trusted&&!contentAllowed.includes(message.type)&&message.type!=='WORD_PREFERENCE_SET')throw new Error('此操作不能从网页执行。');
   switch(message.type){
     case 'HISTORY_GET':return readingHistory.snapshot({days:message.days,search:message.search,domain:message.domain,type:message.eventType||'',cursor:message.cursor,limit:Number.isSafeInteger(message.limit)&&message.limit>0?message.limit:300});
@@ -1055,6 +1123,12 @@ async function handle(message,sender) {
       if(patch.helpLanguage!==undefined&&patch.helpLanguage!==before.settings.helpLanguage)await broadcastHelpLanguage(patch.helpLanguage);return result;
     }
     case 'ANALYZE':{const source=text(message.text,'正文',200000,false),state=await load();if(state.settings.assistanceMode!=='ambient')throw new Error('当前为仅在需要时模式。');const history=canRemember(state)?state.words:[],result=withoutKnownTerms(analyze(source,analysisSettings(state),history,message.domain?domain(message.domain):undefined),state.words);return{...result,languageStats:englishTokenStats(source)};}
+    case 'LANGUAGE_PROFILE':return identifyPageLanguage(text(message.text,'正文',40000,false));
+    case 'CONVERSATION_ASK':return conversationAsk(message,sender);
+    case 'CONVERSATION_STOP':return conversationStop(message,sender);
+    case 'CONVERSATION_HISTORY':return conversationHistory(message,sender);
+    case 'CONVERSATION_DELETE':return conversationDelete(message,sender);
+    case 'CONVERSATION_LIST':return conversationList(message,sender);
     case 'SUPPORT_BATCH':return supportBatch(message,sender);
     case 'SENTENCE_GROUPS_BATCH':return sentenceGroupsBatch(message,sender);
     case 'PREPARED_SUPPORT':return preparedSupport(message,sender);
@@ -1090,6 +1164,7 @@ chrome.runtime.onMessage.addListener((message,sender,respond) => {
 });
 const CONTEXT_EXPLAIN = 'ss-explain-selection';
 const CONTEXT_TOGGLE_READING = 'ss-toggle-reading';
+const CONTEXT_COPY_PARAGRAPH = 'ss-copy-paragraph';
 let menuRegistration = Promise.resolve();
 
 function contextMenuCreate(options) {
@@ -1107,6 +1182,7 @@ function registerContextMenus() {
     await chrome.contextMenus.removeAll();
     await contextMenuCreate({id:CONTEXT_EXPLAIN,title:'RelyLess：帮助理解选中内容',contexts:['selection'],documentUrlPatterns:['http://*/*','https://*/*']});
     await contextMenuCreate({id:CONTEXT_TOGGLE_READING,title:'RelyLess：开启/暂停阅读辅助',contexts:['page'],documentUrlPatterns:['http://*/*','https://*/*']});
+    await contextMenuCreate({id:CONTEXT_COPY_PARAGRAPH,title:'RelyLess：复制选中段落的原文',contexts:['selection'],documentUrlPatterns:['http://*/*','https://*/*']});
   });
   menuRegistration.catch(error => console.error('注册右键菜单失败',error));
   return menuRegistration;
@@ -1194,12 +1270,34 @@ async function openBilingualPage(tab) {
 chrome.commands.onCommand.addListener((command,tab) => {
   if (command === 'toggle-reading') void toggleReading(tab);
   if (command === 'open-bilingual-page') void openBilingualPage(tab);
+  if (command === 'passage-action') void translatePassageAction(tab);
 });
+async function translatePassageAction(tab) {
+  if (!tab?.id) return;
+  try {
+    await injectPageUI(tab.id);
+    const result = await chrome.tabs.sendMessage(tab.id,{type:'SS_PASSAGE_ACTION'},{frameId:0});
+    if (!result?.ok) throw new Error(result?.error || '无法翻译当前选区。');
+    await clearTabStatus(tab.id);
+  } catch (error) { await showTabError(tab.id,error,'此页面无法翻译选中段落。'); }
+}
 
 chrome.contextMenus.onClicked.addListener((info,tab) => {
   if (!tab?.id) return;
   if (info.menuItemId === CONTEXT_TOGGLE_READING) {
     void toggleReading(tab);
+    return;
+  }
+  if (info.menuItemId === CONTEXT_COPY_PARAGRAPH) {
+    void (async () => {
+      try {
+        if ((info.frameId ?? 0) !== 0) throw new Error('暂不支持复制内嵌框架中的段落，请在网页主区域重试。');
+        await injectPageUI(tab.id);
+        const result = await chrome.tabs.sendMessage(tab.id,{type:'SS_COPY_PARAGRAPH',source:'selection'},{frameId:0});
+        if (!result?.ok) throw new Error(result?.error || '无法复制段落原文。');
+        await clearTabStatus(tab.id);
+      } catch (error) { await showTabError(tab.id,error,'此页面无法复制段落原文。'); }
+    })();
     return;
   }
   if (info.menuItemId !== CONTEXT_EXPLAIN) return;
@@ -1215,3 +1313,7 @@ chrome.contextMenus.onClicked.addListener((info,tab) => {
     }
   })();
 });
+
+// 追问会话清理：启动时删一次过期问答，之后每小时再删；服务Worker 重启也会重新触发启动清理。
+void conversationStore?.prune().catch(() => {});
+setInterval(() => void conversationStore?.prune().catch(() => {}), 60 * 60 * 1000);

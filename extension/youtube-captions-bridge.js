@@ -3,15 +3,39 @@
  * https://github.com/Gythiro/yt-dual-subs/blob/5657c8a18ca30c84b5d4662bca58e3e9214ffdff/inject.js
  * Copyright (c) 2026 Gythiro. MIT License; see vendor/LICENSE.yt-dual-subs.txt.
  */
-(() => {
+(function startShadowBridgeApp() {
   'use strict';
+
+  // 纯函数集合：URL 与轨道判断不依赖页面，单独暴露以便在测试里直接校验。
+  function youtubeVideoId(pathname, search) {
+    const pathMatch = pathname.match(/^\/(?:shorts|embed|live)\/(?!videoseries\b|live_stream\b)([A-Za-z0-9_-]{6,})/);
+    return pathMatch?.[1] || new URLSearchParams(search || '').get('v') || '';
+  }
+  function timedtextUrl(rawUrl, base) {
+    try {
+      const url = new URL(rawUrl, base || 'https://www.youtube.com/');
+      return url.protocol === 'https:' && url.hostname === 'www.youtube.com' && url.pathname === '/api/timedtext' ? url.href : '';
+    } catch { return ''; }
+  }
+  function isEnglishLanguageCode(value) { return /^en(?:-|$)/i.test(typeof value === 'string' ? value : ''); }
+  function chooseEnglishTrack(tracks, selected) {
+    if (selected && isEnglishLanguageCode(selected.languageCode)) return selected;
+    return tracks.find(track => isEnglishLanguageCode(track?.languageCode) && track.kind !== 'asr')
+      || tracks.find(track => isEnglishLanguageCode(track?.languageCode) && track.kind === 'asr')
+      || null;
+  }
+  const trackUtils = Object.freeze({youtubeVideoId, timedtextUrl, isEnglishLanguageCode, chooseEnglishTrack});
+  if (typeof globalThis !== 'undefined') globalThis.ShisuiYoutubeTrackUtils = trackUtils;
+  const {youtubeVideoId: videoIdOf, timedtextUrl: captionUrl, isEnglishLanguageCode: englishCode, chooseEnglishTrack: pickEnglishTrack} = trackUtils;
+  const hasPage = typeof location !== 'undefined' && typeof document !== 'undefined';
 
   const GLOBAL_NAME = 'ShisuiYoutubeCaptionsBridge';
   const REQUEST_EVENT = 'shisui:youtube-captions-request';
   const RESPONSE_EVENT = 'shisui:youtube-captions-response';
   const DISPOSE_EVENT = 'shisui:youtube-captions-dispose';
-  if (globalThis[GLOBAL_NAME]) return;
-  if (location.protocol !== 'https:' || !['www.youtube.com', 'm.youtube.com'].includes(location.hostname)) return;
+  if (typeof globalThis === 'undefined' || globalThis[GLOBAL_NAME]) return;
+  // 没有页面环境时只暴露上面的纯函数，供测试使用。
+  if (!hasPage || location.protocol !== 'https:' || !['www.youtube.com', 'm.youtube.com'].includes(location.hostname)) return;
 
   let disposed = false;
   let performanceObserver = null;
@@ -32,16 +56,8 @@
     if (Array.isArray(value?.runs)) return value.runs.map(run => stringValue(run?.text)).join('');
     return '';
   }
-  function videoIdFromLocation() {
-    const pathMatch = location.pathname.match(/^\/(?:shorts|embed|live)\/(?!videoseries\b|live_stream\b)([A-Za-z0-9_-]{6,})/);
-    return pathMatch?.[1] || new URL(location.href).searchParams.get('v') || '';
-  }
-  function safeCaptionUrl(rawUrl) {
-    try {
-      const url = new URL(rawUrl, location.href);
-      return url.protocol === 'https:' && url.hostname === 'www.youtube.com' && url.pathname === '/api/timedtext' ? url.href : '';
-    } catch { return ''; }
-  }
+  function videoIdFromLocation() { return videoIdOf(location.pathname, location.search); }
+  function safeCaptionUrl(rawUrl) { return captionUrl(rawUrl, location.href); }
   function noteTimedtext(rawUrl) {
     if (disposed) return;
     const safeUrl = safeCaptionUrl(rawUrl);
@@ -85,13 +101,7 @@
     if (button) return button.getAttribute('aria-pressed') === 'true';
     return Boolean(selectedTrack);
   }
-  function isEnglish(track) { return /^en(?:-|$)/i.test(stringValue(track?.languageCode)); }
-  function chooseEnglishTrack(tracks, selected) {
-    if (selected && isEnglish(selected)) return selected;
-    return tracks.find(track => isEnglish(track) && stringValue(track.kind) !== 'asr')
-      || tracks.find(track => isEnglish(track) && stringValue(track.kind) === 'asr')
-      || null;
-  }
+  function isEnglish(track) { return englishCode(track?.languageCode); }
   function playerTrackValue(track) {
     return {languageCode: stringValue(track?.languageCode, 32), kind: stringValue(track?.kind, 32), vss_id: stringValue(track?.vssId || track?.vss_id, 128)};
   }
@@ -155,7 +165,7 @@
     restoreCaptions();
     const tracks = responseTracks(player);
     const previousTrack = readSelectedTrack(player, tracks);
-    const englishTrack = chooseEnglishTrack(tracks, previousTrack);
+    const englishTrack = pickEnglishTrack(tracks, previousTrack);
     if (!englishTrack) return false;
     const wasVisible = captionsVisible(player, previousTrack);
     const switchedTrack = !previousTrack || trackIdentity(previousTrack) !== trackIdentity(englishTrack);

@@ -320,6 +320,79 @@ export function englishTokenStats(text) {
   };
 }
 
+// 分级语言画像：把正文分成“可确认 / 混合 / 无法确认”三档，只有可确认英文或英文证据充分的混合正文才值得开始扫描。
+// 与 englishTokenStats 的分工：后者只累计英文证据，供提示策略使用；这里给出页面级结论，决定扫描是否继续。
+// 与 FluentRead 语言模块的差异：翻译产品“不确定也不跳过”，避免漏译；阅读辅助在无法确认时继续扫描只是噪音和开销，因此无法确认即停。
+const LANGUAGE_SCRIPTS = Object.freeze([
+  ['latin',/[A-Za-z\u00c0-\u024f]/g],
+  ['han',/[\u3400-\u9fff\uf900-\ufaff]/g],
+  ['kana',/[\u3040-\u30ff]/g],
+  ['hangul',/[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]/g],
+  ['cyrillic',/[\u0400-\u04ff]/g],
+  ['greek',/[\u0370-\u03ff]/g],
+  ['arabic',/[\u0600-\u06ff]/g],
+  ['hebrew',/[\u0590-\u05ff]/g],
+  ['thai',/[\u0e00-\u0e7f]/g],
+  ['devanagari',/[\u0900-\u097f]/g],
+]);
+// 只用高频功能词和常用词作证据，专有名词与生僻词不参与，避免把堆砌品牌名的页面误判为英文正文。
+const ENGLISH_EVIDENCE_WORDS = new Set(('the be to of and a in that have it for not on with as you do at this but by from they she or an will one all would there their what so up out if about who get which go me when make can like time no just him know take into year your good some could them see other than then now look only come over think also back after use two how our work first well way even new want because any these give day most very much many more such own same too here where while during both each few been has had will would can could should may does did says said is are was were').split(' '));
+// 拉丁字母非英语的功能词证据。同时命中三种以上且超过英文证据时才判定为该语言，单个借词不改变结论。
+const OTHER_LATIN_FUNCTION_WORDS = Object.freeze({
+  de:'der die und den von mit sich das für auf ist im dem nicht ein eine als auch es werden aus dass beim sind durch oder wenn nur ihre ihren ihrer seine unter über nach vor zur zum'.split(' '),
+  fr:'le la les des une est pas pour qui dans vous nous mais avec tout plus comme aux au sur leur ils elle ont été cette leurs notre vos'.split(' '),
+  es:'el los las por para con una del como pero más sus entre cuando muy sobre también desde donde todos esta este estas estos'.split(' '),
+  pt:'os um uma por para com não mas como mais dos das quando muito sem nos ao você eles ela isso sua'.split(' '),
+  it:'il lo la gli le un una per con non più dei della nel sono anche dal questo questa degli nella essere'.split(' '),
+  nl:'het een van en de dat is niet aan te met voor zijn ook om als bij werd worden deze hun'.split(' '),
+  sv:'och att det som är för på med av till den har inte han'.split(' '),
+});
+const countScript = (text,pattern) => { pattern.lastIndex = 0; return (text.match(pattern) || []).length; };
+const languageScriptName = Object.freeze({han:'zh',kana:'ja',hangul:'ko',cyrillic:'ru',greek:'el',arabic:'ar',hebrew:'he',thai:'th',devanagari:'hi'});
+
+export function identifyPageLanguage(text) {
+  const source = typeof text === 'string' ? text : '';
+  const scripts = {};
+  let letters = 0;
+  for (const [code,pattern] of LANGUAGE_SCRIPTS) {
+    const count = countScript(source,pattern);
+    if (!count) continue;
+    scripts[code] = count;
+    letters += count;
+  }
+  const values = tokensIn(source).map(token => token.normalized);
+  const english = {
+    tokens:values.length,
+    recognized:values.reduce((count,token) => count + Number(Boolean(frequency(token).rank)),0),
+    functionWords:new Set(values.filter(token => ENGLISH_EVIDENCE_WORDS.has(token))).size,
+  };
+  const otherLatin = {};
+  for (const [code,words] of Object.entries(OTHER_LATIN_FUNCTION_WORDS)) {
+    const hits = new Set(values.filter(token => words.includes(token))).size;
+    if (hits) otherLatin[code] = hits;
+  }
+  const share = {};
+  for (const [code,count] of Object.entries(scripts)) share[code] = letters ? count/letters : 0;
+  const profile = {status:'unknown',languages:[],english,otherLatin,scripts,share};
+  if (!letters) { profile.status = 'empty'; return profile; }
+  const dominant = code => (share[code] || 0) >= 0.85;
+  const identified = languages => { profile.status = 'identified'; profile.languages = languages; return profile; };
+  // 日文以汉字与假名共存为特征；纯汉字且几乎无假名才判中文。
+  if (dominant('han') && (share.kana || 0) < 0.05) return identified([languageScriptName.han]);
+  if ((share.han || 0) >= 0.25 && (share.kana || 0) >= 0.05) return identified([languageScriptName.kana]);
+  for (const code of ['kana','hangul','cyrillic','greek','arabic','hebrew','thai','devanagari']) if (dominant(code)) return identified([languageScriptName[code]]);
+  if (dominant('latin')) {
+    // 先看拉丁语支的证据：西语法语德语与英语共享大量同源词，单看词频识别率会互相误判，功能词命中更可靠。
+    const best = Object.entries(otherLatin).sort((a,b) => b[1]-a[1])[0];
+    if (best && best[1] >= 3 && best[1] > english.functionWords) return identified([best[0]]);
+    if (english.tokens >= 12 && english.recognized/english.tokens >= 0.6 && english.functionWords >= 2) return identified(['en']);
+    return profile;
+  }
+  profile.status = 'mixed';
+  profile.languages = Object.entries(share).filter(([,value]) => value >= 0.05).sort((a,b) => b[1]-a[1]).map(([code]) => code);
+  return profile;
+}
+
 function analysisPreparation(settings, words, domain, now, shared = {}) {
   return {
     settings,domain,

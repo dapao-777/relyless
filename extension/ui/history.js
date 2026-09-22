@@ -2,7 +2,7 @@ import {DOMAINS, request, errorText, setResult, parseOrigin, downloadJson} from 
 
 const byId = id => document.getElementById(id);
 const els = Object.fromEntries([
-  'history-enabled','history-origin-form','history-origin','history-origin-list','history-origin-empty','history-summaries','history-config-result','history-started','history-metrics','metric-time','metric-words','metric-terms','metric-query-note','metric-sentences','history-chart-metric','history-chart','history-chart-unit','history-chart-description','history-filters','history-search','history-domain','history-source','history-list','history-empty','history-export','history-clear','history-action-result','personalization-enabled','personalization-auto-apply','personalization-service-label','personalization-analyze','personalization-reset','personalization-result','personalization-status','personalization-pending','personalization-override-list','personalization-overrides-empty','personalization-version-list','personalization-versions-empty'
+  'history-enabled','history-origin-form','history-origin','history-origin-list','history-origin-empty','history-summaries','history-config-result','history-started','history-metrics','metric-time','metric-words','metric-terms','metric-query-note','metric-sentences','history-chart-metric','history-chart','history-chart-unit','history-chart-description','history-filters','history-search','history-domain','history-source','history-list','history-empty','history-export','history-clear','history-action-result','history-conversations-list','history-conversations-empty','history-conversations-result','personalization-enabled','personalization-auto-apply','personalization-service-label','personalization-analyze','personalization-reset','personalization-result','personalization-status','personalization-pending','personalization-override-list','personalization-overrides-empty','personalization-version-list','personalization-versions-empty'
 ].map(id => [id.replace(/-([a-z])/g,(_match,c)=>c.toUpperCase()),byId(id)]));
 els.historyProblem=byId('history-problem');
 els.historyMore=byId('history-more');els.historyRangeNote=byId('history-range-note');
@@ -77,7 +77,37 @@ function renderConfig() {
   els.historyStatsContent.hidden=firstUse;
   const statsTab=byId('history-view-stats-tab');statsTab.hidden=firstUse;
   if(firstUse&&statsTab.getAttribute('aria-selected')==='true')activateSectionTab(byId('history-view-records-tab'));
-  byId('history-period-toolbar').hidden=firstUse||byId('history-view-settings-tab').getAttribute('aria-selected')==='true';
+  byId('history-period-toolbar').hidden=conversationToolbarHidden(firstUse);
+}
+function conversationToolbarHidden(firstUse) {
+  const active=document.querySelector('[data-section-tab="history"][aria-selected="true"]');
+  const target=active?.dataset.target||'history-view-records';
+  return firstUse||(target!=='history-view-records'&&target!=='history-view-stats');
+}
+async function loadConversations(){
+  try{const {sessions}=await request('CONVERSATION_LIST');renderConversations(sessions||[]);setResult(els.historyConversationsResult,'');}
+  catch(error){setResult(els.historyConversationsResult,errorText(error),true);}
+}
+function renderConversations(sessions){
+  els.historyConversationsList.replaceChildren();
+  for(const session of sessions){
+    const card=make('div','conversation-session');
+    const head=make('div','conversation-session-head');
+    head.append(make('b','',session.source?.title||session.source?.url||'未命名页面'),make('span','muted',dateTime(session.updatedAt)+' · '+session.turns.length+' 轮'));
+    const quote=make('p','conversation-source',session.text||'');
+    const turns=make('div','conversation-turns');
+    for(const turn of session.turns){
+      const row=make('div','conversation-turn');
+      row.append(make('p','conversation-q',turn.question));
+      turns.append(row);
+      const answer=make('p','conversation-a',turn.answer||(turn.status==='generating'?'正在回答…':turn.status==='stopped'?'已停止':'未保存回答。'));
+      if(turn.status==='error')answer.classList.add('error');
+      turns.append(answer);
+    }
+    const remove=actionButton('删除这段对话',async()=>{remove.disabled=true;try{await request('CONVERSATION_DELETE',{sessionId:session.sessionId});setResult(els.historyConversationsResult,'已删除这段对话。');await loadConversations();}catch(error){remove.disabled=false;setResult(els.historyConversationsResult,errorText(error),true);}},'delete-button');
+    card.append(head,quote,turns,remove);els.historyConversationsList.append(card);
+  }
+  els.historyConversationsEmpty.hidden=Boolean(sessions.length);
 }
 function renderKnownWords(){
   const words=Array.isArray(historyState.snapshot?.knownWords)?historyState.snapshot.knownWords:[];els.knownWordList.replaceChildren();
@@ -278,7 +308,7 @@ function activateTab(button) {
 function activateSectionTab(button,{focus=false}={}) {
   const group=button.dataset.sectionTab,tabs=[...document.querySelectorAll('[data-section-tab="'+group+'"]')];
   for(const tab of tabs){const active=tab===button;tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1;byId(tab.dataset.target).hidden=!active;}
-  if(group==='history')byId('history-period-toolbar').hidden=!els.historyFirstUse.hidden||button.dataset.target==='history-view-settings';
+  if(group==='history'){const target=button.dataset.target;byId('history-period-toolbar').hidden=conversationToolbarHidden(!els.historyFirstUse.hidden);if(target==='history-view-conversations')void loadConversations();}
   if(focus)button.focus();
 }
 function visibleSection() { return location.hash.slice(1); }
