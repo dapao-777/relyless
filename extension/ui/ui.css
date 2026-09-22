@@ -343,6 +343,13 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--space-3); b
 .options-body .choice-cards.two label, .options-body .choice-cards.three label { align-items: flex-start; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-control); }
 .options-body .choice-cards.two label:has(input:checked), .options-body .choice-cards.three label:has(input:checked) { background: var(--accent-soft); border-color: var(--accent-line); }
 .options-body .choice-cards.two input, .options-body .choice-cards.three input { margin-top: 1px; }
+.about-name { font-size: var(--type-section-title); font-weight: var(--weight-medium); margin-bottom: var(--space-2); }
+.about-intro { max-width: 64ch; color: var(--muted-strong); line-height: var(--leading-body); }
+.about-contacts { margin: var(--space-5) 0 0; }
+.about-contact { display: grid; grid-template-columns: 88px minmax(0,1fr); gap: var(--space-3); align-items: baseline; padding-block: var(--space-3); border-top: 1px solid var(--line); }
+.about-contact dt { color: var(--muted); font-size: var(--type-support); }
+.about-contact dd { display: flex; align-items: baseline; gap: var(--space-3); min-width: 0; }
+.about-contact dd small { color: var(--muted); }
 .related-settings { display: flex; flex-wrap: wrap; gap: var(--space-3) var(--space-5); font-size: var(--type-control); }
 .related-settings a { text-decoration: none; }
 .related-settings a:hover { text-decoration: underline; }

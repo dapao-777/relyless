@@ -5,8 +5,8 @@ import {createProviderPicker} from './provider-picker.js';
 import {serviceCatalog} from './options-service-catalog.js';
 import {VIDEO_SUPPORT_ENABLED} from '../activation.js';
 
-const optionsSections = ['assistance','appearance','sites','service','privacy','history','personalization','advanced','terms','diagnostics','guide'];
-const optionsLabels = {assistance:'阅读偏好',appearance:'显示与解构',sites:'网站规则',service:'模型服务',privacy:'数据与隐私',history:'阅读记录',personalization:'提示偏好',advanced:'领域识别',terms:'固定术语',diagnostics:'运行诊断',guide:'使用说明'};
+const optionsSections = ['assistance','appearance','sites','service','privacy','history','personalization','advanced','terms','diagnostics','guide','about'];
+const optionsLabels = {assistance:'阅读偏好',appearance:'显示与解构',sites:'网站规则',service:'模型服务',privacy:'数据与隐私',history:'阅读记录',personalization:'提示偏好',advanced:'领域识别',terms:'固定术语',diagnostics:'运行诊断',guide:'使用说明',about:'关于作者'};
 const optionsSourceLabels = {personalized:'个性化倾向',manual:'当前页手动','site-user':'个人站点规则',global:'全局固定','site-built-in':'内置站点规则','local-model':'本地模型',chatgpt:'ChatGPT 增强',api:'自定义 API',general:'通用回退'};
 const diagnosticOperationLabels = {SENTENCE_GROUPS_BATCH:'阅读解构',HISTORY_SUMMARY:'阅读摘要',PERSONALIZATION_ANALYZE:'个性化分析',ASSIST_COMMIT:'帮助记录提交',ASSIST:'阅读辅助',SUPPORT_BATCH:'批量辅助',PASSAGE_TRANSLATE:'选段翻译',EMERGENCY_TRANSLATE:'整页翻译',RESOLVE_DOMAIN:'领域识别',PROVIDER_TEST:'服务测试',CONNECTION:'连接器通信',ANALYZE:'本机分析',PREPARED_ASSIST:'预备辅助',PREPARED_SUPPORT:'预备解释'};
 const diagnosticStageLabels = {request:'请求',provider:'服务',first_content:'首段内容',validation:'校验',render:'呈现',connection:'连接',rpc:'通信',stderr:'连接器错误'};
