@@ -107,6 +107,39 @@
 </div>
 <p class="field-help">沿用查词按键 + 单击；词语显示方式不影响选段翻译。</p>
 </fieldset>
+        <fieldset>
+<legend>划词动作打开方式</legend>
+<div class="choice-cards two">
+<label>
+<input type="radio" name="passage-open" value="click">
+<span>
+<b>点击动作打开</b>
+<small>选中文字后点击“翻译所选”</small>
+</span>
+</label>
+<label>
+<input type="radio" name="passage-open" value="hover">
+<span>
+<b>悬停等待打开</b>
+<small>鼠标停在动作上等待后自动打开</small>
+</span>
+</label>
+</div>
+<label class="field setting-select" id="passage-delay-field" hidden="">
+<span>悬停等待</span>
+<select id="passage-delay">
+<option value="200">200 毫秒</option>
+<option value="400">400 毫秒</option>
+<option value="600">600 毫秒</option>
+<option value="800">800 毫秒</option>
+<option value="1000">1000 毫秒</option>
+<option value="1500">1500 毫秒</option>
+<option value="2000">2000 毫秒</option>
+<option value="3000">3000 毫秒</option>
+</select>
+<small>200–3000 毫秒；点击动作仍然立即打开，移开鼠标可取消等待。</small>
+</label>
+</fieldset>
         <label class="field setting-select">
 <span>默认领域</span>
 <select id="reading-domain">
@@ -435,6 +468,23 @@
           <div id="automation-site-empty" class="empty-state compact-empty" hidden="">
 <h3>尚未添加网站</h3>
 <p>也可在扩展弹窗中授权当前网站。</p>
+</div>
+          <form id="rule-pack-form" class="automation-site-form">
+<label class="field">
+<span>站点规则包（JSON）</span>
+<textarea id="rule-pack-json" rows="8" required="" spellcheck="false" autocomplete="off" placeholder='{"version":1,"id":"my-sites","rules":[{"id":"docs","hosts":["docs.example.com"],"exclude":[".promo",".sidebar"],"root":"main","lang":"en"}]}'>
+</textarea>
+<small>按站点补充排除区域、正文根或声明 lang 为 en；字段与容量都受限制，校验失败会逐条列出原因。</small>
+</label>
+<button class="primary-action narrow" type="submit">导入规则包</button>
+</form>
+          <p id="rule-pack-result" class="inline-message" aria-live="polite" hidden="">
+</p>
+          <div id="rule-pack-list" class="automation-site-list">
+</div>
+          <div id="rule-pack-empty" class="empty-state compact-empty" hidden="">
+<h3>尚未导入规则包</h3>
+<p>规则包只影响你指定的站点，不会改变其他网站的扫描方式。</p>
 </div>
           <div class="adaptive-setting" data-video-feature hidden>
 <div>
@@ -801,7 +851,7 @@
 <section id="history" class="settings-section history-section" aria-labelledby="history-heading" hidden="">
       <div class="section-intro"><h2 id="history-heading" class="sr-only">阅读记录</h2><p>仅在你明确开启后，本机保存查询例句、阅读摘要与客观统计，不保存整篇正文。</p></div>
       <p id="history-problem" class="notice error" role="alert" hidden=""></p><p id="history-operation-result" class="inline-message" aria-live="polite" hidden=""></p>
-      <div class="section-tabs" role="tablist" aria-label="阅读记录页面"><button id="history-view-records-tab" type="button" role="tab" data-section-tab="history" data-target="history-view-records" aria-controls="history-view-records" aria-selected="true">记录</button><button id="history-view-stats-tab" type="button" role="tab" data-section-tab="history" data-target="history-view-stats" aria-controls="history-view-stats" aria-selected="false" tabindex="-1">统计</button><button id="history-view-settings-tab" type="button" role="tab" data-section-tab="history" data-target="history-view-settings" aria-controls="history-view-settings" aria-selected="false" tabindex="-1">记录设置</button></div><div class="history-toolbar" id="history-period-toolbar"><fieldset class="history-period" aria-label="统计范围"><legend class="sr-only">统计范围</legend><label><input type="radio" name="history-days" value="7"><span>近 7 天</span></label><label><input type="radio" name="history-days" value="30" checked=""><span>近 30 天</span></label><label><input type="radio" name="history-days" value="0"><span>累计</span></label></fieldset><span id="history-started" class="muted"></span></div>
+      <div class="section-tabs" role="tablist" aria-label="阅读记录页面"><button id="history-view-records-tab" type="button" role="tab" data-section-tab="history" data-target="history-view-records" aria-controls="history-view-records" aria-selected="true">记录</button><button id="history-view-conversations-tab" type="button" role="tab" data-section-tab="history" data-target="history-view-conversations" aria-controls="history-view-conversations" aria-selected="false" tabindex="-1">对话</button><button id="history-view-stats-tab" type="button" role="tab" data-section-tab="history" data-target="history-view-stats" aria-controls="history-view-stats" aria-selected="false" tabindex="-1">统计</button><button id="history-view-settings-tab" type="button" role="tab" data-section-tab="history" data-target="history-view-settings" aria-controls="history-view-settings" aria-selected="false" tabindex="-1">记录设置</button></div><div class="history-toolbar" id="history-period-toolbar"><fieldset class="history-period" aria-label="统计范围"><legend class="sr-only">统计范围</legend><label><input type="radio" name="history-days" value="7"><span>近 7 天</span></label><label><input type="radio" name="history-days" value="30" checked=""><span>近 30 天</span></label><label><input type="radio" name="history-days" value="0"><span>累计</span></label></fieldset><span id="history-started" class="muted"></span></div>
       <div id="history-view-records" class="section-tab-panel" role="tabpanel" aria-labelledby="history-view-records-tab">
         <div id="history-first-use" class="paper-card first-use-card" hidden=""><div><b>尚未保存阅读记录</b><p>开启后才会从你允许的网站保存有限记录；不会补记过去内容。</p></div><button type="button" data-open-section-tab="history-view-settings">设置记录范围</button></div>
         <div id="history-record-content" class="history-browser paper-card">
@@ -811,6 +861,16 @@
           <div class="history-event-actions"><span id="history-range-note" class="field-help" aria-live="polite"></span><button id="history-more" type="button" hidden="">加载更多记录</button></div>
         </div>
       </div>
+      <div id="history-view-conversations" class="section-tab-panel" role="tabpanel" aria-labelledby="history-view-conversations-tab" hidden="">
+<div class="paper-card">
+<div><b>阅读追问</b>
+<p class="field-help">就选中英文继续提问的本机记录，按会话分组，30 天后自动清理。只保存在本机，不随阅读记录导出。</p>
+</div>
+<div id="history-conversations-list" class="conversation-sessions" aria-live="polite"></div>
+<p id="history-conversations-empty" class="empty-state">还没有追问记录。</p>
+<p id="history-conversations-result" class="inline-message" aria-live="polite" hidden=""></p>
+</div>
+</div>
       <div id="history-view-stats" class="section-tab-panel" role="tabpanel" aria-labelledby="history-view-stats-tab" hidden="">
         <div id="history-stats-content" class="section-tab-stack">
           
@@ -956,6 +1016,8 @@
       <li><strong>主动查这个词：</strong>按住 <kbd data-lookup-key>D</kbd> 并单击原词。这是你当前设置的查词键；只悬停或普通单击不会求助，在输入框里打字也不会触发。</li>
       <li><strong>选适合自己的呈现：</strong>在 <a href="#assistance">阅读偏好</a> 选「解释卡片」，可以继续看语境；选「顶部释义」，意思直接放在原词上方，不弹卡片。解释语言可选中文或简明英文。</li>
       <li><strong>一条释义还不够：</strong>使用解释卡片时，可点「用中文说明」，或展开「本句翻译」查看中文句译和详细语境。简释与详情分开获取，已有结果可复用；补充或重试可能产生新请求。</li>
+      <li><strong>复制干净原文：</strong>鼠标停在段落上按 <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd>，或选中段落后用右键菜单「复制选中段落的原文」。复制的是原始英文，提示、词注和译文都不会混进去。</li>
+      <li><strong>不点浮条也能译段：</strong>选中英文段落后按 <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> 直接翻译；选中单词时译整段。快捷键可在浏览器扩展快捷键设置里改。</li>
     </ol>
     <p>也可以让注释先来帮你：在「阅读偏好」选择<strong>「自动给少量提示」</strong>。本页辅助开启后，系统在可识别的正文中挑少量可能需要帮助的位置，不会逐词加注。滚动到新内容时可能提前请求模型；只想自己决定何时查词，就选「只在主动求助时」。</p>
     <details class="guide-note">

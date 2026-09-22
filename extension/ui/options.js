@@ -1,4 +1,5 @@
 import {DOMAINS, request, activeApiProvider, errorText, setResult, parseOrigin, downloadJson, upsertSiteEntry} from '../shared.js';
+import {parseRulePack} from '../rule-pack.js';
 import {API_PROVIDERS, getApiProvider, apiProviderBaseUrl, normalizeApiService, apiServiceOrigins} from '../api-providers.mjs';
 import {createProviderPicker} from './provider-picker.js';
 import {VIDEO_SUPPORT_ENABLED} from '../activation.js';
@@ -10,7 +11,7 @@ const diagnosticOperationLabels = {SENTENCE_GROUPS_BATCH:'阅读解构',HISTORY_
 const diagnosticStageLabels = {request:'请求',provider:'服务',first_content:'首段内容',validation:'校验',render:'呈现',connection:'连接',rpc:'通信',stderr:'连接器错误'};
 const diagnosticStatusLabels = {start:'开始',ok:'完成',error:'失败',cancelled:'已取消'};
 const diagnosticCodeLabels = {STARTUP_FAILED:'连接器启动失败',CODEX_EXIT:'模型进程已退出',RPC_TIMEOUT:'连接器通信超时',TURN_FAILED:'模型处理失败',UNKNOWN:'其他异常',OK:'处理完成',LOCAL_RESULT:'使用本机结果',CACHE_HIT:'使用本机缓存',TIMEOUT:'请求超时',NETWORK:'网络错误',AUTH:'服务认证失败',RATE_LIMIT:'请求过于频繁',HTTP:'服务请求失败',JSON_INVALID:'响应解析失败',OUTPUT_INVALID:'响应格式无效',BATCH_SHAPE:'批次格式无效',BATCH_COUNT:'批次数量不符',ITEM_FIELDS:'结果字段无效',ITEM_ID:'结果标识无效',ITEM_DUPLICATE:'结果重复',TRANSLATION_TYPE:'译文类型无效',TRANSLATION_EMPTY:'译文为空',TRANSLATION_WHITESPACE:'译文含首尾空白',TRANSLATION_LENGTH:'译文长度异常',TRANSLATION_NO_HAN:'译文不含汉字',STALE:'请求状态已过期',CANCELLED:'请求已取消',NOT_READY:'服务尚未准备',DISCONNECTED:'连接器已断开',NATIVE_START:'连接器已启动',NATIVE_EXIT:'连接器已退出',NATIVE_RPC:'连接器通信失败',NATIVE_STDERR:'连接器报告错误',STDERR_AUTH:'连接器认证失败',STDERR_RATE_LIMIT:'连接器请求过频',STDERR_TIMEOUT:'连接器处理超时',STDERR_UNKNOWN:'连接器未知错误',STORAGE_ERROR:'本机存储失败',RENDER_INVALID:'呈现数据无效',NOT_DISPLAYED:'结果未能呈现',INTERRUPTED:'请求意外中断',SLOW_REQUEST:'请求耗时较长',REPEATED_FAILURE:'同类请求多次失败'};
-const optionsIds = ['section-title','save-state','global-error','reading-domain','lookup-key','automation-all-sites','automation-video-sites','automation-site-form','automation-site-origin','automation-result','automation-site-list','automation-site-empty','video-font-size','video-theme','detection-chatgpt','detection-api','detection-subscription-model','detection-model-note','detection-use-translation-api','detection-api-model','detection-api-fields','detection-api-url','detection-api-key','detection-key-state','clear-detection-key','save-recognition','domain-test-text','run-domain-test','domain-test-result','domain-rule-form','rule-host','rule-path','rule-domain','rule-subdomains','domain-rule-result','domain-rule-list','domain-rule-empty','term-form','term-source','term-translation','term-domain','term-list','term-empty','subscription-panel','api-panel','subscription-dot','subscription-state','subscription-detail','refresh-subscription','subscription-account','subscription-email','subscription-plan','subscription-model','subscription-model-note','login-subscription','cancel-subscription','logout-subscription','test-subscription','subscription-result','install-command','copy-install-command','provider-form','provider-url','provider-model','provider-key','key-state','test-provider','disconnect-provider','provider-result','remember-support','export-data','clear-memory','data-result','open-extension-manager','help-language','api-service-select','new-api-service','provider-name','delete-api-service','cancel-api-service', 'reading-style-preview', 'reset-reading-style', 'diagnostics-storage-error','diagnostics-enabled','diagnostics-recording-note','diagnostics-native-dot','diagnostics-native-state','diagnostics-native-note','diagnostics-requests','diagnostics-failures','diagnostics-slow','diagnostics-pending','diagnostics-updated','diagnostics-issues','diagnostics-issues-empty','diagnostics-events','diagnostics-events-empty','export-diagnostics','clear-diagnostics','diagnostics-result']
+const optionsIds = ['section-title','save-state','global-error','reading-domain','lookup-key','passage-delay','passage-delay-field','automation-all-sites','automation-video-sites','automation-site-form','automation-site-origin','automation-result','automation-site-list','automation-site-empty','rule-pack-form','rule-pack-json','rule-pack-result','rule-pack-list','rule-pack-empty','video-font-size','video-theme','detection-chatgpt','detection-api','detection-subscription-model','detection-model-note','detection-use-translation-api','detection-api-model','detection-api-fields','detection-api-url','detection-api-key','detection-key-state','clear-detection-key','save-recognition','domain-test-text','run-domain-test','domain-test-result','domain-rule-form','rule-host','rule-path','rule-domain','rule-subdomains','domain-rule-result','domain-rule-list','domain-rule-empty','term-form','term-source','term-translation','term-domain','term-list','term-empty','subscription-panel','api-panel','subscription-dot','subscription-state','subscription-detail','refresh-subscription','subscription-account','subscription-email','subscription-plan','subscription-model','subscription-model-note','login-subscription','cancel-subscription','logout-subscription','test-subscription','subscription-result','install-command','copy-install-command','provider-form','provider-url','provider-model','provider-key','key-state','test-provider','disconnect-provider','provider-result','remember-support','export-data','clear-memory','data-result','open-extension-manager','help-language','api-service-select','new-api-service','provider-name','delete-api-service','cancel-api-service', 'reading-style-preview', 'reset-reading-style', 'diagnostics-storage-error','diagnostics-enabled','diagnostics-recording-note','diagnostics-native-dot','diagnostics-native-state','diagnostics-native-note','diagnostics-requests','diagnostics-failures','diagnostics-slow','diagnostics-pending','diagnostics-updated','diagnostics-issues','diagnostics-issues-empty','diagnostics-events','diagnostics-events-empty','export-diagnostics','clear-diagnostics','diagnostics-result']
 const optionsEls = Object.fromEntries(optionsIds.map(id => [id.replace(/-([a-z])/g,(_match,char)=>char.toUpperCase()),document.querySelector(`#${id}`)]));
 optionsEls.dataProblem = document.querySelector('#data-problem');
 Object.assign(optionsEls,Object.fromEntries(['provider-id','provider-key-link','provider-fields','provider-model-list','provider-model-note','list-provider-models'].map(id=>[id.replace(/-([a-z])/g,(_match,char)=>char.toUpperCase()),document.querySelector('#'+id)])));
@@ -22,6 +23,7 @@ const optionsSentenceLineInputs=[...document.querySelectorAll('input[name="sente
 const optionsSentenceDensityResult=document.querySelector('#sentence-density-result');
 const optionsLookupKeyCopies=[...document.querySelectorAll('[data-lookup-key]')];
 const optionsLookupDisplayInputs=[...document.querySelectorAll('input[name="lookup-display"]')];
+const optionsPassageOpenInputs=[...document.querySelectorAll('input[name="passage-open"]')];
 const optionsSentenceAllSites=document.querySelector('#sentence-groups-all-sites');
 const optionsSentencePreview=document.querySelector('#sentence-structure-preview');
 const optionsSentencePreviewSource=document.querySelector('#sentence-preview-source');
@@ -104,6 +106,19 @@ function optionsRenderRules(){
   optionsEls.domainRuleList.replaceChildren();
   rules.forEach((rule,index)=>{const row=document.createElement('div');row.className='rule-item';const info=document.createElement('div');const strong=document.createElement('b');strong.textContent=`${rule.includeSubdomains?'*.':''}${rule.host}${rule.pathPrefix}`;const domain=document.createElement('span');domain.textContent=optionsDomainName(rule.domain);info.append(strong,domain);row.append(info,optionsDeleteButton('删除',()=>void optionsSavePatch({domainRules:rules.filter((_item,itemIndex)=>itemIndex!==index)},'站点规则已删除')));optionsEls.domainRuleList.append(row);});
   optionsEls.domainRuleEmpty.hidden=Boolean(rules.length);
+}
+function optionsRenderRulePacks(){
+  const packs=optionsState.settings.rulePacks||[];
+  optionsEls.rulePackList.replaceChildren();
+  packs.forEach((pack,index)=>{
+    const row=document.createElement('div');row.className='automation-site-item';
+    const info=document.createElement('div');
+    const code=document.createElement('code');code.textContent=pack.name||pack.id;
+    const summary=document.createElement('small');summary.textContent=pack.rules.map(rule=>rule.hosts[0]).join(' · ');
+    info.append(code,summary);row.append(info,optionsDeleteButton('删除',()=>void optionsSavePatch({rulePacks:packs.filter((_item,itemIndex)=>itemIndex!==index)},'规则包已删除')));
+    optionsEls.rulePackList.append(row);
+  });
+  optionsEls.rulePackEmpty.hidden=Boolean(packs.length);
 }
 function optionsRenderTerms(){
   const terms=optionsState.settings.customTerms||[];
@@ -196,6 +211,7 @@ function optionsRenderAppearance(){
   }
 }
 function optionsSelectAppearance(view){optionsAppearanceView=view;optionsRenderAppearance();}
+function optionsRenderPassageAction(){const action=optionsState.settings.passageAction||{open:'click',delay:600};for(const input of optionsPassageOpenInputs)input.checked=input.value===action.open;optionsEls.passageDelayField.hidden=action.open!=='hover';optionsEls.passageDelay.value=String(action.delay);}
 function optionsRenderAll(){
   optionsEls.readingDomain.value=optionsState.settings.domain||'auto';
   optionsRenderLookupKey();
@@ -207,7 +223,7 @@ function optionsRenderAll(){
   setResult(optionsEls.dataProblem,optionsState.dataProblem||'',Boolean(optionsState.dataProblem));
   const video=optionsState.settings.video||{fontSize:20,theme:'auto'};
   optionsEls.videoFontSize.value=String(video.fontSize||20);optionsEls.videoTheme.value=video.theme||'auto';
-  optionsRenderAutomation();optionsRenderSentenceAllSites();optionsRenderDetection();optionsRenderReadingStyle();optionsRenderSentenceDensity();optionsRenderSentenceLineStyle();optionsRenderRules();optionsRenderTerms();optionsRenderProvider();void optionsRefreshStructurePreview();
+  optionsRenderAutomation();optionsRenderSentenceAllSites();optionsRenderPassageAction();optionsRenderDetection();optionsRenderReadingStyle();optionsRenderSentenceDensity();optionsRenderSentenceLineStyle();optionsRenderRules();optionsRenderTerms();optionsRenderRulePacks();optionsRenderProvider();void optionsRefreshStructurePreview();
 }
 async function optionsSavePatch(patch,message='已保存'){optionsClearError();try{optionsState=await request('STATE_PATCH',{patch});optionsRenderAll();optionsShowSaved(message);return true;}catch(error){optionsShowError(error);optionsRenderAll();return false;}}
 async function optionsPatchAutomation(patch,message){optionsClearError();try{optionsAutomation=await request('AUTOMATION_PATCH',{patch});optionsState.settings.automation=optionsAutomation.automation;optionsRenderAutomation();optionsRenderSentenceAllSites();void optionsRefreshStructurePreview();optionsShowSaved(message);return true;}catch(error){optionsShowError(error);optionsRenderAutomation();optionsRenderSentenceAllSites();void optionsRefreshStructurePreview();return false;}}
@@ -305,7 +321,17 @@ for(const tab of optionsAppearanceTabs){
 }
 optionsEls.readingDomain.addEventListener('change',()=>void optionsSavePatch({domain:optionsEls.readingDomain.value}));
 optionsEls.lookupKey.addEventListener('change',()=>{const lookupKey=optionsEls.lookupKey.value;void optionsSavePatch({lookupKey},'查词按键已设为 '+lookupKey);});
-optionsEls.helpLanguage.addEventListener('change',()=>void optionsSavePatch({helpLanguage:optionsEls.helpLanguage.value},'默认解释语言已保存'));
+optionsEls.rulePackForm.addEventListener('submit',event=>{
+  event.preventDefault();optionsClearError();
+  let value=null;
+  try{value=JSON.parse(optionsEls.rulePackJson.value);}catch(error){setResult(optionsEls.rulePackResult,'JSON 解析失败：'+error.message,true);return;}
+  const {pack,issues}=parseRulePack(value);
+  if(!pack){const message=issues.slice(0,6).map(issue=>(issue.path?issue.path+'：':'')+issue.message).join('；');setResult(optionsEls.rulePackResult,'规则包未导入：'+message+(issues.length>6?' 等 '+issues.length+' 处问题':''),true);return;}
+  const packs=[...(optionsState.settings.rulePacks||[]).filter(item=>item.id!==pack.id),pack];
+  void optionsSavePatch({rulePacks:packs},'规则包“'+(pack.name||pack.id)+'”已导入').then(ok=>{if(ok)optionsEls.rulePackJson.value='';});
+});
+optionsPassageOpenInputs.forEach(input=>input.addEventListener('change',()=>void optionsSavePatch({passageAction:{open:input.value}},'划词动作打开方式已保存')));
+optionsEls.passageDelay.addEventListener('change',()=>void optionsSavePatch({passageAction:{delay:Number(optionsEls.passageDelay.value)}},'悬停等待已设为 '+optionsEls.passageDelay.value+' 毫秒'));
 optionsSentenceDensityInputs.forEach(input=>input.addEventListener('change',()=>void optionsSetSentenceDensity(input.value)));
 optionsSentenceLineInputs.forEach(input=>input.addEventListener('change',()=>void optionsSetSentenceLineStyle(input.value)));
 optionsSentenceAllSites.addEventListener('change',async()=>{const enabled=optionsSentenceAllSites.checked;optionsSentenceAllSites.disabled=true;try{if(enabled&&!await chrome.permissions.request({origins:ALL_HOSTS}))throw new Error('未授予全部网站权限，原设置保持不变。');await optionsPatchAutomation({sentenceGroupsAllSites:enabled},enabled?'所有网站阅读解构已开启':'所有网站阅读解构已关闭');}catch(error){optionsShowError(error);optionsRenderSentenceAllSites();void optionsRefreshStructurePreview();}finally{optionsSentenceAllSites.disabled=false;}});

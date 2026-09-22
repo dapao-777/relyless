@@ -133,6 +133,18 @@ export function assistanceProgress(text,request,{envelope}={}) {
   return result;
 }
 
+/** 追问回答只有一个自由文本字段：只透传已闭合或部分合法的 answer 字符串。 */
+export function conversationProgress(text) {
+  if (typeof text !== 'string' || text.length > CONTENT_LIMIT) return {};
+  const parsed = parsePrefix(text,{partialStrings:true});
+  if (parsed === INVALID) return {};
+  const root = parsed.value;
+  if (Object.keys(root).some(key=>key!=='answer')) return {};
+  const answer = root.answer;
+  if (typeof answer !== 'string' || !answer.trim() || answer.length > 1200) return {};
+  return {answer};
+}
+
 /** Only source-bound text snapshots cross the native/page boundary, never raw JSON. */
 export function normalizeTranslationProgress(value,items){
   if(!Array.isArray(items)||!items.length||items.length>4||!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==1||!Array.isArray(value.items)||value.items.length>items.length)return null;
