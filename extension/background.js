@@ -888,11 +888,7 @@ async function conversationAsk(message,sender){
   // 本地记忆先收集再随请求一起过校验：内容有界，且只作为数据发送。
   const command=normalizeConversationRequest({...message,memory:source.incognito?[]:collectConversationMemory(state,{text:message.text,domain:message.domain})});
   if(!configured(state.settings))throw new Error('请先配置可用的翻译或帮助服务。');
-<<<<<<< HEAD
   if(isSubscriptionKind(state.settings.providerKind))throw new Error('当前登录服务暂不支持继续追问，请在设置里改用 API 服务。');
-=======
-  if(state.settings.providerKind==='chatgpt')throw new Error('当前登录服务暂不支持继续追问，请在设置里改用 API 服务。');
->>>>>>> 54d6cae (Fix conversation privacy, storage races, and provider disconnect)
   const persist=Boolean(conversationStore)&&!source.incognito,startedAt=Date.now();
   const flight={stopped:false};conversationFlights.set(turnId,flight);
   let answer='',checkpoint=0;
