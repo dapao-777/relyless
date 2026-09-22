@@ -35,7 +35,7 @@ RelyLess 是一个面向英语阅读的 Chrome / Edge 扩展。它保留网页�
 - 本页双语翻译按阅读位置推进；表格和卡片原位对应，失败段落可单独重试，随时返回英文。
 - 可配置提示密度、查词方式、显示样式、领域识别、固定术语和网站规则。
 - 阅读记录、摘要与远程个性化分析需明确开启；本地求助词档案默认开启，可关闭或清理。
-- 模型服务可选择自备 API，或在 macOS / Linux 上通过本机连接器使用官方 Codex CLI 可访问的 ChatGPT 订阅权益。
+- 模型服务可选择自备 API，或通过本机连接器使用官方 CLI 访问 ChatGPT、Grok、Google（Antigravity）订阅权益。
 - 内置本地领域识别模型，随扩展提供，不需要首次运行时另行下载。
 
 模型输出不是事实保证。网络、额度、权限、模型兼容性、内容安全策略和响应格式都可能导致请求失败；失败时不应把未确认结果当作可靠翻译。
@@ -79,33 +79,65 @@ Release 包已经包含运行所需文件和本地模型，不包含源码开发
 
 API 的账户、费用、额度、地区可用性、数据处理条款和所需权限均由你与服务商负责。RelyLess 不附带 API 额度，也不承诺第三方服务免费、持续可用或不留存数据。
 
-Windows 上可以使用浏览器扩展的 API 路径，但本项目尚未完整验证 Windows 平台体验；下述 ChatGPT 订阅连接器安装程序不支持 Windows。
+在 macOS / Linux 上支持 ChatGPT 订阅连接器；在 macOS / Linux / Windows 上均支持 Grok 及 Google（Antigravity）订阅连接器。自备 API 在所有受支持的浏览器平台上均可直接使用。
 
-### ChatGPT 订阅连接器（macOS / Linux）
+### 订阅连接器
+
+RelyLess 支持通过 Native Messaging 本机连接器对接官方 CLI，直接利用你的现有 AI 订阅权益。
+
+#### 1. ChatGPT 订阅连接器（macOS / Linux）
 
 连接器要求：
-
 - macOS 或 Linux；
 - Node.js 20 或更新版本；
 - 官方 [OpenAI Codex CLI](https://github.com/openai/codex)，且 `codex --version` 可正常运行。
 
-可先安装 Codex CLI：
-
+安装 Codex CLI：
 ```sh
 npm install -g @openai/codex
 ```
 
-然后在解压包根目录运行安装程序。必须把下面的占位符换成扩展管理页显示的、**你自己的实际扩展 ID**：
-
+在解压包或项目根目录运行安装程序。必须把下面的占位符换成扩展管理页显示的、**你自己的实际扩展 ID**：
 ```sh
 node connector/install.mjs --extension-id <YOUR_ACTUAL_EXTENSION_ID>
 ```
 
-不要复制他人的扩展 ID，也不要把任何特定电脑上的 ID 写进脚本或公开配置。默认会为 Chrome 和 Edge 注册连接器；可用 `--browser chrome`、`--browser edge` 或逗号分隔的列表限制目标浏览器。安装后重新加载扩展，在“模型服务”中点击“刷新账户与模型”，并按需完成 ChatGPT 登录。
+#### 2. Grok 订阅连接器（macOS / Linux / Windows）
 
-移动扩展目录后，浏览器可能生成新 ID；此时必须使用新的实际 ID 重新安装连接器。更稳妥的升级方式是始终保留原目录位置。连接器安装程序实现了 macOS / Linux 的 Native Messaging 注册，目前以 macOS 实测为主；Linux 仍需更多验证，Windows 安装不受支持。
+连接器要求：
+- macOS、Linux 或 Windows；
+- Node.js 20 或更新版本；
+- 官方 Grok CLI（`@xai-official/grok`），且 `grok --version` 可正常运行；
+- 拥有 SuperGrok 或 X Premium+ 订阅，并已通过 CLI 登录（`grok auth login`）。
 
-ChatGPT 订阅是否包含可用 Codex 权益、可选模型和调用额度由 OpenAI 账户状态决定，订阅不等于无限或保证可用。
+安装 Grok CLI：
+```sh
+npm install -g @xai-official/grok
+```
+
+运行安装程序（指定 `--backend grok`）：
+```sh
+node connector/install.mjs --extension-id <YOUR_ACTUAL_EXTENSION_ID> --backend grok
+```
+
+#### 3. Google 订阅连接器（macOS / Linux / Windows）
+
+连接器要求：
+- macOS、Linux 或 Windows；
+- Node.js 20 或更新版本；
+- Google Antigravity CLI（`agy`），且 `agy --version` 可正常运行；
+- 拥有 Google AI Pro 或 Ultra 订阅，并已通过 CLI 完成账户登录。
+
+运行安装程序（指定 `--backend antigravity`）：
+```sh
+node connector/install.mjs --extension-id <YOUR_ACTUAL_EXTENSION_ID> --backend antigravity
+```
+
+#### 连接器通用说明
+
+不要复制他人的扩展 ID，也不要把任何特定电脑上的 ID 写进脚本或公开配置。默认会为 Chrome 和 Edge 注册连接器；可用 `--browser chrome`、`--browser edge` 或逗号分隔的列表限制目标浏览器。安装后重新加载扩展，在“模型服务”中选择对应订阅并点击“刷新账户与模型”，并按需完成登录。
+
+移动扩展目录后，浏览器可能生成新 ID；此时必须使用新的实际 ID 重新安装连接器。更稳妥的升级方式是始终保留原目录位置。订阅是否包含可用模型和调用额度由各服务商账户状态决定，订阅不等于无限或保证可用。
 
 ## 数据与隐私
 
@@ -156,7 +188,7 @@ npm run release:package
 目录概览：
 
 - `extension/`：Manifest V3 扩展、界面、本地模型与运行时资源。
-- `connector/`：ChatGPT 订阅 Native Messaging 连接器。
+- `connector/`：ChatGPT、Grok 及 Google（Antigravity）订阅 Native Messaging 连接器。
 - `tests/`：由 Bun 运行的回归测试。
 - `tools/`：本地模型、词频、演示和发布包构建脚本。
 - `docs/`：项目设计资料。

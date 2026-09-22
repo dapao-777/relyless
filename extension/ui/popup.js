@@ -57,7 +57,7 @@ function popupRender(){
   if(!supported){popupSetLive(popupEls.status,'此页不可用');popupEls.toggleLabel.textContent='当前页不可用';popupEls.pageNote.textContent='请在普通网页主文档中使用。';}
   else if(popupEnabled){popupSetLive(popupEls.status,'本页已开启');popupEls.toggleLabel.textContent='暂停本页';popupEls.pageNote.textContent=popupState?.settings?.assistanceMode==='on-demand'?'当前为仅在需要时；保留主动求助。':'保留英文，只在当前位置提供少量支撑。';}
   else{popupSetLive(popupEls.status,popupAutomation?.paused?'本页已暂停':'等待开启');popupEls.toggleLabel.textContent=popupAutomation?.paused?'继续辅助':'开启本页';popupEls.pageNote.textContent='开启不会改变网站的长期授权规则。';}
-  const serviceProblem=popupState?.providerError||(popupState?.settings?.providerKind==='chatgpt'?popupState?.subscription?.error:'')||(!popupState?.providerConfigured?'辅助服务尚未连接。':'');
+  const serviceProblem=popupState?.providerError||(['chatgpt','grok','antigravity'].includes(popupState?.settings?.providerKind)?popupState?.subscription?.error:'')||(!popupState?.providerConfigured?'辅助服务尚未连接。':'');
   popupEls.serviceWarning.hidden=!serviceProblem;
   popupEls.serviceWarningCopy.textContent=serviceProblem||'';
   popupEls.sentenceGroups.checked=Boolean(popupSentenceGroupsLoaded&&popupSentenceGroups.enabled);
