@@ -14,6 +14,7 @@ export const API_PROVIDERS = [
   {id:'google',name:'Gemini',protocol:'google',baseUrl:'https://generativelanguage.googleapis.com/v1beta',defaultModel:'gemini-2.5-flash-lite',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'anthropic',name:'Anthropic',protocol:'anthropic',baseUrl:'https://api.anthropic.com/v1',defaultModel:'claude-haiku-4-5',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'xai',name:'Grok',protocol:'responses',baseUrl:'https://api.x.ai/v1',defaultModel:'grok-4.20-0309-non-reasoning',apiKeyUrl:'',keyOptional:false,fields:[]},
+  {id:'requesty',name:'Requesty · Jev 判定',protocol:'jev',baseUrl:'https://router.requesty.ai/v1',defaultModel:'typesafe/jev-1.13.0',apiKeyUrl:'https://app.requesty.ai',keyOptional:false,fields:[]},
   {id:'openai-compatible',name:'自定义 Chat Completions',protocol:'chat',baseUrl:'https://api.example.com/v1',defaultModel:'',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'open-responses',name:'自定义 Responses',protocol:'responses',baseUrl:'https://api.example.com/v1/responses',defaultModel:'',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'jalapenocloud',name:'Jalapeno Cloud',protocol:'chat',baseUrl:'https://api.jalapeno-cloud.ai/v1',defaultModel:'GLM-5.2',apiKeyUrl:'',keyOptional:false,fields:[]},

@@ -285,3 +285,42 @@ test('invalid_schema after a valid probe is a request failure, not evidence for 
   await expect(performProviderRequest(service('openai-compatible','https://formal-invalid-schema.example.test/v1','formal-invalid-schema-model'),{},'Explain.',schema)).rejects.toBeDefined();
   expect(bodies).toHaveLength(2);expect(bodies[1].response_format?.json_schema?.name).toBe('result');expect(bodies.some(body=>body.response_format?.type==='json_object')).toBe(false);
 });
+
+const jevService = (reply, overrides = {}) => ({
+  id: 'domain-detection-jev', name: 'Jev 领域识别', providerId: 'requesty',
+  baseUrl: 'https://router.requesty.ai/v1', model: 'typesafe/jev-1.13.0', apiKey: 'jev-key', ...overrides,
+});
+
+test('the jev protocol posts questions and normalizes choice, score, and probability answers', async () => {
+  let body = null;
+  globalThis.fetch = async (_url, init) => { body = JSON.parse(init.body); return Response.json({choices: [{finish_reason: 'stop', message: {content: JSON.stringify({domain: {selected: 'tech', confidence: 0.83}, tone: {score: 7.5}, enough: {probability: '0.42'}})}}]}); };
+  const questions = {
+    domain: {type: 'choice', instructions: 'Pick one domain.', criteria: {tech: 'software and AI', general: 'everything else'}},
+    tone: {type: 'score', instructions: 'Rate the tone.'},
+    enough: {type: 'noul', instructions: 'Is there enough context?'},
+  };
+  const result = await performProviderRequest(jevService(), {state: 'Title: T\n\nPassage:\nThe query uses an index.', questions}, undefined, undefined, {});
+  expect(body.model).toBe('typesafe/jev-1.13.0');
+  expect(body.response_format).toEqual({type: 'questions', questions});
+  expect(body.messages).toEqual([{role: 'user', content: 'Title: T\n\nPassage:\nThe query uses an index.'}]);
+  expect(result).toEqual({
+    answers: {
+      domain: {kind: 'choice', selected: 'tech', confidence: 0.83, probabilities: null},
+      tone: {kind: 'score', score: 7.5},
+      enough: {kind: 'noul', probability: 0.42},
+    },
+  });
+});
+
+test('the jev protocol rejects empty state, malformed questions, and invalid answers', async () => {
+  const questions = {domain: {type: 'choice', instructions: 'Pick one.'}};
+  globalThis.fetch = async () => Response.json({choices: [{finish_reason: 'stop', message: {content: 'not json'}}]});
+  await expect(performProviderRequest(jevService(), {state: '   ', questions}, undefined, undefined, {})).rejects.toMatchObject({code: 'JEV_EMPTY'});
+  await expect(performProviderRequest(jevService(), {state: 'text', questions: {}}, undefined, undefined, {})).rejects.toMatchObject({code: 'JEV_QUESTIONS'});
+  await expect(performProviderRequest(jevService(), {state: 'text', questions: {a: {type: 'choice', instructions: ' '}}}, undefined, undefined, {})).rejects.toMatchObject({code: 'JEV_QUESTIONS'});
+  await expect(performProviderRequest(jevService(), {state: 'text', questions}, undefined, undefined, {})).rejects.toMatchObject({code: 'JEV_FORMAT'});
+  globalThis.fetch = async () => Response.json({choices: [{finish_reason: 'stop', message: {content: '{"domain": {"selected": ""}}'}}]});
+  await expect(performProviderRequest(jevService(), {state: 'text', questions}, undefined, undefined, {})).rejects.toMatchObject({code: 'JEV_ANSWER'});
+  globalThis.fetch = async () => Response.json({choices: [{finish_reason: 'stop', message: {content: '{"domain": {"probability": 1.7}}'}}]});
+  await expect(performProviderRequest(jevService(), {state: 'text', questions: {domain: {type: 'noul', instructions: 'x'}}}, undefined, undefined, {})).rejects.toMatchObject({code: 'JEV_ANSWER'});
+});

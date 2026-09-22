@@ -1096,3 +1096,15 @@ test('pausing automatic support during capability detection never sends the arti
   }finally{gate.resolve();await pending;globalThis.chrome=previous;globalThis.fetch=previousFetch;}
 });
 
+
+test('domain detection accepts a jev mode with bounded fields', async () => {
+  const fixture=isolatedChrome({wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'chatgpt',domainDetection:{mode:'local',subscriptionModel:'',apiModel:'',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevModel:'typesafe/jev-1.13.0',jevApiKey:'',jevBaseUrl:'https://router.requesty.ai/v1'}}},{id:'jev-settings'});
+  globalThis.chrome=fixture.api;
+  await import(`../extension/background.js?jev-settings=${Date.now()}`);
+  const send=(message,sender=pageSender)=>new Promise((resolve,reject)=>runtimeMessage.listeners[0](message,sender,response=>response.ok?resolve(response.data):reject(new Error(response.error))));
+  const saved=await send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevModel:'typesafe/jev-1.13.0',jevApiKey:'jev-secret',jevBaseUrl:'https://router.requesty.ai/v1'}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'});
+  expect(saved.settings.domainDetection).toMatchObject({mode:'jev',jevModel:'typesafe/jev-1.13.0',jevApiKey:'jev-secret',jevBaseUrl:'https://router.requesty.ai/v1'});
+  await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevApiKey:'x'.repeat(4097)}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('Jev API Key');
+  await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'nope',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''}}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('无效的领域识别配置');
+  globalThis.chrome=chromeBefore;
+});

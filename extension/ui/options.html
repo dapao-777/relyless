@@ -582,8 +582,30 @@
 <small>使用单独或现有 API</small>
 </span>
 </label>
+            <label>
+<input type="radio" name="domain-detection-mode" value="jev">
+<span>
+<b>Jev 判定</b>
+<small>Requesty 结构化判定，密钥单独填写</small>
+</span>
+</label>
           </div>
-</fieldset>
+</fieldset>          <div id="detection-jev" class="form-stack" hidden="">
+<label class="field">
+<span>Jev 模型</span>
+<input id="detection-jev-model" autocomplete="off" placeholder="typesafe/jev-1.13.0">
+</label>
+<label class="field">
+<span>接口地址</span>
+<input id="detection-jev-url" type="url" autocomplete="off" placeholder="https://router.requesty.ai/v1">
+</label>
+<label class="field">
+<span>API Key</span>
+<input id="detection-jev-key" type="password" autocomplete="off">
+<small id="detection-jev-key-state">支持填入 Requesty 控制台 API Key 或兼容端点密钥。</small>
+</label>
+<button id="clear-detection-jev-key" class="secondary-button narrow" type="button">清除已保存的 Jev 密钥</button>
+</div>
           <div id="detection-chatgpt" hidden="">
 <label class="field">
 <span>识别模型</span>

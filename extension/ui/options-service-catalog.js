@@ -30,6 +30,7 @@ const PROVIDER_CATALOG_META = {
   google: {category: 'popular', desc: 'Gemini 系列官方接口，高吞吐低延迟', website: 'https://aistudio.google.com/app/apikey'},
   anthropic: {category: 'popular', desc: 'Claude 系列官方 API 接口', website: 'https://console.anthropic.com/settings/keys'},
   xai: {category: 'popular', desc: 'xAI 官方 Grok API 接口', website: 'https://console.x.ai'},
+  requesty: {category: 'popular', desc: 'Requesty 路由上的 Jev 判定模型，结构化领域识别', website: 'https://app.requesty.ai'},
   minimax: {category: 'domestic', desc: 'MiniMax 系列国内多模态大模型', website: 'https://platform.minimaxi.com'},
   siliconflow: {category: 'domestic', desc: '多模型聚合平台，DeepSeek 与 Qwen 开源全家桶', website: 'https://cloud.siliconflow.cn'},
   volcengine: {category: 'domestic', desc: '火山引擎豆包大模型官方接口', website: 'https://console.volcengine.com/ark'},

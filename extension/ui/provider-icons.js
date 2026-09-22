@@ -8,6 +8,7 @@ const ICON_FALLBACK = Object.freeze({
   'openai-compatible': 'custom-api',
   'open-responses': 'custom-api',
   jalapenocloud: 'custom-api',
+  requesty: 'custom-api',
   tensdaq: 'custom-api',
 });
 
