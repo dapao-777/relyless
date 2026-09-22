@@ -36,7 +36,9 @@ const assistPayload = () => ({result: {level: 'hint', hint: 'a short gloss', sen
 const assistReply = init => { let body = null; try { body = JSON.parse(init?.body || 'null'); } catch {}
   const payload = JSON.stringify(assistPayload());
   return body?.text?.format ? Response.json({status: 'completed', output_text: payload}) : Response.json({choices: [{finish_reason: 'stop', message: {content: payload}}]}); };
-
+const conversationReply = init => { let body = null; try { body = JSON.parse(init?.body || 'null'); } catch {}
+  const payload = JSON.stringify({answer:'It refers to the database index in this sentence.'});
+  return body?.text?.format ? Response.json({status:'completed',output_text:payload}) : Response.json({choices:[{finish_reason:'stop',message:{content:payload}}]}); };
 test('a premium judgment routes the assist request to the premium service', async () => {
   const fixture = routingFixture();
   globalThis.chrome = fixture.api;
@@ -61,6 +63,26 @@ test('a premium judgment routes the assist request to the premium service', asyn
   expect(stats.routing.escalated).toBeGreaterThanOrEqual(1);
   expect(stats.routing.judged).toBeGreaterThanOrEqual(1);
   globalThis.chrome = chromeBefore;
+});
+test('a premium judgment routes a conversation request without changing the saved default', async () => {
+  const fixture = routingFixture();
+  globalThis.chrome = fixture.api;
+  const seen = [];
+  globalThis.fetch = withCapabilityProbe(async (url, init) => {
+    seen.push(String(url));
+    if (String(url).includes('router.requesty.ai')) return judgeReply('premium', 0.4);
+    return conversationReply(init);
+  });
+  try {
+    await import(`../extension/background.js?routing-conversation=${Date.now()}`);
+    const result = await isolatedSend(fixture, {
+      type:'CONVERSATION_ASK',sessionId:'a'.repeat(64),turnId:'11111111-1111-1111-1111-111111111111',
+      text:'index',context:'The database query uses an index.',domain:'tech',kind:'word',level:'hint',history:[],question:'What does index mean here?',
+    }, pageSender);
+    expect(result.answer).toBe('It refers to the database index in this sentence.');
+    expect(seen.some(url => url.includes('premium.example'))).toBe(true);
+    expect(fixture.local.settings.activeApiServiceId).toBe(primary.id);
+  } finally { globalThis.chrome = chromeBefore; }
 });
 
 test('a routine judgment keeps the primary service and caches the decision', async () => {
