@@ -630,7 +630,8 @@
 <h2 id="service-heading" class="sr-only">模型服务</h2>
 <p>连接一个模型服务即可使用。API 调用可能由服务商收费。</p>
 </div>
-      <fieldset class="provider-picker">
+      <!-- 兼容保留底层服务单选民态：由目录工作区代为用户选择，核心逻辑与既有保存链路不变 -->
+      <fieldset class="provider-picker" hidden="" aria-hidden="true">
 <legend>服务来源</legend>
 <div class="choice-cards two provider-choices">
 <label>
@@ -663,6 +664,52 @@
 </label>
 </div>
 </fieldset>
+      <div class="service-catalog-workspace">
+<div class="catalog-layout">
+          <aside class="service-rail" aria-label="模型服务目录">
+<div class="rail-heading">
+<div>
+<strong>模型服务</strong>
+<span class="service-count" id="catalog-service-count">0</span>
+</div>
+<button type="button" class="service-add-button" id="catalog-add-btn">
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+<span>自定义服务</span>
+</button>
+</div>
+            <label class="catalog-search" for="catalog-search-input">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>
+<input type="search" id="catalog-search-input" placeholder="搜索所有模型服务..." autocomplete="off">
+</label>
+            <div class="service-groups" id="catalog-directory-list"></div>
+</aside>
+          <section class="service-detail" aria-label="当前模型服务配置">
+            <div class="detail-hero">
+<div class="detail-hero-left">
+<div class="detail-hero-icon-box" id="catalog-hero-icon">
+<img class="detail-hero-icon" src="../icons/providers/openai.svg" alt="" width="30" height="30">
+</div>
+<div class="detail-heading">
+<div class="detail-title-row">
+<h4 id="catalog-hero-title">ChatGPT 订阅</h4>
+<span class="catalog-active-badge" id="catalog-hero-active-badge" hidden="">当前默认</span>
+<button type="button" class="catalog-set-default-btn" id="catalog-hero-set-default" hidden="">设为默认使用</button>
+<a id="catalog-hero-website" class="service-website-link" href="#" target="_blank" rel="noopener noreferrer" hidden="">
+<span>获取密钥 / 官方说明</span>
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 3h7v7M21 3 10 14M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5"/></svg>
+</a>
+</div>
+<p id="catalog-hero-desc" class="catalog-hero-desc"></p>
+</div>
+</div>
+              <div class="hero-connection-action">
+<button type="button" class="catalog-check-btn" id="catalog-check-conn-btn">
+<svg class="check-spin-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+<span id="catalog-check-btn-label">检查连接</span>
+</button>
+</div>
+</div>
+            <div class="detail-content-body">
       <div id="subscription-panel" class="provider-panel">
 <div class="paper-card subscription-card">
 <div class="subscription-summary">
@@ -804,6 +851,10 @@
 </details>
 <p id="provider-result" class="inline-message" aria-live="polite">
 </p>
+        </div>
+      </div>
+            </div>
+          </section>
         </div>
       </div>
       <aside class="privacy-note">
