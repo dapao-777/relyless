@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { chmod, mkdir, rm } from "node:fs/promises";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { cliSpawnTarget } from "./cli-spawn.mjs";
 import {
   SOURCE_DATA_INSTRUCTIONS,SUPPORT_INSTRUCTIONS,SUPPORT_CORRECTION_INSTRUCTIONS,SUPPORT_SCHEMA,normalizeSupportProviderItems,inspectSupportResponse,normalizeSupportCorrections,normalizePreparationContext,
   ASSISTANCE_INSTRUCTIONS,assistanceSchema,normalizeAssistanceRequest,normalizeAssistanceResult,
@@ -261,11 +262,13 @@ export class AntigravityClient extends EventEmitter {
     return new Promise((resolvePromise, rejectPromise) => {
       let child;
       try {
-        child = this.spawnImpl(this.agyPath, args, {
+        const target = cliSpawnTarget(this.agyPath, args);
+        child = this.spawnImpl(target.command, target.args, {
           cwd: this.workDir,
           env: this.#env(),
           stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
+          ...target.options,
         });
       } catch (error) {
         rejectPromise(errorWithDiagnostic('无法启动 Antigravity CLI，请检查安装。', 'STARTUP_FAILED'));

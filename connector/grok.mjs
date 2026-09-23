@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { cliSpawnTarget } from "./cli-spawn.mjs";
 import {
   SOURCE_DATA_INSTRUCTIONS,SUPPORT_INSTRUCTIONS,SUPPORT_CORRECTION_INSTRUCTIONS,SUPPORT_SCHEMA,normalizeSupportProviderItems,inspectSupportResponse,normalizeSupportCorrections,normalizePreparationContext,
   ASSISTANCE_INSTRUCTIONS,assistanceSchema,normalizeAssistanceRequest,normalizeAssistanceResult,
@@ -354,11 +355,13 @@ export class GrokClient extends EventEmitter {
     return new Promise((resolvePromise, rejectPromise) => {
       let child;
       try {
-        child = this.spawnImpl(this.grokPath, args, {
+        const target = cliSpawnTarget(this.grokPath, args);
+        child = this.spawnImpl(target.command, target.args, {
           cwd: this.workDir,
           env: this.#env(),
           stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
+          ...target.options,
         });
       } catch (error) {
         rejectPromise(errorWithDiagnostic('无法启动 Grok CLI，请检查安装。', 'STARTUP_FAILED'));
@@ -479,11 +482,13 @@ export class GrokClient extends EventEmitter {
     this.loginError = null;
     let child;
     try {
-      child = this.spawnImpl(this.grokPath, ['login', '--device-auth'], {
+      const target = cliSpawnTarget(this.grokPath, ['login', '--device-auth']);
+      child = this.spawnImpl(target.command, target.args, {
         cwd: this.workDir,
         env: this.#env(),
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
+        ...target.options,
       });
     } catch {
       throw errorWithDiagnostic('无法启动 Grok 登录，请检查 Grok CLI 安装。', 'STARTUP_FAILED');
