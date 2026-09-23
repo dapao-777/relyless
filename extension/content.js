@@ -1048,7 +1048,7 @@
       const stored={...result};record.target.manualAssists={...(record.target.manualAssists||{}),[level]:stored};
       let support=result.support;
       if(result.source==='prepared'&&!support)await request('HISTORY_COMMIT',{requestId});
-      else if(result.source==='provider'||result.source==='prepared'){const adopted=await request('ASSIST_COMMIT',{requestId});support=adopted.support||support;}
+      else if(result.source==='provider'||result.source==='prepared'||result.source==='cache'){const adopted=await request('ASSIST_COMMIT',{requestId});support=adopted.support||support;}
       if(!current())return;stored.support=support;record.target.manualSupport=support;
       if(support){Object.assign(record.target,support);state.assisted.add(identity(support));syncRecordPresentation(record);}
       if(lookup.inlineRequestId===requestId)setPageStatus('lookup',null);
@@ -1071,8 +1071,8 @@
     const prepared=(!manualCached||manualCached.source==='prepared')&&view.target.kind!=='passage'&&!view.target.sourceKey&&Boolean(cached?.details?.meaning?.zh&&cached?.details?.sentenceTranslation);
     let fullFinished=false;
     if(cardCurrent()){
-      if(cachedAnswer?.trim()&&!cachedReference&&detail==='full'){showDetails(view,cached.details,cachedAnswer);view.confirmedDisplayed=true;view.fullDetails=cached.details;view.note.textContent=cached.referenceNotice||'';positionCard(view);}
-      else if(cachedAnswer?.trim()){view.explanation.replaceChildren();view.answer.textContent=cachedAnswer;view.note.textContent=cachedReference?(cached.referenceNotice||'旧参考义，未经当前语境确认。'):'';view.referenceDisplayed=cachedReference;positionCard(view);}
+      if(cachedAnswer?.trim()&&!cachedReference&&detail==='full'){showDetails(view,cached.details,cachedAnswer);view.confirmedDisplayed=true;view.fullDetails=cached.details;view.note.textContent=cached.cacheNotice||cached.referenceNotice||'';positionCard(view);}
+      else if(cachedAnswer?.trim()){view.explanation.replaceChildren();view.answer.textContent=cachedAnswer;view.note.textContent=cachedReference?(cached.referenceNotice||'旧参考义，未经当前语境确认。'):(cached.cacheNotice||'');view.referenceDisplayed=cachedReference;positionCard(view);}
       else view.answer.textContent=prepared?'正在读取已准备的帮助…':detail==='full'?'正在请求详细解释…':'正在请求简释…';
     }
     if(prior?.senseKey){state.assisted.add(identity(prior));if(record){attachRecordHint(record);record.stage='hint';if(state.card!==view)view.target.anchor=record.range.cloneRange();}}
@@ -1092,7 +1092,7 @@
       if(!current()){reportResult(result,'cancelled');return;}view.assistFinished=true;const answer=level==='rescue'?result.translation:result.hint;
       if(answer===null){
         view.sentenceTranslation.textContent='上下文不足，未能获取本句翻译。';
-        if(cardCurrent()){view.progressBackup=null;view.hasUnconfirmedProgress=false;view.confirmedDisplayed=false;view.explanation.replaceChildren();view.answer.textContent='上下文不足，请选择包含该表达的句子';view.note.textContent=result.referenceNotice||'';reportResult(result,'ok');}
+        if(cardCurrent()){view.progressBackup=null;view.hasUnconfirmedProgress=false;view.confirmedDisplayed=false;view.explanation.replaceChildren();view.answer.textContent='上下文不足，请选择包含该表达的句子';view.note.textContent=result.cacheNotice||result.referenceNotice||'';reportResult(result,'ok');}
         else reportResult(result,'cancelled');
         return;
       }
@@ -1102,11 +1102,11 @@
       if(record&&confirmed&&detail==='brief'){
         record.target[level==='rescue'?'translation':'hint']=answer;record.language=level==='rescue'?'zh':'en';record.stage='hint';attachRecordHint(record);
         if(state.card!==view)view.target.anchor=record.range.cloneRange();
-        stored={...result,level,[level==='rescue'?'translation':'hint']:answer,support:result.support||null};record.target.manualAssists={...(record.target.manualAssists||{}),[level]:stored};view.target.manualAssists=record.target.manualAssists;if(result.source==='provider')view.target.prepared=null;
+        stored={...result,level,[level==='rescue'?'translation':'hint']:answer,support:result.support||null};record.target.manualAssists={...(record.target.manualAssists||{}),[level]:stored};view.target.manualAssists=record.target.manualAssists;if(result.source==='provider'||result.source==='cache')view.target.prepared=null;
       }
       if(!current()){reportResult(result,'cancelled');return;}
-      if(cardCurrent()&&confirmed&&detail==='full'){view.progressBackup=null;view.hasUnconfirmedProgress=false;view.answer.textContent=answer;view.fullDetails=result.details||(prepared?cached.details:null);view.fullResult=result;showDetails(view,view.fullDetails,answer);view.confirmedDisplayed=true;view.note.textContent=result.referenceNotice||'';positionCard(view);}
-      else if(cardCurrent()&&confirmed){view.progressBackup=null;view.hasUnconfirmedProgress=false;view.explanation.replaceChildren();view.answer.textContent=answer;view.sentenceTranslation.textContent=view.fullDetails?.sentenceTranslation||'展开后获取本句翻译。';if(view.sentence.open&&view.fullDetails)showDetails(view,view.fullDetails,answer);view.confirmedDisplayed=true;view.note.textContent=result.referenceNotice||'';positionCard(view);}
+      if(cardCurrent()&&confirmed&&detail==='full'){view.progressBackup=null;view.hasUnconfirmedProgress=false;view.answer.textContent=answer;view.fullDetails=result.details||(prepared?cached.details:null);view.fullResult=result;showDetails(view,view.fullDetails,answer);view.confirmedDisplayed=true;view.note.textContent=result.cacheNotice||result.referenceNotice||'';positionCard(view);}
+      else if(cardCurrent()&&confirmed){view.progressBackup=null;view.hasUnconfirmedProgress=false;view.explanation.replaceChildren();view.answer.textContent=answer;view.sentenceTranslation.textContent=view.fullDetails?.sentenceTranslation||'展开后获取本句翻译。';if(view.sentence.open&&view.fullDetails)showDetails(view,view.fullDetails,answer);view.confirmedDisplayed=true;view.note.textContent=result.cacheNotice||result.referenceNotice||'';positionCard(view);}
       else if(cardCurrent()){view.progressBackup=null;view.hasUnconfirmedProgress=false;view.explanation.replaceChildren();view.answer.textContent=answer;view.sentenceTranslation.textContent='旧参考义，尚未按当前句完整确认。';view.note.textContent=result.referenceNotice||'旧参考义，未经当前语境确认。';view.referenceDisplayed=true;positionCard(view);}
       else if(!record?.hint?.isConnected){reportResult(result,'cancelled');return;}
       reportResult(result,'ok');
@@ -1395,7 +1395,7 @@
     result.phase=!session.active?session.phase:session.running||session.units.some(unit=>unit.state==='queued'||unit.state==='translating')?'translating':result.failed?'partial':result.pending?'waiting':'complete';if(session.error)result.error=session.error;return result;
   }
   function updateEmergencyStatus(session){
-    if(state.emergency!==session)return;const value=emergencyStatus();setPageStatus('emergency','已译 '+value.completed+' / 已识别 '+value.total+' 段'+(value.failed?' · 失败 '+value.failed:'')+(value.pending?' · 待阅读 '+value.pending:'')+(value.skipped?' · 跳过 '+value.skipped:'')+(!session.active?' · '+(session.error||'已停止'):''),{busy:value.phase==='translating',error:value.phase==='error'});
+    if(state.emergency!==session)return;const value=emergencyStatus();setPageStatus('emergency','已译 '+value.completed+' / 已识别 '+value.total+' 段'+(value.failed?' · 失败 '+value.failed:'')+(value.pending?' · 待阅读 '+value.pending:'')+(value.skipped?' · 跳过 '+value.skipped:'')+(session.cacheHits?' · 缓存 '+session.cacheHits:'')+(!session.active?' · '+(session.error||'已停止'):''),{busy:value.phase==='translating',error:value.phase==='error'});
   }
   function retryEmergency(unit){
     const session=state.emergency;if(!session?.active)return status();for(const target of unit?[unit]:session.units){if(target.state!=='failed')continue;target.state='deferred';session.containers.get(target)?.error?.remove();const entry=session.containers.get(target);if(entry)entry.error=null;}void runEmergency(session);return status();
@@ -1474,7 +1474,7 @@
         if(!result||!Array.isArray(result.items)||!Array.isArray(result.errors))throw new Error('全文翻译协议不兼容，请同时更新扩展与连接器。');
         const byId=new Map(result.items.map(item=>[item.id,item.translation])),failures=new Map(result.errors.map(item=>[item.id,item.code]));
         if(byId.size!==result.items.length||failures.size!==result.errors.length||byId.size+failures.size!==batch.length||batch.some(item=>byId.has(item.id)===failures.has(item.id)))throw new Error('全文翻译结果映射无效。');
-        for(const item of batch){const unit=item.unit;if(failures.has(item.id)){unit.state='failed';renderEmergencyFailure(unit,session);continue;}renderEmergencyChunk(item,byId.get(item.id),session);unit.done.add(item.index);unit.state=unit.done.size===unit.chunks.length?'complete':'deferred';}reportResult(result,result.errors.length?'error':'ok');
+        session.cacheHits=(session.cacheHits||0)+(result?.cacheHits||0);for(const item of batch){const unit=item.unit;if(failures.has(item.id)){unit.state='failed';renderEmergencyFailure(unit,session);continue;}renderEmergencyChunk(item,byId.get(item.id),session);unit.done.add(item.index);unit.state=unit.done.size===unit.chunks.length?'complete':'deferred';}reportResult(result,result.errors.length?'error':'ok');
       }catch(error){reportResult(result,error.code==='STALE'||error.code==='CANCELLED'?'cancelled':'error');if(session.active&&state.emergency===session&&generation===session.generation&&!pending.cancelled){finishEmergency(false,true);session.phase='error';session.error=error.message;}}
       finally{if(emergencyPending===pending)emergencyPending=null;for(const item of batch)if(item.unit.state==='translating')item.unit.state='deferred';}
     }}finally{session.running=false;updateEmergencyStatus(session);const current=state.emergency;if(current?.active&&current!==session)scheduleEmergency(current);}
@@ -1612,7 +1612,7 @@
    }
    if(message?.type==='SS_SET_SENTENCE_DENSITY'){try{respond({ok:true,data:applySentenceDensity(message.density)});}catch(error){respond({ok:false,error:error.message});}return false;}
    if(message?.type==='SS_SET_SENTENCE_LINE_STYLE'){try{respond({ok:true,data:applySentenceLineStyle(message.lineStyle)});}catch(error){respond({ok:false,error:error.message});}return false;}
-   let operation;if(message?.type==='SS_STATUS')operation=Promise.resolve(status());else if(message?.type==='SS_SET_ENABLED')operation=setManualEnabled(message.enabled);else if(message?.type==='SS_SET_SENTENCE_GROUPS')operation=setSentenceGroups(message.enabled);else if(message?.type==='SS_AUTO_START')operation=applyAutomation(message);else if(message?.type==='SS_REFRESH')operation=refresh();else if(message?.type==='SS_COPY_PARAGRAPH')operation=ShisuiCopy.copyParagraph(message.source);else if(message?.type==='SS_CONTEXT_HELP')operation=contextHelp(message.selectionText);else if(message?.type==='SS_PASSAGE_ACTION')operation=runPassageAction();else if(message?.type==='SS_EMERGENCY_START')operation=Promise.resolve().then(()=>startEmergency(message.token,message.resume));else if(message?.type==='SS_EMERGENCY_RETRY')operation=Promise.resolve().then(()=>retryEmergency());else if(message?.type==='SS_EMERGENCY_STOP')operation=Promise.resolve().then(()=>{finishEmergency(false,true);return status();});else if(message?.type==='SS_EMERGENCY_END')operation=Promise.resolve().then(()=>{if(!message.navigation||state.emergency?.source!==message.url)finishEmergency(true,true);return status();});else if(message?.type==='SS_VIDEO_SETTINGS'){state.settings.video=message.video;mountVideoTool();operation=Promise.resolve(status());}else return false;
+   let operation;if(message?.type==='SS_STATUS')operation=Promise.resolve(status());else if(message?.type==='SS_SET_ENABLED')operation=setManualEnabled(message.enabled);else if(message?.type==='SS_SET_SENTENCE_GROUPS')operation=setSentenceGroups(message.enabled);else if(message?.type==='SS_AUTO_START')operation=applyAutomation(message);else if(message?.type==='SS_REFRESH')operation=refresh();else if(message?.type==='SS_COPY_PARAGRAPH')operation=ShisuiCopy.copyParagraph(message.source);else if(message?.type==='SS_CONTEXT_HELP')operation=contextHelp(message.selectionText);else if(message?.type==='SS_PASSAGE_ACTION')operation=runPassageAction();else if(message?.type==='SS_EMERGENCY_COUNT')operation=Promise.resolve().then(()=>{const root=resolveReadingRoot()?.element||document.querySelector('article')||document.querySelector('main,[role="main"]')||document.body;return {ok:true,chars:emergencyBlocks(root).filter(unit=>!unit.skipped).reduce((sum,unit)=>sum+unit.text.length,0)};});else if(message?.type==='SS_EMERGENCY_START')operation=Promise.resolve().then(()=>startEmergency(message.token,message.resume));else if(message?.type==='SS_EMERGENCY_RETRY')operation=Promise.resolve().then(()=>retryEmergency());else if(message?.type==='SS_EMERGENCY_STOP')operation=Promise.resolve().then(()=>{finishEmergency(false,true);return status();});else if(message?.type==='SS_EMERGENCY_END')operation=Promise.resolve().then(()=>{if(!message.navigation||state.emergency?.source!==message.url)finishEmergency(true,true);return status();});else if(message?.type==='SS_VIDEO_SETTINGS'){state.settings.video=message.video;mountVideoTool();operation=Promise.resolve(status());}else return false;
    operation.then(data=>respond({ok:true,data}),error=>respond({ok:false,error:error.message||'页面辅助失败。'}));return true;
   }
   function onVisibilityChange(){

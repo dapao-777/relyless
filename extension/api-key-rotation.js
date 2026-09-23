@@ -35,14 +35,14 @@ export function redactKeys(error, keys) {
   return result;
 }
 
-function classifyFailure(error) {
+export function classifyFailure(error) {
   if (error?.name === 'AbortError') return 'none';
   const detail = diagnosticError(error);
   const kind = detail.code === 'AUTH' ? 'auth'
     : detail.code === 'RATE_LIMIT' ? 'rate-limit'
       : detail.code === 'NETWORK' || detail.code === 'TIMEOUT' ? (detail.code === 'TIMEOUT' ? 'transient' : 'network')
         : detail.code === 'HTTP' && Number(error?.httpStatus) >= 500 ? 'server'
-          : detail.code === 'NOT_READY' || detail.code === 'STALE' ? 'config' : undefined;
+          : detail.code === 'NOT_READY' || detail.code === 'STALE' ? 'config' : error instanceof TypeError ? 'network' : undefined;
   return classifyApiKeyFailure({kind, statusCode: Number(error?.httpStatus) || undefined, code: error?.code, name: error?.name, message: error?.message});
 }
 

@@ -1,6 +1,6 @@
 import {request, errorText, upsertSiteEntry} from '../shared.js';
 
-const popupEls={status:document.querySelector('#page-status'),hostname:document.querySelector('#site-hostname'),siteAuto:document.querySelector('#site-auto'),siteAutoNote:document.querySelector('#site-auto-note'),siteAutoError:document.querySelector('#site-auto-error'),toggle:document.querySelector('#toggle-page'),toggleLabel:document.querySelector('#toggle-label'),pageNote:document.querySelector('#page-note'),actionError:document.querySelector('#action-error'),sentenceGroups:document.querySelector('#sentence-groups'),sentenceGroupsNote:document.querySelector('#sentence-groups-note'),sentenceGroupsError:document.querySelector('#sentence-groups-error'),options:document.querySelector('#open-options'),serviceWarning:document.querySelector('#service-warning'),serviceWarningCopy:document.querySelector('#service-warning-copy'),repairService:document.querySelector('#repair-service'),suggestion:document.querySelector('#on-demand-suggestion'),chooseOnDemand:document.querySelector('#choose-on-demand'),stats:document.querySelector('#reading-stats'),statsCopy:document.querySelector('#reading-stats-copy'),statsSpark:document.querySelector('#reading-stats-spark')};
+const popupEls={status:document.querySelector('#page-status'),hostname:document.querySelector('#site-hostname'),siteAuto:document.querySelector('#site-auto'),siteAutoNote:document.querySelector('#site-auto-note'),siteAutoError:document.querySelector('#site-auto-error'),toggle:document.querySelector('#toggle-page'),toggleLabel:document.querySelector('#toggle-label'),pageNote:document.querySelector('#page-note'),actionError:document.querySelector('#action-error'),sentenceGroups:document.querySelector('#sentence-groups'),sentenceGroupsNote:document.querySelector('#sentence-groups-note'),sentenceGroupsError:document.querySelector('#sentence-groups-error'),options:document.querySelector('#open-options'),serviceWarning:document.querySelector('#service-warning'),serviceWarningCopy:document.querySelector('#service-warning-copy'),repairService:document.querySelector('#repair-service'),suggestion:document.querySelector('#on-demand-suggestion'),chooseOnDemand:document.querySelector('#choose-on-demand'),stats:document.querySelector('#reading-stats'),statsCopy:document.querySelector('#reading-stats-copy'),statsSpark:document.querySelector('#reading-stats-spark'),emergencyEstimate:document.querySelector('#emergency-estimate'),emergencyBudget:document.querySelector('#emergency-budget')};
 for(const name of ['panel','open','confirm','start','cancel','progress','progress-copy','counts','actions','stop','resume','retry','clear','result','status']){
   const key='emergency'+name.split('-').map(part=>part[0].toUpperCase()+part.slice(1)).join('');
   popupEls[key]=document.querySelector('#emergency-'+name);
@@ -124,9 +124,20 @@ function popupFocusEmergency(){const button=!popupEls.emergencyConfirm.hidden?po
 function popupEmergencyPrompt(show,{resume=false,focus=true}={}){
   popupEmergencyResume=Boolean(show&&resume&&!popupEmergency.active&&popupEmergency.total>0&&['stopped','error'].includes(popupEmergency.phase));
   popupEls.emergencyConfirm.hidden=!show;popupRender();
-  if(show){popupClearError(popupEls.emergencyResult);if(focus)popupEls.emergencyStart.focus();}
+  if(show){popupClearError(popupEls.emergencyResult);popupBudgetConfirmed=false;popupEls.emergencyBudget.hidden=true;popupEls.emergencyStart.textContent='确认并翻译本页';if(focus)popupEls.emergencyStart.focus();void popupEmergencyEstimate();}
   else if(focus)popupFocusEmergency();
 }
+async function popupEmergencyEstimate(){
+  try{
+    await request('PAGE_UI_INJECT',{tabId:popupTab.id});
+    const view=await request('EMERGENCY_ESTIMATE',{tabId:popupTab.id,url:popupTab.url});
+    if(!view?.estimate)return;
+    popupEls.emergencyEstimate.textContent=`预计约 ${view.estimate} tokens${view.budget?` · 本月已用约 ${view.monthlyUsed} / 限额 ${view.budget}`:''}`;
+    popupEls.emergencyEstimate.hidden=false;
+    if(view.budgetExceeded){popupEls.emergencyBudget.textContent=`按预估将超出本月预算限额 ${view.budget} tokens。`;popupEls.emergencyBudget.hidden=false;}
+  }catch{popupEls.emergencyEstimate.hidden=true;}
+}
+let popupBudgetConfirmed=false;
 async function popupEmergencyStart(){
   if(popupBusy||!popupSupported()||popupEls.emergencyConfirm.hidden)return;
   const resume=popupEmergencyResume;
@@ -135,7 +146,9 @@ async function popupEmergencyStart(){
     const current=await chrome.tabs.get(popupTab.id);
     if(current.url!==popupTab.url)throw new Error('网页已切换，请重新打开扩展弹窗后确认。');
     await request('PAGE_UI_INJECT',{tabId:popupTab.id});
-    ({token}=await request('EMERGENCY_BEGIN',{tabId:popupTab.id,url:popupTab.url}));
+    const begin=await request('EMERGENCY_BEGIN',{tabId:popupTab.id,url:popupTab.url,confirmed:popupBudgetConfirmed});
+    if(begin?.budgetExceeded){popupBudgetConfirmed=true;popupEls.emergencyBudget.textContent=`超出本月用量预算（已用约 ${begin.monthlyUsed} tokens + 预计 ${begin.estimate} > 限额 ${begin.budget}），仍要继续？`;popupEls.emergencyBudget.hidden=false;popupEls.emergencyStart.textContent='仍要翻译本页';return;}
+    ({token}=begin);
     const result=await chrome.tabs.sendMessage(popupTab.id,{type:'SS_EMERGENCY_START',token,resume},{frameId:0});
     if(!result?.ok)throw new Error(result?.error||'无法启动本页翻译，请刷新网页后重试。');
     popupEmergency=popupEmergencySnapshot(result.data?.emergency||{active:true,displayed:resume,phase:'translating'});
