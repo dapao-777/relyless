@@ -179,18 +179,6 @@ test('invalid reading settings leave the last accepted configuration intact',asy
   expect((await send({type:'STATE_GET'},extensionSender)).settings).toMatchObject({lookupKey:'Q',lookupDisplay:'annotation',hintDisplay:'veil',readingStyle});
   expect((await send({type:'STATE_GET'})).settings.hintDisplay).toBe('veil');
 });
-test('content pages can accept a suggested domain and optionally remember the site',async()=>{
-  const before=(await send({type:'STATE_GET'},extensionSender)).settings.domainRules.length;
-  expect(await send({type:'PAGE_DOMAIN_SET',domain:'medical',rememberSite:true})).toEqual({domain:'medical'});
-  const rules=(await send({type:'STATE_GET'},extensionSender)).settings.domainRules;
-  const rule=rules.at(-1);
-  expect(rules.length).toBe(before+1);
-  expect(rule).toMatchObject({host:'reading.example',pathPrefix:'/',domain:'medical',includeSubdomains:false});
-  await send({type:'STATE_PATCH',patch:{domainRules:rules.filter(item=>!(item.host==='reading.example'&&item.domain==='medical'))}},extensionSender);
-  await expect(send({type:'PAGE_DOMAIN_SET',domain:'bogus'})).rejects.toThrow();
-  const detached={id:'backend-fixture',url:'https://reading.example/article',frameId:0};
-  await expect(send({type:'PAGE_DOMAIN_SET',domain:'tech'},detached)).rejects.toThrow('目标页面');
-});
 test('current document identity tolerates URL state changes but rejects replaced documents',async()=>{
   const originalUrl=tab.url,originalDocumentId=currentDocumentId;
   try{
