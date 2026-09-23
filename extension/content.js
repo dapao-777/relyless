@@ -1140,11 +1140,57 @@
   function resetLookup(){lookup.held=false;lookup.code=null;clearLookupPreview();if(lookup.press)lookup.press.cancelled=true;lookup.quietUntil=0;clearTimeout(lookup.idleTimer);lookup.idleTimer=setTimeout(resumeLookupUpdates,0);}
   function onLookupKey(event){
     if(!event.isTrusted)return;
-    if(event.type==='keyup'){if(lookup.held&&(event.code===lookup.code||event.key.toUpperCase()===lookupKey())){consumeLookup(event);lookup.held=false;lookup.code=null;clearLookupPreview();deferLookupUpdates();}return;}
+    if(event.type==='keyup'){if(lookup.held&&(event.code===lookup.code||event.key.toUpperCase()===lookupKey())){consumeLookup(event);lookup.held=false;lookup.code=null;clearLookupPreview();deferLookupUpdates();if(state.settings.keyboardNav?.enabled&&nav.record&&!lookup.press)openNavRecord();}return;}
     if(!state.enabled||state.paused||event.isComposing||event.keyCode===229||event.ctrlKey||event.metaKey||event.altKey||event.shiftKey||lookupEditing(event)){resetLookup();return;}
     if(event.key.toUpperCase()!==lookupKey()){resetLookup();return;}
     if(event.repeat&&!lookup.held)return;
     consumeLookup(event);lookup.held=true;lookup.code=event.code;deferLookupUpdates();scheduleLookupPreview();
+  }
+  const nav={record:null,flash:null};
+  function navCandidates(){
+    return state.records
+      .filter(record=>!record.manual&&record.marks?.length&&record.marks[0].isConnected&&record.stage!=='quiet')
+      .sort((a,b)=>{if(a.block===b.block)return a.target.start-b.target.start;const pos=a.block.compareDocumentPosition(b.block);return pos&Node.DOCUMENT_POSITION_PRECEDING?1:pos&Node.DOCUMENT_POSITION_FOLLOWING?-1:0;});
+  }
+  function flashNavRecord(record){
+    nav.flash?.remove();nav.flash=null;
+    const host=document.createElement('div');host.setAttribute(OWN,'nav-flash');host.setAttribute('aria-hidden','true');
+    host.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:2147483646;transition:opacity .4s ease;opacity:1';
+    let drew=false;
+    for(const rect of record.range.getClientRects()){
+      if(rect.width<2||rect.height<2)continue;drew=true;
+      const line=document.createElement('span');
+      line.style.cssText='position:absolute;box-sizing:border-box;border:2px solid rgba(13,148,136,.9);border-radius:4px;box-shadow:0 0 0 4px rgba(13,148,136,.22);left:'+(rect.left-3)+'px;top:'+(rect.top-3)+'px;width:'+(rect.width+6)+'px;height:'+(rect.height+6)+'px';
+      host.append(line);
+    }
+    if(!drew)return;
+    document.documentElement.append(host);nav.flash=host;
+    setTimeout(()=>{host.style.opacity='0';setTimeout(()=>{if(nav.flash===host)nav.flash=null;host.remove();},420);},750);
+  }
+  function navigateRecords(direction,event){
+    const candidates=navCandidates();if(!candidates.length)return;
+    consumeLookup(event);removeSelectionTool();
+    let index=candidates.indexOf(nav.record);
+    if(index<0){
+      const mid=innerHeight/2;
+      index=candidates.findIndex(record=>{const rect=record.marks[0].getBoundingClientRect();return rect.bottom>=mid;});
+      if(index<0)index=direction>0?0:candidates.length-1;else if(direction<0)index=Math.max(0,index-1);
+    }else index=(index+direction+candidates.length)%candidates.length;
+    nav.record=candidates[index];
+    nav.record.marks[0].scrollIntoView({block:'center'});
+    flashNavRecord(nav.record);
+    setPageStatus('lookup','已选中标记，按 '+lookupKey()+' 打开解释',{duration:1500});
+  }
+  function openNavRecord(){
+    const record=nav.record;
+    if(!record||!record.marks?.[0]?.isConnected)return;
+    try{assistTarget(helpTarget(record.range.cloneRange(),true,record));}catch{}
+  }
+  function onNavKey(event){
+    if(event.type==='keyup'||!event.isTrusted)return;
+    if(event.key!=='['&&event.key!==']')return;
+    if(!state.enabled||state.paused||!state.settings.keyboardNav?.enabled||event.isComposing||event.keyCode===229||event.ctrlKey||event.metaKey||event.altKey||event.shiftKey||lookupEditing(event))return;
+    navigateRecords(event.key===']'?1:-1,event);
   }
   function lookupElement(event){const element=nodeElement(event.target);return element&&!element.closest(SKIP+',kbd,samp,'+LOOKUP_CONTROLS+','+LOOKUP_UI)?element:null;}
   function pointHelpTarget(event,selected=false){
@@ -1172,6 +1218,7 @@
   function onHelpPointerDown(event){
     if(!event.isTrusted||event.button!==0)return;lookup.press=null;
     if(!lookup.held||!state.enabled||state.paused||event.shiftKey||event.ctrlKey||event.metaKey||event.altKey||lookupEditing(event)||!lookupElement(event))return;
+    nav.record=null;
     // Own the whole pointer gesture before range validation, DOM changes, or service work.
     consumeLookup(event);clearLookupPreview();lookup.press={pointerId:event.pointerId,target:null,error:'',cancelled:false};
     try{lookup.press.target=pointHelpTarget(event,true);}catch(error){lookup.press.error=error.message;}
@@ -1572,7 +1619,7 @@
     if(state.videoAllowed){if(!state.settings.video){const snapshot=await request('STATE_GET');if(page!==location.href)return status();state.settings=snapshot.settings;}mountVideoTool();}
     scheduleSentenceRender();scheduleSentenceScan(0);return status();
   }
-  function onPageNavigation() { resetLookup(); if(location.href===state.page)return;const emergencyToken=state.emergency?.token;finishEmergency(true,false);if(emergencyToken)void request('EMERGENCY_END',{token:emergencyToken}).catch(()=>{});stopHistoryCapture();stopSentenceGroups(true);removeDomainChip();state.page=location.href;state.manual=false;state.domainResolved=false;state.domainSuggestionDone=false;state.finishedSent=false;state.fluency.clear();state.domain=state.settings.domain!=='auto'?state.settings.domain:'general';state.eligibleMs=0;state.failed=false;state.article=null;state.events.clear();state.siteRule=null;state.siteRuleChecked=false;state.assisted.clear();state.seen.clear();globalThis.ShisuiVideoSubtitles?.unmount();void rebuild().then(()=>startHistoryCapture());void restoreSentenceGroups();void ShisuiReview.refresh();void request('AUTO_BOOTSTRAP_CHECK').catch(()=>{}); }
+  function onPageNavigation() { resetLookup(); nav.record=null;nav.flash?.remove();nav.flash=null; if(location.href===state.page)return;const emergencyToken=state.emergency?.token;finishEmergency(true,false);if(emergencyToken)void request('EMERGENCY_END',{token:emergencyToken}).catch(()=>{});stopHistoryCapture();stopSentenceGroups(true);removeDomainChip();state.page=location.href;state.manual=false;state.domainResolved=false;state.domainSuggestionDone=false;state.finishedSent=false;state.fluency.clear();state.domain=state.settings.domain!=='auto'?state.settings.domain:'general';state.eligibleMs=0;state.failed=false;state.article=null;state.events.clear();state.siteRule=null;state.siteRuleChecked=false;state.assisted.clear();state.seen.clear();globalThis.ShisuiVideoSubtitles?.unmount();void rebuild().then(()=>startHistoryCapture());void restoreSentenceGroups();void ShisuiReview.refresh();void request('AUTO_BOOTSTRAP_CHECK').catch(()=>{}); }
   function status(){return {enabled:state.enabled,paused:state.paused,domain:state.domain,assistanceMode:state.settings.assistanceMode,providerConfigured:state.providerConfigured,count:state.records.filter(record=>record.stage!=='quiet').length,emergency:emergencyStatus(),sentenceGroups:{enabled:sentenceGroups.enabled,density:sentenceGroups.density,lineStyle:sentenceGroups.lineStyle,status:sentenceGroups.status,error:sentenceGroups.error,processed:sentenceGroups.entries.size}};}
   function onRuntimeMessage(message,_sender,respond){
    if(message?.type==='SS_TRANSLATION_PROGRESS'){
@@ -1624,7 +1671,7 @@
     if(document.visibilityState==='visible'){if(state.emergency?.active)scheduleEmergency(state.emergency);state.windowKey='';if(automatic()&&!state.root)void rebuild();else void refreshViewport();scheduleSentenceRender();scheduleSentenceScan(0);void ShisuiReview.refresh();}
   }
   function dispose(){if(disposed)return;disable();stopSentenceGroups(true);ShisuiReview.hide();removeDomainChip();disposed=true;clearTimeout(lookup.idleTimer);for(const resolve of lookup.waiters)resolve();lookup.waiters.clear();clearPageStatus();runtime.onMessage.removeListener(onRuntimeMessage);for(const [target,type,listener]of listeners)target.removeEventListener(type,listener,true);clearTimeout(state.scrollTimer);}
-  const listeners=[[window,'keydown',onLookupKey],[window,'keyup',onLookupKey],[window,'pointerdown',onHelpPointerDown],[window,'pointerup',onHelpPointerUp],[window,'click',onHelpClick],[window,'pointermove',onLookupPointerMove],[window,'blur',onLookupBlur],[window,'focusin',onLookupFocus],[window,'compositionstart',resetLookup],[window,'pointercancel',onLookupCancel],[document,'pointerleave',onLookupLeave],[matchMedia('(prefers-color-scheme: dark)'),'change',onScroll],[document,'pointerdown',historyInteraction],[document,'keydown',historyInteraction],[window,'scroll',historyInteraction],[document,'pointerover',onMarkPeekOver],[document,'pointerout',onMarkPeekOut],[document,'pointerdown',onOutside],[document,'pointerup',showPassageAction],[document,'keyup',showPassageAction],[document,'keydown',onKey],[document,'keydown',ShisuiCopy.onCopyHotkey],[window,'pointermove',ShisuiCopy.onPointerTrack],[document,'contextmenu',onContextMenu],[document,'visibilitychange',onVisibilityChange],[document,'scroll',onScroll],[window,'scroll',onScroll],[window,'resize',onScroll],[window,'popstate',onPageNavigation],[window,'hashchange',onPageNavigation]];
+  const listeners=[[window,'keydown',onLookupKey],[window,'keyup',onLookupKey],[window,'keydown',onNavKey],[window,'pointerdown',onHelpPointerDown],[window,'pointerup',onHelpPointerUp],[window,'click',onHelpClick],[window,'pointermove',onLookupPointerMove],[window,'blur',onLookupBlur],[window,'focusin',onLookupFocus],[window,'compositionstart',resetLookup],[window,'pointercancel',onLookupCancel],[document,'pointerleave',onLookupLeave],[matchMedia('(prefers-color-scheme: dark)'),'change',onScroll],[document,'pointerdown',historyInteraction],[document,'keydown',historyInteraction],[window,'scroll',historyInteraction],[document,'pointerover',onMarkPeekOver],[document,'pointerout',onMarkPeekOut],[document,'pointerdown',onOutside],[document,'pointerup',showPassageAction],[document,'keyup',showPassageAction],[document,'keydown',onKey],[document,'keydown',ShisuiCopy.onCopyHotkey],[window,'pointermove',ShisuiCopy.onPointerTrack],[document,'contextmenu',onContextMenu],[document,'visibilitychange',onVisibilityChange],[document,'scroll',onScroll],[window,'scroll',onScroll],[window,'resize',onScroll],[window,'popstate',onPageNavigation],[window,'hashchange',onPageNavigation]];
   listeners.push([document,'click',onStructureClick],[document.fonts,'loadingdone',scheduleSentenceRender]);
   listeners.forEach(([target,type,listener])=>target.addEventListener(type,listener,true));
   // 子系统经内核钩子回调 content.js 的实现；注册发生在监听之前，模块只在运行时调用。

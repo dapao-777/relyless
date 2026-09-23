@@ -142,3 +142,10 @@ test('popup renders the complete bilingual snapshot and confirms retained-sessio
     if(previousDocument===undefined)delete globalThis.document;else globalThis.document=previousDocument;
   }
 });
+
+test('keyboard navigation defaults off and only accepts an explicit boolean',()=>{
+  expect(normalizeSettings({}).keyboardNav).toEqual({enabled:false});
+  expect(normalizeSettings({keyboardNav:{enabled:true}}).keyboardNav).toEqual({enabled:true});
+  expect(normalizeSettings({keyboardNav:{enabled:'yes'}}).keyboardNav).toEqual({enabled:false});
+  expect(normalizeSettings({keyboardNav:'always'}).keyboardNav).toEqual({enabled:false});
+});

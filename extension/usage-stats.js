@@ -7,7 +7,7 @@ export const USAGE_VERSION = 1;
 
 const count = value => { const n = Number(value); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0; };
 const text = (value, max) => typeof value === 'string' ? value.slice(0, max) : '';
-const usageProvider = value => ['chatgpt', 'grok', 'antigravity'].includes(value) ? value : 'api';
+const usageProvider = value => ['chatgpt', 'grok', 'antigravity', 'local'].includes(value) ? value : 'api';
 export const usageDay = (time = Date.now()) => new Date(time).toISOString().slice(0, 10);
 const cutoffDay = (now, days) => new Date(now - (days - 1) * 86400000).toISOString().slice(0, 10);
 const tokenEstimate = chars => Math.ceil(count(chars) / 4);

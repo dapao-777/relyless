@@ -143,6 +143,18 @@
 <span class="sr-only">回读时浮现解构入口</span>
 </label>
 </div>
+<div class="adaptive-setting">
+<div>
+<b>键盘导航标记</b>
+<p>按 [ 或 ] 在页面标记之间跳转；跳转后再按查词键打开解释。默认关闭，避免与站点快捷键冲突。</p>
+</div>
+<label class="switch">
+<input id="keyboard-nav" type="checkbox">
+<span aria-hidden="true">
+</span>
+<span class="sr-only">键盘导航标记</span>
+</label>
+</div>
 </fieldset>
         <fieldset>
 <legend>划词动作打开方式</legend>
@@ -774,6 +786,13 @@
 <small>使用自选服务商</small>
 </span>
 </label>
+<label>
+<input type="radio" name="provider-kind" value="local">
+<span>
+<b>本机模型</b>
+<small>离线运行的 Gemini Nano</small>
+</span>
+</label>
 </div>
 </fieldset>
       <div class="service-catalog-workspace">
@@ -870,6 +889,28 @@
 </div>
 <p>连接失效时重新运行安装命令并刷新，不需要重新选择账户。</p>
 </details>
+</div>
+      <div id="local-panel" class="provider-panel" hidden="">
+<div class="paper-card subscription-card">
+<div class="subscription-summary">
+<div>
+<span id="nano-dot" class="connection-dot" aria-hidden="true">
+</span>
+<b id="nano-state">正在检查本机模型…</b>
+<p id="nano-detail">
+</p>
+</div>
+</div>
+<div class="provider-actions">
+<button id="nano-download" class="primary-action narrow" type="button" hidden="">下载本机模型</button>
+<button id="nano-refresh" type="button">刷新状态</button>
+<span id="nano-result" class="inline-message" aria-live="polite">
+</span>
+</div>
+<progress id="nano-progress" max="1" value="0" hidden="">
+</progress>
+<p class="field-help">Gemini Nano 完全在本机运行：不产生网络请求、不计费。它只回答简短查词提示；详细解释、整页翻译等请求会改用你已配置的其他服务。</p>
+</div>
 </div>
       <div id="api-panel" class="provider-panel" hidden="">
         <div class="paper-card form-stack api-service-card">

@@ -75,3 +75,34 @@ export function countTokensLocal(texts, { onlyIfWarm = true, timeoutMs = 300 } =
   requestChain = run.catch(() => {});
   return Promise.race([run, new Promise(resolve => setTimeout(() => resolve(null), Math.max(50, timeoutMs)))]);
 }
+
+async function performNano(type, payload) {
+  await ensureOffscreenDocument();
+  const response = await chrome.runtime.sendMessage({ target: 'local-classifier', type, ...payload });
+  if (!response?.ok) throw new Error(response?.error || '本机模型调用失败');
+  return response.data;
+}
+
+// 本机模型状态探测：返回 {availability} 或 null（离屏文档不可用时）。
+export function nanoStatus() {
+  const run = requestChain.then(() => performNano('NANO_STATUS', {})).catch(() => null);
+  requestChain = run.catch(() => {});
+  return run;
+}
+
+// Gemini Nano 单次提示：抛错由调用方负责回落，绝不静默吞掉真实失败。
+export function nanoAssist({ instructions, prompt, schema, timeoutMs = 15000 }) {
+  const boundedSchema = schema && typeof schema === 'object' && JSON.stringify(schema).length <= 8000 ? schema : undefined;
+  const run = requestChain
+    .then(() => performNano('NANO_ASSIST', {
+      instructions: bounded(instructions, 4000),
+      prompt: bounded(prompt, MAX_TEXT_LENGTH),
+      schema: boundedSchema,
+      timeoutMs,
+    }));
+  requestChain = run.catch(() => {});
+  return Promise.race([
+    run,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('本机模型响应超时。')), Math.max(1500, timeoutMs + 2000))),
+  ]);
+}

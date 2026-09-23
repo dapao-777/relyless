@@ -16,11 +16,12 @@ export const CATALOG_CATEGORIES = [
   {id: 'custom', label: '自定义 API'},
 ];
 
-// 订阅通道条目：与 subscription.js 的 SUBSCRIPTION_KINDS 保持一致。
+// 订阅通道条目：与 subscription.js 的 SUBSCRIPTION_KINDS 保持一致；local 为本机模型通道。
 const SUBSCRIPTION_TEMPLATES = [
   {id: 'chatgpt', name: 'ChatGPT 订阅', category: 'subscription', icon: 'openai', desc: '免 API Key，通过本机连接器使用 Codex 权益', website: 'https://chatgpt.com', keyOptional: true},
   {id: 'grok', name: 'Grok 订阅', category: 'subscription', icon: 'xai', desc: '免 API Key，通过 SuperGrok 或 X Premium+ 直连', website: 'https://x.ai', keyOptional: true},
   {id: 'antigravity', name: 'Google 订阅', category: 'subscription', icon: 'google', desc: '免 API Key，通过 Google AI Pro / Ultra 的 Antigravity 权益', website: 'https://gemini.google.com', keyOptional: true},
+  {id: 'local', name: '本机模型', category: 'subscription', icon: 'google', desc: 'Gemini Nano 端侧模型：离线、免密钥，只接简短查词提示', website: '', keyOptional: true},
 ];
 
 // 目录元数据：分类、简介与官方密钥页。未列出的服务商归入自定义，不影响使用。
@@ -249,6 +250,20 @@ class ServiceCatalogController {
     const savedServices = settings.apiServices || [];
     const subscriptionPanel = document.querySelector('#subscription-panel');
     const apiPanel = document.querySelector('#api-panel');
+    const localPanel = document.querySelector('#local-panel');
+
+    if (key === 'local') {
+      if (subscriptionPanel) subscriptionPanel.hidden = true;
+      if (apiPanel) apiPanel.hidden = true;
+      if (localPanel) localPanel.hidden = false;
+      if (typeof globalThis.optionsSetDraftServiceId === 'function') {
+        globalThis.optionsSetDraftServiceId(null);
+      }
+      this.syncHeroDetail();
+      document.querySelector('#nano-refresh')?.click();
+      return;
+    }
+    if (localPanel) localPanel.hidden = true;
 
     if (this.isSubscriptionKey(key)) {
       if (subscriptionPanel) subscriptionPanel.hidden = false;
@@ -395,7 +410,8 @@ class ServiceCatalogController {
   triggerCheckConnection() {
     const spinIcon = this.checkConnBtn?.querySelector('.check-spin-icon');
     spinIcon?.classList.add('is-spinning');
-    if (this.isSubscriptionKey(this.selectedKey)) document.querySelector('#refresh-subscription')?.click();
+    if (this.selectedKey === 'local') document.querySelector('#nano-refresh')?.click();
+    else if (this.isSubscriptionKey(this.selectedKey)) document.querySelector('#refresh-subscription')?.click();
     else document.querySelector('#test-provider')?.click();
     setTimeout(() => spinIcon?.classList.remove('is-spinning'), 1200);
   }
@@ -424,6 +440,19 @@ class ServiceCatalogController {
       } else this.selectedKey = savedServices.length ? (savedServices[0].providerId || `saved:${savedServices[0].id}`) : 'openai-compatible';
     }
     this.renderRailList();
+    // 初始同步也要落到正确的面板（目录点击之外的路径不会经过 selectService）。
+    const subscriptionPanel = document.querySelector('#subscription-panel');
+    const apiPanel = document.querySelector('#api-panel');
+    const localPanel = document.querySelector('#local-panel');
+    if (this.selectedKey === 'local') {
+      if (subscriptionPanel) subscriptionPanel.hidden = true;
+      if (apiPanel) apiPanel.hidden = true;
+      if (localPanel) localPanel.hidden = false;
+    } else if (this.isSubscriptionKey(this.selectedKey)) {
+      if (subscriptionPanel) subscriptionPanel.hidden = false;
+      if (apiPanel) apiPanel.hidden = true;
+      if (localPanel) localPanel.hidden = true;
+    } else if (localPanel) localPanel.hidden = true;
   }
 }
 

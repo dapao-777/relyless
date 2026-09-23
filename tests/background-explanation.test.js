@@ -1280,3 +1280,62 @@ test('multi-key services fail over to the next key after an auth error', async (
   expect(calls).toEqual(['bad','good']);
   globalThis.chrome=chromeBefore;
 });
+
+test('Gemini Nano answers brief hints locally and records local usage',async()=>{
+  const previous=globalThis.chrome,previousFetch=globalThis.fetch;
+  const fixture=isolatedChrome({wordSchemaVersion:5,productSchemaVersion:1,words:[],supportDataGeneration:0,supportUsage:[],onDemandSuggestionShownAt:0,settings:{providerKind:'local',apiServices:[],activeApiServiceId:'',domainDetection:{mode:'local'},rememberSupport:false}},{id:'nano-ok'});
+  fixture.api.offscreen={hasDocument:async()=>true};
+  fixture.api.runtime.sendMessage=async message=>message?.type==='NANO_ASSIST'?{ok:true,data:{text:JSON.stringify({level:'hint',hint:'a local hint',sense:'local sense'}),inputTokens:11}}:message?.type==='NANO_STATUS'?{ok:true,data:{availability:'available'}}:{ok:false,error:'unexpected local call'};
+  globalThis.chrome=fixture.api;
+  globalThis.fetch=async()=>{throw new Error('remote provider must not be called');};
+  try{
+    await import('../extension/background.js?nano-ok='+crypto.randomUUID());
+    const sender={url:'https://isolated.example/read',tab:{id:91,url:'https://isolated.example/read',active:true},frameId:0};
+    const result=await isolatedSend(fixture,{type:'ASSIST',detail:'brief',requestId:'nano-1',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint'},sender);
+    expect(result.hint).toBe('a local hint');
+    expect(result.cacheNotice).toBe('本机模型生成');
+    const view=await isolatedSend(fixture,{type:'USAGE_STATS',days:1});
+    const localRow=(view.usage?.models||[]).find(model=>model.provider==='local');
+    expect(localRow?.requests).toBe(1);
+    expect(localRow?.input).toBe(11);
+  }finally{globalThis.chrome=previous;globalThis.fetch=previousFetch;}
+});
+
+test('Gemini Nano failures fall back to a configured api service',async()=>{
+  const previous=globalThis.chrome,previousFetch=globalThis.fetch;
+  const fixture=isolatedChrome({wordSchemaVersion:5,productSchemaVersion:1,words:[],supportDataGeneration:0,supportUsage:[],onDemandSuggestionShownAt:0,settings:{providerKind:'local',apiServices:[{id:'bak',name:'Backup',providerId:'openai-compatible',baseUrl:'https://bak.example/v1',model:'bak-model',apiKey:'bak-key',apiKeys:['bak-key'],options:{}}],activeApiServiceId:'bak',domainDetection:{mode:'local'},rememberSupport:false}},{id:'nano-fallback'});
+  fixture.api.offscreen={hasDocument:async()=>true};
+  fixture.api.runtime.sendMessage=async message=>message?.type==='NANO_ASSIST'?{ok:false,error:'本机模型响应超时。'}:message?.type==='NANO_STATUS'?{ok:true,data:{availability:'available'}}:{ok:false,error:'unexpected local call'};
+  globalThis.chrome=fixture.api;
+  let remoteCalls=0;
+  globalThis.fetch=withCapabilityProbe(async(_url,options)=>{
+    remoteCalls++;
+    const payload=JSON.parse(JSON.parse(options.body).messages[1].content);
+    return {ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({result:{level:'hint',hint:'remote hint for '+payload.text,sense:'remote sense'}})},finish_reason:'stop'}]})};
+  });
+  try{
+    await import('../extension/background.js?nano-fallback='+crypto.randomUUID());
+    const sender={url:'https://isolated.example/read',tab:{id:91,url:'https://isolated.example/read',active:true},frameId:0};
+    const result=await isolatedSend(fixture,{type:'ASSIST',detail:'brief',requestId:'nano-fb',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint'},sender);
+    expect(result.hint).toBe('remote hint for unless');
+    expect(remoteCalls).toBe(1);
+    const view=await isolatedSend(fixture,{type:'USAGE_STATS',days:1});
+    const localRow=(view.usage?.models||[]).find(model=>model.provider==='local');
+    expect(localRow?.errors).toBe(1);
+  }finally{globalThis.chrome=previous;globalThis.fetch=previousFetch;}
+});
+
+test('Gemini Nano without any fallback surfaces its own error',async()=>{
+  const previous=globalThis.chrome,previousFetch=globalThis.fetch;
+  const fixture=isolatedChrome({wordSchemaVersion:5,productSchemaVersion:1,words:[],supportDataGeneration:0,supportUsage:[],onDemandSuggestionShownAt:0,settings:{providerKind:'local',apiServices:[],activeApiServiceId:'',domainDetection:{mode:'local'},rememberSupport:false}},{id:'nano-none'});
+  fixture.api.offscreen={hasDocument:async()=>true};
+  fixture.api.runtime.sendMessage=async message=>message?.type==='NANO_ASSIST'?{ok:false,error:'本机模型尚未下载：请在扩展设置的「本机模型」中完成下载。'}:message?.type==='NANO_STATUS'?{ok:true,data:{availability:'downloadable'}}:{ok:false,error:'unexpected local call'};
+  globalThis.chrome=fixture.api;
+  globalThis.fetch=async()=>{throw new Error('remote provider must not be called');};
+  try{
+    await import('../extension/background.js?nano-none='+crypto.randomUUID());
+    const sender={url:'https://isolated.example/read',tab:{id:91,url:'https://isolated.example/read',active:true},frameId:0};
+    await expect(isolatedSend(fixture,{type:'ASSIST',detail:'brief',requestId:'nano-x',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint'},sender)).rejects.toThrow('本机模型');
+    await expect(isolatedSend(fixture,{type:'ASSIST',detail:'full',requestId:'nano-y',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint'},sender)).rejects.toThrow('只覆盖简短查词');
+  }finally{globalThis.chrome=previous;globalThis.fetch=previousFetch;}
+});

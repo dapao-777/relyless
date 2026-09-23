@@ -2,6 +2,7 @@ import {
   normalizeSupportProviderItems,normalizeSupportAttempt,normalizeSupportCorrections,normalizePreparationContext,
   normalizeAssistanceRequest,normalizeAssistanceResult,
   normalizeEmergencyItems,normalizeEmergencyResult,normalizePageTranslationItems,normalizePageTranslationResult,
+  normalizeConversationResult,
 } from './gloss.mjs';
 import {sanitizeDiagnostic,diagnosticError,validTraceId} from './diagnostics.mjs';
 import {normalizeSentenceGroupItems,normalizeSentenceGroupsResult} from './sentence-groups.mjs';
@@ -20,7 +21,7 @@ export async function syncNativeDiagnostics(payload,kind){
   return results.some(Boolean);
 }
 
-const DISCONNECTED = {connected:false,authenticated:false,email:null,plan:null,loginPending:false,userCode:null,error:null};
+const DISCONNECTED = {connected:false,authenticated:false,email:null,plan:null,loginPending:false,userCode:null,error:null,features:[]};
 
 function createConnector({host,label,cliName,loginHosts}) {
   const state = {
@@ -43,6 +44,7 @@ function createConnector({host,label,cliName,loginHosts}) {
       loginPending:value?.loginPending === true,
       userCode:typeof value?.userCode === 'string' ? value.userCode.replace(/[^A-Za-z0-9-]/g,'').slice(0,32) : null,
       error:typeof value?.error === 'string' ? value.error.slice(0,600) : null,
+      features:Array.isArray(value?.features) ? value.features.filter(item=>typeof item==='string').slice(0,16) : [],
     };
     if (JSON.stringify(next) === JSON.stringify(state.status)) return;
     state.status = next;
@@ -73,8 +75,8 @@ function createConnector({host,label,cliName,loginHosts}) {
       if(message?.event==='diagnostic'){const record=sanitizeDiagnostic(message.data);if(record)for(const listener of diagnosticListeners)listener(record);return;}
       const request = state.pending.get(message?.id);
       if (!request) return;
-      if(message?.event==='assistProgress'||message?.event==='translationProgress'){
-        const expected=message.event==='assistProgress'?'assist':'emergencyTranslate';
+      if(message?.event==='assistProgress'||message?.event==='translationProgress'||message?.event==='conversationProgress'){
+        const expected=message.event==='assistProgress'?'assist':message.event==='conversationProgress'?'conversationTurn':'emergencyTranslate';
         if(request.type!==expected||typeof request.onProgress!=='function')return;
         Promise.resolve().then(()=>{if(state.pending.get(message.id)===request)return request.onProgress(message.data);}).catch(()=>{});
         return;
@@ -99,7 +101,7 @@ function createConnector({host,label,cliName,loginHosts}) {
       const timer = setTimeout(() => {
         disconnect(current,new Error(type === 'assist' ? `${label} 订阅帮助超时，已断开连接并停止请求。请刷新连接后重试。` : type === 'emergencyTranslate' ? `${label} 订阅翻译超时，已断开连接并停止请求。请刷新连接后重试。` : `本地 ${label} 连接器没有及时响应，请刷新连接后重试。`));
         current.disconnect();
-      },['assist','emergencyTranslate'].includes(type) ? 120000 : 45000);
+      },['assist','emergencyTranslate','conversationTurn'].includes(type) ? 120000 : 45000);
       state.pending.set(id,{resolve,reject,timer,type,onProgress});
       try { current.postMessage({id,type,payload,...(validTraceId(traceId)?{traceId}:{})}); }
       catch {
@@ -239,6 +241,14 @@ export async function emergencyTranslateSubscription({scope,items,model='',trace
   return scope==='page'?normalizePageTranslationResult(result,selected):normalizeEmergencyResult(result,selected);
 }
 export async function sentenceGroupsSubscription(items,model='',traceId,kind) { const selected=normalizeSentenceGroupItems(items); const value=await connector(kind).send('sentenceGroups',{items:selected,model},traceId); return normalizeSentenceGroupsResult(value,selected); }
+// 订阅多轮追问：conversationId 映射到连接器保留的 thread；首轮携带 setup，历史由 thread 承载。
+export async function conversationTurnSubscription({conversationId,question,setup,model='',traceId,kind,onProgress}) {
+  if(typeof conversationId!=='string'||!/^[0-9a-f-]{8,80}$/i.test(conversationId))throw new Error('追问会话无效。');
+  if(typeof question!=='string'||!question.trim()||question.length>300)throw new Error('追问内容无效。');
+  const progress=typeof onProgress==='function'?value=>{if(value&&typeof value.answer==='string'&&value.answer.length<=1200)return onProgress({answer:value.answer});}:undefined;
+  const result=await connector(kind).send('conversationTurn',{conversationId,question:question.trim(),setup:setup||null,model},traceId,progress);
+  return normalizeConversationResult(result);
+}
 export async function historyModelSubscription(kind,payload,model='',traceId,backend) { if(!['summary','personalization'].includes(kind)||!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error('历史模型请求无效。');
 const result=await connector(backend).send('historyModel',{kind,payload,model},traceId);
 if(!result||typeof result!=='object'||Array.isArray(result))throw new Error('历史模型没有返回有效对象。');

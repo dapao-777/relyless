@@ -9,14 +9,17 @@ import {
   SOURCE_DATA_INSTRUCTIONS,SUPPORT_INSTRUCTIONS,SUPPORT_CORRECTION_INSTRUCTIONS,SUPPORT_SCHEMA,normalizeSupportProviderItems,inspectSupportResponse,normalizeSupportCorrections,normalizePreparationContext,
   ASSISTANCE_INSTRUCTIONS,assistanceSchema,normalizeAssistanceRequest,normalizeAssistanceResult,
   EMERGENCY_INSTRUCTIONS,PAGE_TRANSLATION_INSTRUCTIONS,EMERGENCY_SCHEMA,normalizeEmergencyItems,normalizeEmergencyResult,normalizePageTranslationItems,inspectPageTranslationResult,
+  CONVERSATION_INSTRUCTIONS,conversationSchema,normalizeConversationResult,
 } from '../extension/gloss.mjs';
 import {diagnosticError} from '../extension/diagnostics.mjs';
 import {SENTENCE_GROUPS_INSTRUCTIONS,SENTENCE_GROUPS_SCHEMA,normalizeSentenceGroupItems,prepareSentenceGroupItems,normalizeSentenceGroupResponse} from '../extension/sentence-groups.mjs';
-import {assistanceProgress,translationProgress} from '../extension/assistance-stream.mjs';
+import {assistanceProgress,translationProgress,conversationProgress} from '../extension/assistance-stream.mjs';
 import {SUMMARY_INSTRUCTIONS,SUMMARY_SCHEMA,PERSONALIZATION_INSTRUCTIONS,PERSONALIZATION_SCHEMA} from '../extension/personalization.mjs';
 const RPC_LINE_LIMIT = 8 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 90_000;
 const MAX_WORK_ITEMS = 3; // Two automatic batches leave capacity for an explicit lookup.
+const CONVERSATION_THREAD_LIMIT = 50;
+const CONVERSATION_THREAD_TTL = 30 * 60 * 1000;
 const MAX_MODEL_PAGES = 10;
 const MAX_CACHED_MODELS = 256;
 const DOMAINS = new Set(["general", "tech", "data", "finance", "medical", "legal", "design"]);
@@ -248,6 +251,7 @@ export class CodexClient extends EventEmitter {
     this.nextId = 1;
     this.pending = new Map();
     this.tasks = new Map();
+    this.convThreads = new Map();
     this.workSlots = 0;
     this.modelCache = null;
     this.modelRefresh = null;
@@ -480,7 +484,9 @@ export class CodexClient extends EventEmitter {
     }
     const progress = active.translationItems
       ? translationProgress(stream.text,active.translationItems)
-      : assistanceProgress(stream.text,active.assistanceRequest,{envelope:'result'});
+      : active.conversation
+        ? conversationProgress(stream.text)
+        : assistanceProgress(stream.text,active.assistanceRequest,{envelope:'result'});
     if (!progress || (!active.translationItems && !Object.keys(progress).length)) return;
     const signature = JSON.stringify(progress);
     if (signature === active.lastProgress) return;
@@ -515,7 +521,7 @@ export class CodexClient extends EventEmitter {
     }
     if (params.turn?.id !== active.turnId) return;
     if (params.turn.status === "completed") {
-      try { active.resolve(parseStructuredOutput(active.finalText, active.parse, active.rawOutput)); }
+      try { active.settledOk = true; active.resolve(parseStructuredOutput(active.finalText, active.parse, active.rawOutput)); }
       catch (error) {
         this.#record({ ...active.context, stage: 'validation', status: 'error', ...diagnosticError(error) });
         active.reject(error);
@@ -563,6 +569,7 @@ export class CodexClient extends EventEmitter {
       plan: this.account?.planType ?? null,
       loginPending: Boolean(this.pendingLoginId),
       error: this.loginError,
+      features: ['conversation'],
     };
   }
 
@@ -735,37 +742,7 @@ export class CodexClient extends EventEmitter {
       if (preparation.error) throw preparation.error;
       const prepared = preparation.value;
       if (generation !== this.authGeneration || this.stopping) throw new Error("请求已因账户状态变化而取消。");
-      let resolveResult;
-      let rejectResult;
-      const resultPromise = new Promise((resolvePromise, rejectPromise) => { resolveResult = resolvePromise; rejectResult = rejectPromise; });
-      resultPromise.catch(() => {});
-      const timer = setTimeout(() => {
-        const active = this.tasks.get(threadId);
-        if (!active) return;
-        this.#record({ ...context, stage: 'provider', status: 'error', code: 'TIMEOUT', durationMs: this.timeoutMs });
-        active.reject(errorWithDiagnostic("订阅请求超时，请重试。", 'TIMEOUT', { durationMs: this.timeoutMs }));
-        if (active.turnId) void this.#request("turn/interrupt", { threadId, turnId: active.turnId }, context).catch(() => {});
-        this.#finishTask(threadId);
-      }, this.timeoutMs);
-      timer.unref?.();
-      const active = { context, threadId, turnId: null, finalText: null, finalTexts:new Map(), completedTurns:new Map(), timer, resolve: resolveResult, reject: rejectResult, parse, rawOutput, onProgress, assistanceRequest, translationItems, streams:new Map(), lastProgress:'', firstContent:false, startedAt:Date.now() };
-      this.tasks.set(threadId, active);
-      void this.#request("turn/start", turnParams(threadId,prepared), context).then(turnResult => {
-        const turnId = turnResult?.turn?.id;
-        if (!this.tasks.has(threadId)) {
-          if (turnId) void this.#request("turn/interrupt", { threadId, turnId }).catch(() => {});
-          return;
-        }
-        if (!turnId) throw new Error("Codex 无法启动请求。");
-        active.turnId = turnId;
-        active.finalText = active.finalTexts.get(turnId) ?? null;
-        for (const candidate of active.streams.keys()) if (candidate !== turnId) active.streams.delete(candidate);
-        const stream = active.streams.get(turnId);
-        if (stream) this.#emitTaskProgress(active,stream);
-        const completed=active.completedTurns.get(turnId);
-        if (completed) this.#completeTurn(completed);
-      }).catch(error => { active.reject(error); this.#finishTask(threadId); });
-      return resultPromise;
+      return this.#startTurn(threadId, context, { turnParams, parse, onProgress, assistanceRequest, translationItems, rawOutput, prepared });
     } catch (error) {
       if (threadId && this.tasks.has(threadId)) this.#finishTask(threadId);
       else {
@@ -776,13 +753,114 @@ export class CodexClient extends EventEmitter {
     }
   }
 
+  // 多轮追问：conversationId 映射到保留的 Codex thread；后续轮次只发送新问题，历史由 thread 承载。
+  async conversationTurn({ conversationId, question, setup, model = '' }, { traceId, onProgress } = {}) {
+    if (typeof conversationId !== 'string' || !/^[0-9a-f-]{8,80}$/i.test(conversationId)) throw new Error('会话标识无效。');
+    if (typeof question !== 'string' || !question.trim() || question.length > 300) throw new Error('追问内容无效。');
+    if (setup !== undefined && setup !== null && (typeof setup !== 'object' || Array.isArray(setup))) throw new Error('追问上下文无效。');
+    const context = this.#context('CONVERSATION_ASK', traceId, model);
+    await this.start();
+    if (!this.account) throw new Error("请先连接 ChatGPT 订阅。", { cause: "AUTH_REQUIRED" });
+    if (this.workSlots >= MAX_WORK_ITEMS) throw new Error("当前订阅任务较多，请稍后重试。");
+    const now = Date.now();
+    for (const [id, conv] of this.convThreads) {
+      if (now - conv.at > CONVERSATION_THREAD_TTL) {
+        this.convThreads.delete(id);
+        void this.#request("thread/unsubscribe", { threadId: conv.threadId }).catch(() => {});
+      }
+    }
+    let conv = this.convThreads.get(conversationId) || null;
+    if (conv) { this.convThreads.delete(conversationId); conv = { ...conv, at: now }; this.convThreads.set(conversationId, conv); }
+    this.workSlots += 1;
+    const generation = this.authGeneration;
+    let threadId = conv?.threadId, freshThread = false, turnStarted = false;
+    try {
+      if (!threadId) {
+        const threadResult = await this.#request("thread/start", buildThreadStartParams(this.workDir, model, CONVERSATION_INSTRUCTIONS), context);
+        threadId = threadResult?.thread?.id;
+        if (!threadId) throw new Error("Codex 无法创建处理会话。");
+        freshThread = true;
+        this.convThreads.set(conversationId, { threadId, at: now });
+        while (this.convThreads.size > CONVERSATION_THREAD_LIMIT) {
+          const oldest = this.convThreads.entries().next().value;
+          if (!oldest || oldest[0] === conversationId) break;
+          this.convThreads.delete(oldest[0]);
+          void this.#request("thread/unsubscribe", { threadId: oldest[1].threadId }).catch(() => {});
+        }
+      }
+      if (generation !== this.authGeneration || this.stopping) throw new Error("请求已因账户状态变化而取消。");
+      if (this.tasks.has(threadId)) throw new Error('上一个问题还在处理中，请稍候。');
+      const effort = await this.#noReasoningEffort(model);
+      const payload = conv ? { question: question.trim() } : { ...(setup || {}), question: question.trim() };
+      turnStarted = true;
+      return await this.#startTurn(threadId, context, {
+        turnParams: () => buildStructuredTurnParams(threadId, JSON.stringify(payload), conversationSchema(), effort),
+        parse: value => normalizeConversationResult(value),
+        onProgress, conversation: true, keepThread: true,
+        onSettled: ok => {
+          if (ok) { const entry = this.convThreads.get(conversationId); if (entry) entry.at = Date.now(); return; }
+          if (this.convThreads.get(conversationId)?.threadId === threadId) {
+            this.convThreads.delete(conversationId);
+            void this.#request("thread/unsubscribe", { threadId }).catch(() => {});
+          }
+        },
+      });
+    } catch (error) {
+      // turnStarted 之后的失败已由 #finishTask 释放槽位、由 onSettled 处理会话线程。
+      if (!turnStarted) {
+        this.workSlots = Math.max(0, this.workSlots - 1);
+        if (freshThread) {
+          this.convThreads.delete(conversationId);
+          if (threadId) void this.#request("thread/unsubscribe", { threadId }).catch(() => {});
+        }
+      }
+      throw error;
+    }
+  }
+
+  #startTurn(threadId, context, { turnParams, parse, onProgress = null, assistanceRequest = null, translationItems = null, rawOutput = false, prepared, keepThread = false, onSettled = null, conversation = false }) {
+    let resolveResult;
+    let rejectResult;
+    const resultPromise = new Promise((resolvePromise, rejectPromise) => { resolveResult = resolvePromise; rejectResult = rejectPromise; });
+    resultPromise.catch(() => {});
+    const timer = setTimeout(() => {
+      const active = this.tasks.get(threadId);
+      if (!active) return;
+      this.#record({ ...context, stage: 'provider', status: 'error', code: 'TIMEOUT', durationMs: this.timeoutMs });
+      active.reject(errorWithDiagnostic("订阅请求超时，请重试。", 'TIMEOUT', { durationMs: this.timeoutMs }));
+      if (active.turnId) void this.#request("turn/interrupt", { threadId, turnId: active.turnId }, context).catch(() => {});
+      this.#finishTask(threadId);
+    }, this.timeoutMs);
+    timer.unref?.();
+    const active = { context, threadId, turnId: null, finalText: null, finalTexts:new Map(), completedTurns:new Map(), timer, resolve: resolveResult, reject: rejectResult, parse, rawOutput, onProgress, assistanceRequest, translationItems, conversation, keepThread, onSettled, settledOk: false, streams:new Map(), lastProgress:'', firstContent:false, startedAt:Date.now() };
+    this.tasks.set(threadId, active);
+    void this.#request("turn/start", turnParams(threadId,prepared), context).then(turnResult => {
+      const turnId = turnResult?.turn?.id;
+      if (!this.tasks.has(threadId)) {
+        if (turnId) void this.#request("turn/interrupt", { threadId, turnId }).catch(() => {});
+        return;
+      }
+      if (!turnId) throw new Error("Codex 无法启动请求。");
+      active.turnId = turnId;
+      active.finalText = active.finalTexts.get(turnId) ?? null;
+      for (const candidate of active.streams.keys()) if (candidate !== turnId) active.streams.delete(candidate);
+      const stream = active.streams.get(turnId);
+      if (stream) this.#emitTaskProgress(active,stream);
+      const completed=active.completedTurns.get(turnId);
+      if (completed) this.#completeTurn(completed);
+    }).catch(error => { active.reject(error); this.#finishTask(threadId); });
+    return resultPromise;
+  }
+
   #finishTask(threadId) {
     const active = this.tasks.get(threadId);
     if (!active) return;
     clearTimeout(active.timer);
     this.tasks.delete(threadId);
     this.workSlots = Math.max(0, this.workSlots - 1);
-    void this.#request("thread/unsubscribe", { threadId }).catch(() => {});
+    if (active.onSettled) { try { active.onSettled(active.settledOk === true); } catch {} }
+    // 多轮会话的 thread 在成功轮次后保留复用；失败或普通任务仍然退订。
+    if (!(active.keepThread && active.settledOk)) void this.#request("thread/unsubscribe", { threadId }).catch(() => {});
   }
 
   async #interruptAll(message) {
@@ -792,6 +870,8 @@ export class CodexClient extends EventEmitter {
       if (item.turnId) void this.#request("turn/interrupt", { threadId: item.threadId, turnId: item.turnId }).catch(() => {});
       this.#finishTask(item.threadId);
     }
+    for (const conv of this.convThreads.values()) void this.#request("thread/unsubscribe", { threadId: conv.threadId }).catch(() => {});
+    this.convThreads.clear();
   }
 
   #terminateBroken() {
@@ -813,6 +893,7 @@ export class CodexClient extends EventEmitter {
       active.reject(error);
     }
     this.tasks.clear();
+    this.convThreads.clear();
     this.workSlots = 0;
     this.account = null;
     this.pendingLoginId = null;
