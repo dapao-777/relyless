@@ -3,8 +3,9 @@ import {constants} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {homedir} from 'node:os';
-import {delimiter,dirname,join,resolve} from 'node:path';
+import {delimiter,dirname,join,resolve,win32} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {cliSpawnTarget,executableNames} from './cli-spawn.mjs';
 
 const HOSTS = {
   chatgpt: 'cc.ss_data.shisui_translate',
@@ -37,13 +38,13 @@ function options(args) {
   return result;
 }
 
-async function findExecutable(name, explicit, extraDirs = []) {
-  const exe = process.platform === 'win32' && !name.endsWith('.exe') ? `${name}.exe` : name;
+export async function findExecutable(name, explicit, extraDirs = [], env = process.env, platform = process.platform) {
+  const names = executableNames(name, {platform,pathext: env.PATHEXT});
   const candidates = [];
   if (explicit) candidates.push(explicit);
-  for (const dir of extraDirs) candidates.push(join(dir, exe), join(dir, name));
-  for (const path of (process.env.PATH || '').split(delimiter).filter(Boolean)) {
-    candidates.push(join(path, exe), join(path, name));
+  for (const dir of extraDirs) for (const exe of names) candidates.push(join(dir, exe));
+  for (const path of (env.PATH || '').split(platform === 'win32' ? win32.delimiter : delimiter).filter(Boolean)) {
+    for (const exe of names) candidates.push(join(path, exe));
   }
   const seen = new Set();
   for (const path of candidates) {
@@ -58,8 +59,38 @@ async function findExecutable(name, explicit, extraDirs = []) {
   return '';
 }
 
-async function findCodex(explicit) {
-  const path = await findExecutable('codex', explicit);
+// The npm shim (%APPDATA%\npm\codex.cmd) works through ComSpec, but the
+// @openai/codex package also ships a native codex*.exe that can be spawned
+// directly — prefer it when present.
+export async function findNativeCodex() {
+  const appdata = process.env.APPDATA;
+  if (!appdata) return '';
+  const root = join(appdata,'npm','node_modules','@openai');
+  let entries;
+  try { entries = await readdir(root,{withFileTypes:true}); } catch { return ''; }
+  const scan = async (dir,depth) => {
+    if (depth < 0) return '';
+    let list;
+    try { list = await readdir(dir,{withFileTypes:true}); } catch { return ''; }
+    for (const entry of list) {
+      const path = join(dir,entry.name);
+      if (entry.isFile() && /^codex.*\.exe$/i.test(entry.name)) return path;
+      if (entry.isDirectory() && !['bin','scripts'].includes(entry.name)) { const found = await scan(path,depth-1); if (found) return found; }
+    }
+    return '';
+  };
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith('codex')) continue;
+    const found = await scan(join(root,entry.name),4);
+    if (found) return found;
+  }
+  return '';
+}
+
+export async function findCodex(explicit) {
+  const path = process.platform === 'win32'
+    ? (explicit ? await findExecutable('codex', explicit) : await findNativeCodex() || await findExecutable('codex', ''))
+    : await findExecutable('codex', explicit);
   if (!path) throw new Error('未找到官方 Codex CLI。先运行 npm install -g @openai/codex，再重新安装连接器；也可使用 --codex 指定路径。');
   return path;
 }
@@ -87,7 +118,8 @@ async function findAgy(explicit) {
   return path;
 }
 
-async function extensionId(explicit) {
+export async function extensionId(explicit) {
+  if (!explicit && process.platform === 'win32') throw new Error('Windows 上路径推导的扩展 ID 不一定与浏览器一致，请显式传入 --extension-id（从扩展设置页复制安装命令）。');
   if (explicit) {
     if (!/^[a-p]{32}$/.test(explicit)) throw new Error('扩展 ID 必须是 32 位 a–p 字母；请从插件设置中的安装命令复制。');
     return explicit;
@@ -98,7 +130,7 @@ async function extensionId(explicit) {
   return createHash('sha256').update(identity).digest('hex').slice(0,32).replace(/[0-9a-f]/g,char => String.fromCharCode(97+parseInt(char,16)));
 }
 
-function locations(backend) {
+export function locations(backend) {
   const home = homedir();
   const host = HOSTS[backend];
   const rootName = backend === 'grok' ? 'Shisui Translate Grok' : backend === 'antigravity' ? 'Shisui Translate Antigravity' : 'Shisui Translate';
@@ -122,7 +154,6 @@ function locations(backend) {
     }};
   }
   if (process.platform === 'win32') {
-    if (backend !== 'grok' && backend !== 'antigravity') throw new Error('Windows 目前只支持 Grok / Google（Antigravity）订阅连接器。请加上 --backend grok 或 --backend antigravity 后重试。');
     const local = process.env.LOCALAPPDATA || join(home,'AppData/Local');
     return {root:join(local,rootName), host, windows:true, registry:{
       chrome:`HKCU\\SOFTWARE\\Google\\Chrome\\NativeMessagingHosts\\${host}`,
@@ -196,7 +227,7 @@ function unregisterWindowsHost(key) {
 async function main() {
   const opts = options(process.argv.slice(2));
   if (opts.help) {
-    console.log('RelyLess · 订阅连接器\n\n安装：node connector/install.mjs --extension-id ID [--backend chatgpt|grok|antigravity] [--codex PATH] [--grok PATH] [--agy PATH]\n浏览器：--browser chrome,edge（默认）；另支持 chromium、chrome-testing\n卸载：node connector/install.mjs --uninstall --backend chatgpt|grok|antigravity [--browser chrome,edge]\n\nChatGPT 后端需要 Node.js 20+ 和官方 Codex CLI，支持 macOS / Linux。\nGrok 后端需要 Node.js 20+ 和官方 Grok CLI，支持 macOS / Linux / Windows。\nGoogle（Antigravity）后端需要 Node.js 20+ 和官方 Antigravity CLI（agy），支持 macOS / Linux / Windows，使用 Google AI Pro / Ultra 订阅权益。\n仅注册当前用户，不需要管理员权限。\n卸载只移除指定浏览器的连接器注册；保留本机登录数据。要退出账户，请先在插件中退出登录。');
+    console.log('RelyLess · 订阅连接器\n\n安装：node connector/install.mjs --extension-id ID [--backend chatgpt|grok|antigravity] [--codex PATH] [--grok PATH] [--agy PATH]\n浏览器：--browser chrome,edge（默认）；另支持 chromium、chrome-testing\n卸载：node connector/install.mjs --uninstall --backend chatgpt|grok|antigravity [--browser chrome,edge]\n\nChatGPT 后端需要 Node.js 20+ 和官方 Codex CLI，支持 macOS / Linux / Windows。\nGrok 后端需要 Node.js 20+ 和官方 Grok CLI，支持 macOS / Linux / Windows。\nGoogle（Antigravity）后端需要 Node.js 20+ 和官方 Antigravity CLI（agy），支持 macOS / Linux / Windows，使用 Google AI Pro / Ultra 订阅权益。\n仅注册当前用户，不需要管理员权限。\n卸载只移除指定浏览器的连接器注册；保留本机登录数据。要退出账户，请先在插件中退出登录。');
     return;
   }
   if (Number(process.versions.node.split('.')[0]) < 20) throw new Error('需要 Node.js 20 或更新版本。');
@@ -238,8 +269,8 @@ async function main() {
   }
   const id = await extensionId(opts.extensionId);
   const cliPath = backend === 'grok' ? await findGrok(opts.grok) : backend === 'antigravity' ? await findAgy(opts.agy) : await findCodex(opts.codex);
-  const versionArgs = ['--version'];
-  const version = spawnSync(cliPath, versionArgs, {encoding:'utf8', timeout:10000, windowsHide: true});
+  const versionTarget = cliSpawnTarget(cliPath, ['--version']);
+  const version = spawnSync(versionTarget.command, versionTarget.args, {encoding:'utf8', timeout:10000, windowsHide: true, ...versionTarget.options});
   const versionText = `${version.stdout || ''}\n${version.stderr || ''}`.trim();
   if (backend === 'chatgpt') {
     if (version.status !== 0 || !/^codex-cli \d+\.\d+\.\d+/m.test(version.stdout || '')) throw new Error('无法运行官方 Codex CLI。请检查 Node.js 与 Codex 的安装。');
@@ -318,4 +349,6 @@ async function main() {
     : `仅首次使用或登录失效时才需要 ${loginLabel} 登录。`;
   console.log(`\n扩展 ID：${id}\n${cliLabel}：${versionText.split(/\r?\n/)[0]}\n连接器：${root}\n后端：${backend}\n\n安装 / 更新完成。重新加载扩展，进入“服务”，选择“${loginLabel} 订阅”，点击“刷新账户与模型”。\n已有登录数据保留，无需重新登录；${loginHint}\n更新连接器源码后也需重新运行此安装命令；安装后刷新连接会重启连接器，以加载新代码。\n升级 Node.js / ${cliLabel} 或移动扩展目录后，请重新运行此安装命令。`);
 }
-main().catch(error => { console.error(`安装失败：${error.message}`); process.exitCode = 1; });
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main().catch(error => { console.error(`安装失败：${error.message}`); process.exitCode = 1; });
+}

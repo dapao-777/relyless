@@ -96,7 +96,7 @@ Release 包已经包含运行所需文件和本地模型，不包含源码开发
 
 API 的账户、费用、额度、地区可用性、数据处理条款和所需权限均由你与服务商负责。RelyLess 不附带 API 额度，也不承诺第三方服务免费、持续可用或不留存数据。
 
-在 macOS / Linux 上支持 ChatGPT 订阅连接器；在 macOS / Linux / Windows 上均支持 Grok 及 Google（Antigravity）订阅连接器。自备 API 在所有受支持的浏览器平台上均可直接使用。
+在 macOS / Linux / Windows 上支持 ChatGPT、Grok 及 Google（Antigravity）订阅连接器。自备 API 在所有受支持的浏览器平台上均可直接使用。
 
 ### 可选模型路由
 
@@ -108,12 +108,12 @@ API 的账户、费用、额度、地区可用性、数据处理条款和所需�
 
 RelyLess 支持通过 Native Messaging 本机连接器对接官方 CLI，直接利用你的现有 AI 订阅权益。
 
-#### 1. ChatGPT 订阅连接器（macOS / Linux）
+#### 1. ChatGPT 订阅连接器（macOS / Linux / Windows）
 
 连接器要求：
-- macOS 或 Linux；
+- macOS、Linux 或 Windows；
 - Node.js 20 或更新版本；
-- 官方 [OpenAI Codex CLI](https://github.com/openai/codex)，且 `codex --version` 可正常运行。
+- 官方 [OpenAI Codex CLI](https://github.com/openai/codex)，且 `codex --version` 可正常运行（Windows 上 `codex.cmd` 亦可，安装程序会自动经 cmd 包装）。
 
 安装 Codex CLI：
 ```sh

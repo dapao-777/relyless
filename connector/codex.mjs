@@ -2,8 +2,9 @@ import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, rename, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { posix, win32, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { cliSpawnTarget } from "./cli-spawn.mjs";
 import {
   SOURCE_DATA_INSTRUCTIONS,SUPPORT_INSTRUCTIONS,SUPPORT_CORRECTION_INSTRUCTIONS,SUPPORT_SCHEMA,normalizeSupportProviderItems,inspectSupportResponse,normalizeSupportCorrections,normalizePreparationContext,
   ASSISTANCE_INSTRUCTIONS,assistanceSchema,normalizeAssistanceRequest,normalizeAssistanceResult,
@@ -85,16 +86,36 @@ export function buildCodexConfig() {
   ].join("\n");
 }
 
-export function buildCodexEnv({ codexPath, codexHome, tmpDir }) {
-  const pathEntries = [...new Set([dirname(codexPath), dirname(process.execPath), "/usr/bin", "/bin", "/usr/sbin", "/sbin"])];
-  return {
+export function buildCodexEnv({ codexPath, codexHome, tmpDir, platform = process.platform, executablePath = process.execPath, sourceEnv = process.env }) {
+  const paths = platform === 'win32' ? win32 : posix;
+  const systemRoot = sourceEnv.SystemRoot || sourceEnv.SYSTEMROOT || '';
+  const pathEntries = [...new Set([
+    paths.dirname(codexPath),
+    paths.dirname(executablePath),
+    ...(platform === 'win32'
+      ? [systemRoot && win32.join(systemRoot, 'System32')].filter(Boolean)
+      : ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]),
+  ])];
+  const env = {
     CODEX_HOME: codexHome,
     // System keychain discovery needs the real HOME; Codex data and document discovery stay isolated.
     HOME: homedir(),
     LANG: "en_US.UTF-8",
-    PATH: pathEntries.join(":"),
+    PATH: pathEntries.join(paths.delimiter),
     TMPDIR: tmpDir,
   };
+  if (platform === 'win32') {
+    env.USERPROFILE = homedir();
+    env.SYSTEMROOT = systemRoot;
+    env.WINDIR = sourceEnv.WINDIR || systemRoot;
+    env.COMSPEC = sourceEnv.COMSPEC || sourceEnv.ComSpec || '';
+    env.PATHEXT = sourceEnv.PATHEXT || '.EXE;.CMD;.BAT;.COM';
+    env.APPDATA = sourceEnv.APPDATA || '';
+    env.LOCALAPPDATA = sourceEnv.LOCALAPPDATA || '';
+    env.TEMP = tmpDir;
+    env.TMP = tmpDir;
+  }
+  return env;
 }
 
 export function buildThreadStartParams(workDir, model = "", baseInstructions = "") {
@@ -212,7 +233,7 @@ function parseStructuredOutput(text, parse, raw = false) {
 }
 
 export class CodexClient extends EventEmitter {
-  constructor({ codexPath, dataDir, timeoutMs = DEFAULT_TIMEOUT_MS, spawnImpl = spawn, diagnostic = null }) {
+  constructor({ codexPath, dataDir, timeoutMs = DEFAULT_TIMEOUT_MS, spawnImpl = spawn, diagnostic = null, platform = process.platform }) {
     super();
     if (!codexPath || !dataDir) throw new TypeError("codexPath 和 dataDir 为必填项");
     this.codexPath = resolve(codexPath);
@@ -221,6 +242,7 @@ export class CodexClient extends EventEmitter {
     this.workDir = join(this.dataDir, "work");
     this.tmpDir = join(this.dataDir, "tmp");
     this.timeoutMs = timeoutMs;
+    this.platform = platform;
     this.spawnImpl = spawnImpl;
     this.diagnostic = typeof diagnostic === 'function' ? diagnostic : null;
     this.child = null;
@@ -276,10 +298,13 @@ export class CodexClient extends EventEmitter {
     await chmod(temporary, 0o600);
     await rename(temporary, configPath);
 
-    const child = this.spawnImpl(this.codexPath, ["app-server", "--stdio", "--strict-config"], {
+    const target = cliSpawnTarget(this.codexPath, ["app-server", "--stdio", "--strict-config"], {platform: this.platform});
+    const child = this.spawnImpl(target.command, target.args, {
       cwd: this.workDir,
-      env: buildCodexEnv({ codexPath: this.codexPath, codexHome: this.codexHome, tmpDir: this.tmpDir }),
+      env: buildCodexEnv({ codexPath: this.codexPath, codexHome: this.codexHome, tmpDir: this.tmpDir, platform: this.platform }),
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+      ...target.options,
     });
     this.child = child;
     child.stdout.setEncoding("utf8");
