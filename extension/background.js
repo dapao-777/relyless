@@ -383,15 +383,15 @@ async function apiRequest(provider,payload,instructions,schema,{onContent,trace,
   const checkRequest=async()=>{if(generation!==providerGeneration)throw staleWork();await beforeRequest?.();if(generation!==providerGeneration)throw staleWork();};
   const inputChars=JSON.stringify(payload).length+String(instructions||'').length+JSON.stringify(schema||null).length;
   let usageReport=null;
-  const onUsage=usage=>{if(usage)usageReport={input:(usageReport?.input||0)+(usage.input||0),output:(usageReport?.output||0)+(usage.output||0)};};
+  const onUsage=usage=>{if(usage)usageReport={input:usage.input==null?usageReport?.input??null:(usageReport?.input||0)+usage.input,output:usage.output==null?usageReport?.output??null:(usageReport?.output||0)+usage.output};};
   try {
     const output=await diagnostics.provider(trace,'api',service.model,new URL(service.baseUrl).origin,()=>runWithApiKeyRotation(service,snapshot=>performProviderRequest(snapshot,payload,instructions,schema,{signal:controller.signal,onContent,onUsage,beforeRequest:checkRequest}),{signal:controller.signal}));
     if(instructions===ASSISTANCE_INSTRUCTIONS&&(!Object.hasOwn(output,'result')||Object.keys(output).length!==1))throw Object.assign(new Error('帮助服务返回的结果封装无效。'),{code:'OUTPUT_INVALID'});
     providerError='';
-    void recordModelUsage({provider:'api',service:service.name||service.model,model:service.model,operation:trace?.operation||'',ok:true,usage:usageReport,inputChars,outputChars:JSON.stringify(output).length,inputText:JSON.stringify(payload),outputText:JSON.stringify(output)});
+    if(!trace?.incognito)void recordModelUsage({provider:'api',service:service.name||service.model,model:service.model,operation:trace?.operation||'',ok:true,usage:usageReport,inputChars,outputChars:JSON.stringify(output).length,inputText:JSON.stringify(payload),outputText:JSON.stringify(output)});
     return output;
   } catch(error) {
-    void recordModelUsage({provider:'api',service:service.name||service.model,model:service.model,operation:trace?.operation||'',ok:false,usage:usageReport,inputChars,inputText:JSON.stringify(payload)});
+    if(!trace?.incognito)void recordModelUsage({provider:'api',service:service.name||service.model,model:service.model,operation:trace?.operation||'',ok:false,usage:usageReport,inputChars,inputText:JSON.stringify(payload)});
     let reported=error;
     if(controller.signal.aborted||error.name==='AbortError')reported=new Error(`请求超过 ${Math.round(timeoutMs/1000)} 秒，请稍后重试。${service.providerId==='stepfun'?'阶跃星辰推理较慢时，可把该服务的思考等级设为“低”。':''}`);else if(error instanceof TypeError)reported=new Error('无法连接服务，请检查网络、API 地址与服务跨域支持。');
     providerError=reported.message||'服务连接失败。';throw reported;
@@ -405,7 +405,7 @@ async function apiModelsList(service) {
   finally {clearTimeout(timeout);}
 }
 const SUBSCRIPTION_SERVICE_LABELS = {chatgpt:'ChatGPT 订阅',grok:'Grok 订阅',antigravity:'Google 订阅'};
-async function providerOperation(operation,trace,model='',provider='chatgpt',inputChars=0){return diagnostics.provider(trace,provider,model,provider,async()=>{const service=SUBSCRIPTION_SERVICE_LABELS[provider]||'订阅服务';try{const result=await operation();providerError='';const resultText=JSON.stringify(result??null);void recordModelUsage({provider,service,model:model||'默认模型',operation:trace?.operation||'',ok:true,inputChars,outputChars:resultText.length,outputText:resultText});return result;}catch(error){providerError=error.message||'服务连接失败。';void recordModelUsage({provider,service,model:model||'默认模型',operation:trace?.operation||'',ok:false,inputChars});throw error;}});}
+async function providerOperation(operation,trace,model='',provider='chatgpt',inputChars=0){return diagnostics.provider(trace,provider,model,provider,async()=>{const service=SUBSCRIPTION_SERVICE_LABELS[provider]||'订阅服务';try{const result=await operation();providerError='';const resultText=JSON.stringify(result??null);if(!trace?.incognito)void recordModelUsage({provider,service,model:model||'默认模型',operation:trace?.operation||'',ok:true,inputChars,outputChars:resultText.length,outputText:resultText});return result;}catch(error){providerError=error.message||'服务连接失败。';if(!trace?.incognito)void recordModelUsage({provider,service,model:model||'默认模型',operation:trace?.operation||'',ok:false,inputChars});throw error;}});}
 function staleWork(){return Object.assign(new Error('页面或设置已变化，请在当前页面重新操作。'),{code:'STALE'});}
 async function requireLiveConsumer(guards){
   let failure;
@@ -859,7 +859,7 @@ async function estimateUsageTokens(entry) {
   return enriched;
 }
 function recordModelUsage(entry) {
-  const work = modelUsageWrites.then(async () => {
+  const work = modelUsageWrites.catch(() => {}).then(async () => {
     const rows = await loadModelUsage();
     modelUsageRows = mergeUsageEntry(rows, await estimateUsageTokens(entry));
     await chrome.storage.local.set({[MODEL_USAGE_KEY]: {version: USAGE_VERSION, rows: modelUsageRows}});
@@ -868,7 +868,7 @@ function recordModelUsage(entry) {
   return work;
 }
 async function clearModelUsage() {
-  const work = modelUsageWrites.then(async () => { modelUsageRows = []; modelUsageLoaded = true; await chrome.storage.local.remove(MODEL_USAGE_KEY); }).catch(() => {});
+  const work = modelUsageWrites.catch(() => {}).then(async () => { await chrome.storage.local.remove(MODEL_USAGE_KEY); modelUsageRows = []; modelUsageLoaded = true; });
   modelUsageWrites = work;
   return work;
 }
@@ -1355,7 +1355,7 @@ async function handle(message,sender) {
     case 'LANGUAGE_PROFILE':{await lexiconReady();return identifyPageLanguage(text(message.text,'正文',40000,false));}
     case 'REVIEW_DUE':return reviewDue(message,sender);
     case 'ROUTING_STATS':return {routing:routingStatsView(routingStats),settings:routingSettingsOf((await load(false)).settings)};
-    case 'USAGE_STATS':{await modelUsageWrites;const days=Number.isSafeInteger(message.days)?Math.min(Math.max(message.days,0),3650):7;return {usage:usageStatsView(await loadModelUsage(),{days})};}
+    case 'USAGE_STATS':{await modelUsageWrites.catch(() => {});const days=Number.isSafeInteger(message.days)?Math.min(Math.max(message.days,0),3650):7;return {usage:usageStatsView(await loadModelUsage(),{days})};}
     case 'USAGE_CLEAR':await clearModelUsage();return {cleared:true};
     case 'REVIEW_FEEDBACK':return reviewFeedback(message,sender);
     case 'CONVERSATION_ASK':return conversationAsk(message,sender);
