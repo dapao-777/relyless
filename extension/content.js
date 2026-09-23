@@ -508,10 +508,15 @@
     if(veiled){hint.removeAttribute('aria-hidden');hint.setAttribute('role','button');hint.tabIndex=0;hint.setAttribute('aria-label',hint.dataset.revealed!==undefined?text:'显示词注');hint.title=hint.dataset.revealed!==undefined?text:'按回车显示词注';}
     else{hint.setAttribute('aria-hidden','true');hint.removeAttribute('role');hint.removeAttribute('aria-label');hint.removeAttribute('tabindex');hint.title=text;delete hint.dataset.revealed;}
   }
+  function layoutRecordHints(block){
+    const items=[];
+    for(const record of state.records)if(record.wrapper?.isConnected&&record.hint&&(!block||record.block===block))items.push(record);
+    globalThis.ShisuiReadingStyle?.layoutHints?.(items);
+  }
   function attachRecordHint(record){
       const text=annotationText(record);
       if(!text||!record.marks.length)return;
-      if(record.hint){configureHint(record.hint,text);record.wrapper.dataset.shisuiAnnotation=text;return;}
+      if(record.hint){configureHint(record.hint,text);record.wrapper.dataset.shisuiAnnotation=text;layoutRecordHints(record.block);return;}
       const hint=document.createElement('span'),wrapper=document.createElement('span'),last=record.marks.at(-1),active=state.card?.target;
       const ownsTarget=active&&(active.requestedRecord===record||active.support===record.target);
       wrapper.setAttribute(OWN,'annotation');hint.className=HINT_CLASS;hint.setAttribute(OWN,'hint');hint.__shisuiRecord=record;configureHint(hint,text);
@@ -521,6 +526,7 @@
       last.before(wrapper);wrapper.append(last,hint);record.hint=hint;record.wrapper=wrapper; if(!record.manual) attachKnownAction(record);
       record.range.setStart(record.marks[0].firstChild,0);record.range.setEnd(last.firstChild,last.firstChild.length);
       if(ownsTarget)active.anchor=record.range.cloneRange();
+      layoutRecordHints(record.block);
     }
   function annotationText(record){ const language=record.manual?(record.language||state.settings.helpLanguage):state.settings.helpLanguage;return language==='zh'?record.target.translation:record.target.hint; }
   function confirmedTarget(target){return target?.stage!=='pending'&&typeof target?.senseKey==='string'&&Boolean(target.senseKey.trim());}
@@ -529,7 +535,7 @@
     const stage=pending?'待确认 · 尚未确认当前语境':record.stage==='hint'?'提示态 · 显示顶部释义':record.stage==='mark'?'标记态 · 仅标记原词':'静默态 · 不主动展示',title=stage+' · '+lookupLabel()+'获取帮助';
     for(const mark of record.marks){mark.dataset.shisuiStage=record.stage;if(supportStage)mark.dataset.shisuiSupportStage=supportStage;else delete mark.dataset.shisuiSupportStage;mark.title=title;}
   }
-    function unwrapRecord(record) { record.knownAction?.remove(); record.knownAction=null; record.hint?.remove();record.hint=null;if(record.wrapper?.isConnected)record.wrapper.replaceWith(...record.wrapper.childNodes);record.wrapper=null;for(const mark of record.marks||[])if(mark.isConnected)mark.replaceWith(...mark.childNodes);record.since=0; }
+    function unwrapRecord(record) { const block=record.block;record.knownAction?.remove(); record.knownAction=null; record.hint?.remove();record.hint=null;if(record.wrapper?.isConnected)record.wrapper.replaceWith(...record.wrapper.childNodes);record.wrapper=null;for(const mark of record.marks||[])if(mark.isConnected)mark.replaceWith(...mark.childNodes);record.since=0;if(block?.isConnected)layoutRecordHints(block); }
   function clearAutomatic(preserveContent=false) {
     state.automaticReady=false;
     for(const [id,blocks]of state.knownBlocks){for(const block of blocks)if(!preserveContent||!block.isConnected)blocks.delete(block);if(!blocks.size)state.knownBlocks.delete(id);}
