@@ -815,14 +815,14 @@
     const node=range.startContainer,el=node.nodeType===1?node:node.parentElement;
     return el&&el.isConnected?el:null;
   }
-  function releaseCardAnchor(view){if(view.anchorEl){view.anchorEl.style.removeProperty('anchor-name');view.anchorEl=null;}const style=view.host.style;['position-anchor','position-try-fallbacks','margin','bottom','right'].forEach(name=>style.removeProperty(name));}
+  function releaseCardAnchor(view){if(view.anchorEl){if(view.anchorName===null)view.anchorEl.style.removeProperty('anchor-name');else view.anchorEl.style.setProperty('anchor-name',view.anchorName,view.anchorNamePriority);view.anchorEl=null;view.anchorName=null;}const style=view.host.style;['position-anchor','position-try-fallbacks','margin','bottom','right'].forEach(name=>style.removeProperty(name));}
   function positionCard(view) {
     const width=Math.min(380,innerWidth-24);
     view.host.style.width=width+'px';
     const el=cardAnchorElement(view.target);
     if(el&&CSS.supports('top: anchor(bottom)')&&CSS.supports('position-try-fallbacks: flip-block')){
       cardAnchorSheet();
-      if(view.anchorEl!==el){view.anchorEl?.style.removeProperty('anchor-name');el.style.anchorName='--relyless-card';view.anchorEl=el;}
+      if(view.anchorEl!==el){releaseCardAnchor(view);view.anchorName=el.style.getPropertyValue('anchor-name')||null;view.anchorNamePriority=el.style.getPropertyPriority('anchor-name');el.style.setProperty('anchor-name','--relyless-card');view.anchorEl=el;}
       const style=view.host.style;
       style.setProperty('position-anchor','--relyless-card');
       style.setProperty('position-try-fallbacks','--relyless-card-above');

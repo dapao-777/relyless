@@ -70,7 +70,7 @@ function optionsProviderKind() { return optionsState?.settings?.providerKind ===
 function optionsLookupKey(){const key=optionsState?.settings?.lookupKey;return typeof key==='string'&&/^[A-Z]$/.test(key)?key:'D';}
 function optionsRenderLookupKey(){const key=optionsLookupKey();optionsEls.lookupKey.value=key;for(const copy of optionsLookupKeyCopies)copy.textContent=key;}
 function optionsFillDomains(select,includeAuto) { select.replaceChildren();for(const [value,label] of Object.entries(DOMAINS)){if(!includeAuto&&value==='auto')continue;select.append(new Option(value==='auto'?'自动识别':label,value));} }
-function optionsNavigate() {
+function optionsNavigate(hit) {
   const previous=optionsCurrentSection, requested=location.hash.slice(1);
   const section=optionsSections.includes(requested)?requested:'assistance';
   const apply=()=>{
@@ -89,7 +89,7 @@ function optionsNavigate() {
     if(requested!==section)history.replaceState(null,'','#'+section);
     optionsCurrentSection=section;
   };
-  if(previous!==section&&typeof document.startViewTransition==='function')document.startViewTransition(apply);else apply();
+  if(previous&&previous!==section&&!hit?.element&&typeof document.startViewTransition==='function'&&!matchMedia('(prefers-reduced-motion: reduce)').matches)document.startViewTransition(apply);else apply();
   if(previous==='diagnostics'&&section!=='diagnostics')void optionsSyncState().catch(optionsShowError);
   clearInterval(optionsDiagnosticsTimer);optionsDiagnosticsTimer=0;
   if(section==='diagnostics'){
@@ -98,7 +98,14 @@ function optionsNavigate() {
   }
   if(section==='appearance')optionsRenderAppearance();
   if(section==='service'&&serviceCatalog)serviceCatalog.sync();
-  if(previous!==section){
+  if(hit?.element){
+    const target=hit.element;
+    const panel=target.closest('[data-appearance-panel]');
+    if(panel)optionsSelectAppearance(panel.dataset.appearancePanel);
+    for(const details of document.getElementById(section).querySelectorAll('details'))if(details.contains(target))details.open=true;
+    if(!target.hasAttribute('tabindex')&&!target.matches('summary, button, a, input, select, textarea'))target.tabIndex=-1;
+    target.focus({preventScroll:true});target.scrollIntoView({block:'center'});
+  }else if(previous!==section){
     requestAnimationFrame(()=>window.scrollTo(0,0));
     if(previous)optionsEls.sectionTitle.focus({preventScroll:true});
   }
@@ -409,14 +416,18 @@ optionsEls.providerName.addEventListener('input',()=>{optionsProviderDirty=true;
 optionsEls.providerId.addEventListener('change',async()=>{if(!optionsDiscardProviderDraft()){optionsProviderDirty=false;optionsRenderProvider();return;}await optionsCleanupDraftPermissions();const meta=getApiProvider(optionsEls.providerId.value);optionsRenderProviderFields(meta);optionsEls.providerName.value=meta.name;optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());optionsEls.providerModel.value=meta.defaultModel||'';optionsEls.providerKeys.value='';optionsProviderModels=[];optionsProviderDirty=false;optionsRenderProvider();setResult(optionsEls.providerResult,'服务商已更改；密钥不会从原服务带入。');});
 
 const optionsSearchIndex={};
-let optionsSearchReady=false;
+let optionsSearchReady=false,optionsSearchHits=[];
 function optionsBuildSearchIndex(){
   if(optionsSearchReady)return;
   for(const name of optionsSections){
     const root=document.getElementById(name);if(!root)continue;
-    const labels=new Set();
-    root.querySelectorAll('legend, summary, .field > span, .choice-cards b, .adaptive-setting b, h3').forEach(el=>{const label=el.textContent.replace(/\s+/g,' ').trim();if(label)labels.add(label);});
-    optionsSearchIndex[name]=[...labels];
+    const labels=[];
+    root.querySelectorAll('legend, summary, .field > span, .choice-cards b, .adaptive-setting b, h3').forEach(element=>{
+      if(element.closest('[data-video-feature][hidden]'))return;
+      const label=element.textContent.replace(/\s+/g,' ').trim();
+      if(label)labels.push({section:name,label,element});
+    });
+    optionsSearchIndex[name]=labels;
   }
   optionsSearchReady=true;
 }
@@ -424,21 +435,22 @@ function optionsApplySearch(){
   const query=optionsEls.settingsSearch.value.trim().toLowerCase();
   const links=[...document.querySelectorAll('.sidebar nav a')],groups=[...document.querySelectorAll('.sidebar .nav-group-label')];
   const results=optionsEls.searchResults;
-  if(!query){links.forEach(a=>a.hidden=false);groups.forEach(g=>g.hidden=false);results.hidden=true;results.replaceChildren();return;}
+  if(!query){optionsSearchHits=[];links.forEach(a=>a.hidden=false);groups.forEach(g=>g.hidden=false);results.hidden=true;results.replaceChildren();return;}
   optionsBuildSearchIndex();
   const hits=[];let anyVisible=false;
   for(const a of links){
     const section=a.dataset.section,navMatch=a.textContent.toLowerCase().includes(query);
-    const deep=(optionsSearchIndex[section]||[]).filter(label=>label.toLowerCase().includes(query));
+    const deep=(optionsSearchIndex[section]||[]).filter(hit=>hit.label.toLowerCase().includes(query));
     a.hidden=!(navMatch||deep.length);
     if(!a.hidden)anyVisible=true;
-    for(const label of deep.slice(0,4))hits.push({section,label});
+    hits.push(...deep.slice(0,4));
   }
   groups.forEach(g=>g.hidden=true);
+  optionsSearchHits=hits.slice(0,12);
   results.replaceChildren();
-  if(hits.length){
-    for(const hit of hits.slice(0,12)){
-      const button=document.createElement('button');button.type='button';button.dataset.section=hit.section;
+  if(optionsSearchHits.length){
+    for(const [index,hit] of optionsSearchHits.entries()){
+      const button=document.createElement('button');button.type='button';button.dataset.section=hit.section;button.dataset.searchIndex=String(index);
       const label=document.createElement('span');label.textContent=hit.label;
       const where=document.createElement('span');where.className='search-section';where.textContent=' · '+(optionsLabels[hit.section]||hit.section);
       button.append(label,where);results.append(button);
@@ -452,8 +464,11 @@ optionsEls.settingsSearch.addEventListener('keydown',event=>{
   if(event.key==='Enter'){event.preventDefault();const button=optionsEls.searchResults.querySelector('button');const link=document.querySelector('.sidebar nav a:not([hidden])');if(button){button.click();}else if(link){location.hash=link.getAttribute('href');}}
 });
 optionsEls.searchResults.addEventListener('click',event=>{
-  const button=event.target.closest('button[data-section]');if(!button)return;
-  optionsEls.settingsSearch.value='';optionsApplySearch();location.hash='#'+button.dataset.section;
+  const button=event.target.closest('button[data-search-index]');if(!button)return;
+  const hit=optionsSearchHits[Number(button.dataset.searchIndex)];if(!hit)return;
+  optionsEls.settingsSearch.value='';optionsApplySearch();
+  if(location.hash!=='#'+hit.section)history.pushState(null,'','#'+hit.section);
+  optionsNavigate(hit);
 });
 window.addEventListener('hashchange',optionsNavigate);
 for(const tab of optionsAppearanceTabs){

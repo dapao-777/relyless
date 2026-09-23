@@ -14,6 +14,7 @@ beforeAll(async () => {
     height: 800
   });
   window.document.write(html);
+  window.HTMLElement.prototype.scrollIntoView=()=>{};
   document = window.document;
 
   function MockOption(text, value) {
@@ -140,8 +141,9 @@ test('settings search filters navigation, lists deep matches, and navigates on c
   results[0].click();
   await new Promise(r=>setTimeout(r,20));
   expect(document.getElementById('service').hidden).toBe(false);
+  expect(document.querySelector('#service .settings-disclosure').open).toBe(true);
+  expect(document.activeElement.textContent).toContain('并发');
   expect(input.value).toBe('');
-
   input.value='绝不可能匹配xyz';
   input.dispatchEvent(new window.Event('input',{bubbles:true}));
   expect(document.querySelector('#search-results .search-empty')).toBeTruthy();
@@ -154,6 +156,18 @@ test('settings search filters navigation, lists deep matches, and navigates on c
   expect(document.getElementById('search-results').hidden).toBe(true);
 });
 
+test('deep search reveals a hidden appearance tab and focuses the exact label in the current section', async () => {
+  window.location.hash='#appearance';
+  window.dispatchEvent(new window.Event('hashchange'));
+  const input=document.getElementById('settings-search');
+  input.value='被提示的原词';
+  input.dispatchEvent(new window.Event('input',{bubbles:true}));
+  document.querySelector('#search-results button').click();
+  await new Promise(r=>setTimeout(r,20));
+  expect(document.getElementById('appearance-panel-original').hidden).toBe(false);
+  expect(document.activeElement.textContent).toBe('被提示的原词');
+  expect(document.querySelector('#appearance-tab-original').getAttribute('aria-selected')).toBe('true');
+});
 test('request concurrency select persists a bounded integer patch', async () => {
   const select=document.getElementById('request-concurrency');
   expect(select).toBeTruthy();
