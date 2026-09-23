@@ -3,17 +3,21 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RelyLess</title><script src="../design.js" data-shisui-page></script><link rel="stylesheet" href="ui.css"><link rel="icon" type="image/png" href="../icons/icon-32.png"></head>
 <body class="popup-body"><main class="popup-shell" aria-labelledby="brand-title">
 <header class="popup-header"><div class="brand-lockup"><img class="brand-icon" src="../icons/relyless.svg" width="28" height="28" alt=""><h1 id="brand-title">RelyLess</h1></div><button id="open-options" class="icon-text-button header-settings" type="button">设置</button></header>
+<section id="unsupported-page" class="unsupported-page" aria-labelledby="unsupported-title" hidden><h2 id="unsupported-title">此页暂不支持</h2><p>请打开普通 HTTP 或 HTTPS 网页后再使用阅读辅助。浏览器内部页面与扩展页面无法开启。</p><a id="unsupported-guide" href="options.html#guide" target="_blank" rel="noopener">查看使用说明</a></section>
+<div id="page-controls" hidden>
 <section id="service-warning" class="notice" hidden><b>服务未就绪</b><p id="service-warning-copy">连接服务后才能生成英文线索和局部中文说明。</p><button id="repair-service" type="button">前往服务设置</button></section>
-<section class="activation-panel" aria-labelledby="activation-title"><div class="page-context"><span id="site-hostname">当前标签页</span><span id="page-status" class="status-chip" aria-live="polite">正在检查</span></div><div class="activation-heading"><h2 id="activation-title">当前页面</h2></div><p id="page-note" class="muted">保留英文，只在需要的位置提供帮助。</p><button id="toggle-page" class="primary-action" type="button" disabled><span id="toggle-label">开启本页</span></button><p id="action-error" class="inline-message error" role="alert" hidden></p></section>
+<section class="activation-panel" aria-labelledby="activation-title"><div class="page-context"><span id="site-hostname">当前标签页</span><span id="page-status" class="status-chip" aria-live="polite">正在检查</span></div><h2 id="activation-title">当前页面</h2><button id="toggle-page" class="primary-action" type="button" disabled><span id="toggle-label">开启本页</span></button><p id="page-note" class="muted">保留英文，只在需要的位置提供帮助。</p><p id="action-error" class="inline-message error" role="alert" hidden></p></section>
 <section class="sentence-groups-panel" aria-labelledby="sentence-groups-title">
-  <div class="sentence-groups-copy"><h2 id="sentence-groups-title">阅读解构</h2><p id="sentence-groups-note" aria-live="polite">已关闭；可随时为当前页面开启。</p></div>
+  <h2 id="sentence-groups-title">阅读解构</h2>
   <label class="switch"><input id="sentence-groups" type="checkbox" disabled aria-describedby="sentence-groups-note sentence-structure-key sentence-groups-error"><span aria-hidden="true"></span><span class="sr-only">阅读解构</span></label>
+  <p id="sentence-groups-note" aria-live="polite">已关闭；可随时为当前页面开启。</p>
   <p id="sentence-structure-key" class="sentence-structure-key">标出当前页的主谓宾等结构。分析会产生额外模型用量。</p>
   <p id="sentence-groups-error" class="inline-message error" role="alert" hidden></p>
 </section>
 <section id="emergency-panel" class="emergency-panel" aria-labelledby="emergency-title" tabindex="-1">
-  <div class="emergency-heading"><h2 id="emergency-title">本页双语翻译</h2><p id="emergency-status" aria-live="polite">保留英文，按阅读位置翻译附近正文。</p></div>
+  <h2 id="emergency-title">本页双语翻译</h2>
   <button id="emergency-open" type="button" disabled>翻译本页</button>
+  <p id="emergency-status" aria-live="polite">保留英文，按阅读位置翻译附近正文。</p>
   <div id="emergency-confirm" class="emergency-confirm" role="group" aria-labelledby="emergency-confirm-title" hidden>
     <b id="emergency-confirm-title">确认翻译当前页面</b>
     <p>英文会保留；仅处理你读到附近的正文。</p>
@@ -32,6 +36,7 @@
   </div>
   <p id="emergency-result" class="inline-message" role="status" aria-live="polite" hidden></p>
 </section>
-<section class="site-auto-panel" aria-labelledby="site-auto-title"><div class="site-auto-copy"><h2 id="site-auto-title">此网站以后自动开启</h2><p id="site-auto-note">授权一次，以后打开此网站即可自动开始。</p></div><label class="switch"><input id="site-auto" type="checkbox" disabled><span aria-hidden="true"></span><span class="sr-only">此网站以后自动开启</span></label><p id="site-auto-error" class="inline-message error" role="alert" hidden></p></section>
-<footer class="popup-footer"><p>按住 <span data-lookup-key>D</span> + 单击单词查看释义。</p></footer>
+<section class="site-auto-panel" aria-labelledby="site-auto-title"><h2 id="site-auto-title">此网站以后自动开启</h2><label class="switch"><input id="site-auto" type="checkbox" disabled aria-describedby="site-auto-note site-auto-error"><span aria-hidden="true"></span><span class="sr-only">此网站以后自动开启</span></label><p id="site-auto-note">授权一次，以后打开此网站即可自动开始。</p><p id="site-auto-error" class="inline-message error" role="alert" hidden></p></section>
+</div>
+<footer class="popup-footer"><p>按住 <span data-lookup-key>D</span> + 单击查词 · <span>Alt+Shift+R</span> 译段</p></footer>
 </main><script type="module" src="popup.js"></script></body></html>

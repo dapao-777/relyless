@@ -1,6 +1,8 @@
 import {request, errorText, upsertSiteEntry} from '../shared.js';
 
 const popupEls={status:document.querySelector('#page-status'),hostname:document.querySelector('#site-hostname'),siteAuto:document.querySelector('#site-auto'),siteAutoNote:document.querySelector('#site-auto-note'),siteAutoError:document.querySelector('#site-auto-error'),toggle:document.querySelector('#toggle-page'),toggleLabel:document.querySelector('#toggle-label'),pageNote:document.querySelector('#page-note'),actionError:document.querySelector('#action-error'),sentenceGroups:document.querySelector('#sentence-groups'),sentenceGroupsNote:document.querySelector('#sentence-groups-note'),sentenceGroupsError:document.querySelector('#sentence-groups-error'),options:document.querySelector('#open-options'),serviceWarning:document.querySelector('#service-warning'),serviceWarningCopy:document.querySelector('#service-warning-copy'),repairService:document.querySelector('#repair-service')};
+const popupUnsupported=document.querySelector('#unsupported-page');
+const popupPageControls=document.querySelector('#page-controls');
 for(const name of ['panel','open','confirm','start','cancel','progress','progress-copy','counts','actions','stop','resume','retry','clear','result','status']){
   const key='emergency'+name.split('-').map(part=>part[0].toUpperCase()+part.slice(1)).join('');
   popupEls[key]=document.querySelector('#emergency-'+name);
@@ -43,27 +45,27 @@ function popupRender(){
   const lookupKey=typeof popupState?.settings?.lookupKey==='string'&&/^[A-Z]$/.test(popupState.settings.lookupKey)?popupState.settings.lookupKey:'D';
   for(const copy of popupLookupKeyCopies)copy.textContent=lookupKey;
   const supported=popupSupported();
+  popupUnsupported.hidden=supported;
+  popupPageControls.hidden=!supported;
+  if(!supported)return;
   const allSites=Boolean(popupAutomation?.automation?.allSites);
   const configured=popupAutomation?.siteRule??allSites;
   popupEls.siteAuto.disabled=popupBusy||!supported||!popupAutomation;
   popupEls.siteAuto.checked=Boolean(supported&&configured);
-  if(!supported)popupEls.siteAutoNote.textContent='仅普通 HTTP 或 HTTPS 网页可授权。';
-  else if(popupAutomation?.paused&&configured)popupEls.siteAutoNote.textContent='此网站已授权；当前标签页已暂停。';
+  if(popupAutomation?.paused&&configured)popupEls.siteAutoNote.textContent='此网站已授权；当前标签页已暂停。';
   else if(allSites&&popupAutomation?.siteRule===false)popupEls.siteAutoNote.textContent='全部网站已开启；当前网站已排除。';
   else if(allSites)popupEls.siteAutoNote.textContent='全部网站已开启；关闭可排除当前网站。';
   else popupEls.siteAutoNote.textContent=configured?'下次打开此网站会自动辅助。':'授权后自动开始；有限上下文用于准备，支持记录只在本机。';
   popupEls.toggle.disabled=popupBusy||!supported;
   popupEls.status.classList.toggle('active',popupEnabled);
-  if(!supported){popupSetLive(popupEls.status,'此页不可用');popupEls.toggleLabel.textContent='当前页不可用';popupEls.pageNote.textContent='请在普通网页主文档中使用。';}
-  else if(popupEnabled){popupSetLive(popupEls.status,'本页已开启');popupEls.toggleLabel.textContent='暂停本页';popupEls.pageNote.textContent=popupState?.settings?.assistanceMode==='on-demand'?'当前为仅在需要时；保留主动求助。':'保留英文，只在当前位置提供少量支撑。';}
+  if(popupEnabled){popupSetLive(popupEls.status,'本页已开启');popupEls.toggleLabel.textContent='暂停本页';popupEls.pageNote.textContent=popupState?.settings?.assistanceMode==='on-demand'?'当前为仅在需要时；保留主动求助。':'保留英文，只在当前位置提供少量支撑。';}
   else{popupSetLive(popupEls.status,popupAutomation?.paused?'本页已暂停':'等待开启');popupEls.toggleLabel.textContent=popupAutomation?.paused?'继续辅助':'开启本页';popupEls.pageNote.textContent='开启不会改变网站的长期授权规则。';}
   const serviceProblem=popupState?.providerError||(['chatgpt','grok','antigravity'].includes(popupState?.settings?.providerKind)?popupState?.subscription?.error:'')||(!popupState?.providerConfigured?'辅助服务尚未连接。':'');
   popupEls.serviceWarning.hidden=!serviceProblem;
   popupEls.serviceWarningCopy.textContent=serviceProblem||'';
   popupEls.sentenceGroups.checked=Boolean(popupSentenceGroupsLoaded&&popupSentenceGroups.enabled);
   popupEls.sentenceGroups.disabled=popupBusy||!supported||!popupSentenceGroupsLoaded||Boolean(!popupSentenceGroups.enabled&&!popupState?.providerConfigured);
-  if(!supported)popupSetLive(popupEls.sentenceGroupsNote,'当前页不可用；请在普通网页中使用阅读解构。');
-  else if(!popupState?.providerConfigured)popupSetLive(popupEls.sentenceGroupsNote,popupSentenceGroups.enabled?'服务未就绪，阅读解构已停止；仍可关闭本页阅读解构。':'连接辅助服务后才能开启阅读解构。');
+  if(!popupState?.providerConfigured)popupSetLive(popupEls.sentenceGroupsNote,popupSentenceGroups.enabled?'服务未就绪，阅读解构已停止；仍可关闭本页阅读解构。':'连接辅助服务后才能开启阅读解构。');
   else if(popupSentenceGroups.status==='queued')popupSetLive(popupEls.sentenceGroupsNote,'正在准备分析当前可见正文。');
   else if(popupSentenceGroups.status==='analyzing')popupSetLive(popupEls.sentenceGroupsNote,'正在分析当前可见正文；滚动后只分析新出现的句子。');
   else if(popupSentenceGroups.status==='error')popupSetLive(popupEls.sentenceGroupsNote,'阅读解构出错，可在扩展中关闭后重新开启。');
@@ -160,7 +162,20 @@ async function popupEmergencyAction(type){
   finally{popupBusy=false;popupRender();popupFocusEmergency();}
 }
 function popupOpenOptions(section=''){chrome.runtime.openOptionsPage(()=>{if(section)chrome.tabs.query({url:chrome.runtime.getURL('ui/options.html*')},tabs=>{const tab=tabs.at(-1);if(tab?.id)chrome.tabs.update(tab.id,{url:chrome.runtime.getURL('ui/options.html#'+section)});});});}
-async function popupInit(){try{[popupTab]=await chrome.tabs.query({active:true,currentWindow:true});[popupState,popupAutomation]=await Promise.all([request('STATE_GET'),request('AUTOMATION_GET',{tabId:popupTab?.id})]);try{await popupGetSentenceGroups();}catch(error){popupSentenceGroupsLoaded=false;popupSentenceGroups.error='无法读取阅读解构设置：'+errorText(error);popupEls.sentenceGroupsError.textContent=popupSentenceGroups.error;popupEls.sentenceGroupsError.hidden=false;}await popupGetPageStatus();popupRender();const intent=popupSupported()?await request('POPUP_INTENT_TAKE',{tabId:popupTab.id,url:popupTab.url}).catch(()=>({focus:false})):{focus:false};if(intent?.focus){if(popupEmergency.phase!=='off')popupEls.emergencyPanel.focus();else popupEmergencyPrompt(true);}}catch(error){popupShowError(popupEls.actionError,error);popupRender();}}
+async function popupInit(){
+  try{
+    [popupTab]=await chrome.tabs.query({active:true,currentWindow:true});
+    popupState=await request('STATE_GET');
+    if(!popupSupported()){popupRender();return;}
+    popupAutomation=await request('AUTOMATION_GET',{tabId:popupTab.id});
+    try{await popupGetSentenceGroups();}
+    catch(error){popupSentenceGroupsLoaded=false;popupSentenceGroups.error='无法读取阅读解构设置：'+errorText(error);}
+    await popupGetPageStatus();
+    popupRender();
+    const intent=await request('POPUP_INTENT_TAKE',{tabId:popupTab.id,url:popupTab.url}).catch(()=>({focus:false}));
+    if(intent?.focus){if(popupEmergency.phase!=='off')popupEls.emergencyPanel.focus();else popupEmergencyPrompt(true);}
+  }catch(error){if(popupSupported())popupShowError(popupEls.actionError,error);popupRender();}
+}
 async function popupWatchPage(){
   try{if(!popupBusy&&(popupSentenceGroups.enabled||popupEmergency.phase!=='off')&&document.visibilityState==='visible'){await popupGetPageStatus();popupRender();}}
   catch{/* 轮询为尽力而为，失败下一秒重试，不写入界面 */}

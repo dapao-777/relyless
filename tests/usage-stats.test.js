@@ -1,4 +1,5 @@
 import {afterEach,beforeEach,expect,test} from 'bun:test';
+import {indexedDB} from 'fake-indexeddb';
 import {performProviderRequest} from '../extension/api-transport.mjs';
 import {mergeUsageEntry,normalizeUsageRow,usageStatsView} from '../extension/usage-stats.js';
 import {isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
@@ -35,9 +36,9 @@ test('usage rows merge by day+service+model+operation and estimate missing token
   expect(sub).toMatchObject({requests:1,errors:1,input:0,output:0,estInput:200,estOutput:0});
 });
 
-test('tokenizer-derived estimates override char fallback and mark estKind',()=>{
+test('local MiniLM rough estimates override char fallback and mark estKind',()=>{
   let rows=[];
-  // 本地 tokenizer 已热的条目直接用真实 token 数，标记 estKind。
+  // 分词器的计数只是本机粗估，与服务模型的实际 token 不同。
   rows=mergeUsageEntry(rows,{provider:'api',service:'主力',model:'m1',operation:'ASSIST',ok:true,inputChars:400,outputChars:80,estInput:97,estOutput:21,estKind:'tokenizer'},{now:Date.parse('2026-01-10T08:00:00Z')});
   expect(rows[0]).toMatchObject({estInput:97,estOutput:21,estKind:'tokenizer'});
   // 部分走 tokenizer、部分回退字符 → mixed。
@@ -149,4 +150,62 @@ test('an assist request records model usage that USAGE_STATS reports and USAGE_C
   expect(cleared.usage.totals.requests).toBe(0);
   expect(fixture.local.modelUsage).toBeUndefined();
   globalThis.chrome=chromeBefore;
+});
+
+test('partial provider usage keeps missing output unknown for estimation',()=>{
+  const [row]=mergeUsageEntry([],{provider:'api',service:'A',model:'m',operation:'ASSIST',ok:true,usage:{input:25,output:null},inputChars:400,outputChars:80});
+  expect(row).toMatchObject({input:25,output:0,estInput:0,estOutput:20});
+});
+
+test('provider reporting only input tokens leaves output unreported',async()=>{
+  const events=[];
+  globalThis.fetch=async()=>Response.json({status:'completed',output_text:'{"value":"ok"}',usage:{input_tokens:17}});
+  await performProviderRequest(service('openai','https://api.example.test/v1','gpt-5'),{},'Explain.',schema,{onUsage:u=>events.push(u)});
+  expect(events).toEqual([{input:17,output:null}]);
+});
+
+test('incognito model calls never persist usage, failed clear remains visible and retryable',async()=>{
+  const previousIndexedDB=globalThis.indexedDB;
+  globalThis.indexedDB=indexedDB;
+  const primary={id:'svc-primary',name:'Primary',providerId:'openai',baseUrl:'https://primary.example/v1',model:'primary-model',apiKey:'primary-key'};
+  const fixture=isolatedChrome({wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',apiServices:[primary],activeApiServiceId:primary.id,domainDetection:{mode:'local'},rememberSupport:false}},{id:'usage-private-fixture'});
+  globalThis.chrome=fixture.api;
+  let failure=false,partial=false;
+  globalThis.fetch=async()=>failure?new Response('unauthorized',{status:401}):Response.json({status:'completed',output_text:JSON.stringify(assistResult),usage:partial?{input_tokens:120}:{input_tokens:120,output_tokens:30}});
+  const owner={id:fixture.id,url:'chrome-extension://'+fixture.id+'/ui/options.html'};
+  try{
+    await import('../extension/background.js?usage-private='+Date.now());
+    const command=(id,text='index')=>({type:'ASSIST',requestId:id,text,context:'The database query uses '+text+'.',domain:'tech',kind:'word',level:'hint',detail:'full'});
+    const privateSender={...pageSender,tab:{...pageSender.tab,incognito:true}};
+    expect((await isolatedSend(fixture,command('private-ok'),privateSender)).hint).toBe('a short gloss');
+    failure=true;
+    await expect(isolatedSend(fixture,command('private-error','query'),privateSender)).rejects.toThrow();
+    expect(fixture.local.modelUsage).toBeUndefined();
+    failure=false;
+    expect((await isolatedSend(fixture,command('ordinary-ok','database'),pageSender)).hint).toBe('a short gloss');
+    const before=(await isolatedSend(fixture,{type:'USAGE_STATS',days:0},owner)).usage;
+    expect(before.totals.requests).toBe(1);
+    const remove=fixture.api.storage.local.remove;
+    fixture.api.storage.local.remove=async keys=>{if(keys==='modelUsage')throw new Error('storage unavailable');return remove(keys);};
+    await expect(isolatedSend(fixture,{type:'USAGE_CLEAR'},owner)).rejects.toThrow('storage unavailable');
+    expect((await isolatedSend(fixture,{type:'USAGE_STATS',days:0},owner)).usage.totals.requests).toBe(1);
+    expect(fixture.local.modelUsage.rows[0].requests).toBe(1);
+    fixture.api.storage.local.remove=remove;
+    await isolatedSend(fixture,{type:'USAGE_CLEAR'},owner);
+    expect((await isolatedSend(fixture,{type:'USAGE_STATS',days:0},owner)).usage.totals.requests).toBe(0);
+    expect(fixture.local.modelUsage).toBeUndefined();
+    partial=true;
+    await isolatedSend(fixture,command('ordinary-again','another'),pageSender);
+    expect(fixture.local.modelUsage.rows[0].requests).toBe(1);
+    expect(fixture.local.modelUsage.rows[0]).toMatchObject({input:120,output:0,estInput:0});
+    expect(fixture.local.modelUsage.rows[0].estOutput).toBeGreaterThan(0);
+    fixture.api.storage.local.remove=async keys=>{if(keys==='modelUsage')throw new Error('storage unavailable');return remove(keys);};
+    await expect(isolatedSend(fixture,{type:'MEMORY_CLEAR'},owner)).rejects.toThrow('storage unavailable');
+    expect(fixture.local.readingCleanup?.scope).toBe('memory');
+    expect(fixture.local.modelUsage.rows[0].requests).toBe(1);
+    fixture.api.storage.local.remove=remove;
+    await isolatedSend(fixture,{type:'MEMORY_CLEAR'},owner);
+    expect(fixture.local.modelUsage).toBeUndefined();
+    expect(fixture.local.readingCleanup).toBeUndefined();
+  }finally{globalThis.chrome=chromeBefore;globalThis.indexedDB=previousIndexedDB;}
 });

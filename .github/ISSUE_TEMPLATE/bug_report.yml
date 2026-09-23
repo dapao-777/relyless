@@ -1,0 +1,75 @@
+name: Bug report
+description: 报告可复现的错误、回归或兼容性问题
+title: "fix: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢报告。请勿粘贴 API Key、令牌、私人网页正文、完整 URL 或未经脱敏的诊断日志。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题
+      description: 当前发生了什么？这如何影响阅读？
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开……
+        2. 开启……
+        3. 执行……
+        4. 观察到……
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: 发生位置
+      options:
+        - 网页阅读辅助
+        - Popup
+        - 设置页
+        - 本页双语翻译
+        - 视频字幕
+        - Native connector
+        - 构建或发布工具
+        - 其他
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: RelyLess 版本
+      placeholder: v0.4.0 或 commit SHA
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: 浏览器与系统
+      placeholder: Chrome 150 / macOS 27
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 已脱敏证据
+      description: 可附截图、错误类别或最小测试页。隐藏正文、URL、账户和密钥。
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前检查
+      options:
+        - label: 我已搜索现有 Issue 和 PR
+          required: true
+        - label: 此报告不包含密钥、令牌、私人正文、完整 URL 或未经脱敏的日志
+          required: true

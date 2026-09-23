@@ -1,5 +1,5 @@
 import {afterEach,describe,expect,test} from 'bun:test';
-import {mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {mkdtemp,realpath,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {extensionId,findExecutable,locations} from '../connector/install.mjs';
@@ -17,6 +17,16 @@ describe('findExecutable',()=>{
   test('returns empty when nothing matches',async()=>{
     const dir=await mkdtemp(join(tmpdir(),'relyless-install-'));dirs.push(dir);
     expect(await findExecutable('relyless-missing','',[dir],{PATH:dir,PATHEXT:'.CMD;.EXE'})).toBe('');
+  });
+  test('simulated Windows lookup uses PATHEXT and semicolon-separated PATH',async()=>{
+    const first=await mkdtemp(join(tmpdir(),'relyless-empty-'));
+    const second=await mkdtemp(join(tmpdir(),'relyless-win-'));
+    dirs.push(first,second);
+    await writeFile(join(second,'codex.cmd'),'');
+    await writeFile(join(second,'codex.exe'),'');
+    const env={PATH:`${first};${second}`,PATHEXT:'.EXE;.CMD'};
+    expect(await findExecutable('codex','',[],env,'win32')).toBe(await realpath(join(second,'codex.exe')));
+    expect(await findExecutable('codex','',[],{...env,PATHEXT:'.CMD;.EXE'},'win32')).toBe(await realpath(join(second,'codex.cmd')));
   });
 });
 

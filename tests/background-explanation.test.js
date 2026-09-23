@@ -3,7 +3,10 @@ import {normalizeSettings,wordId} from '../extension/shared.js';
 
 import {event,pick,remove,isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
 import {createConversationStore} from '../extension/conversation-store.js';
-import 'fake-indexeddb/auto';
+import {indexedDB,IDBKeyRange} from 'fake-indexeddb';
+
+globalThis.indexedDB=indexedDB;
+globalThis.IDBKeyRange=IDBKeyRange;
 
 function capabilityResponse(body){const format=body.response_format?.json_schema;if(format?.name!=='relyless_capability')return null;return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({probe:format.schema.properties.probe.enum[0]})}}]});}
 function withCapabilityProbe(handler){return async(url,options)=>capabilityResponse(JSON.parse(options.body))||handler(url,options);}
@@ -177,18 +180,6 @@ test('invalid reading settings leave the last accepted configuration intact',asy
   expect((await send({type:'STATE_GET'},extensionSender)).settings).toMatchObject({lookupKey:'Q',lookupDisplay:'annotation',hintDisplay:'veil',readingStyle});
   expect((await send({type:'STATE_GET'})).settings.hintDisplay).toBe('veil');
 });
-test('content pages can accept a suggested domain and optionally remember the site',async()=>{
-  const before=(await send({type:'STATE_GET'},extensionSender)).settings.domainRules.length;
-  expect(await send({type:'PAGE_DOMAIN_SET',domain:'medical',rememberSite:true})).toEqual({domain:'medical'});
-  const rules=(await send({type:'STATE_GET'},extensionSender)).settings.domainRules;
-  const rule=rules.at(-1);
-  expect(rules.length).toBe(before+1);
-  expect(rule).toMatchObject({host:'reading.example',pathPrefix:'/',domain:'medical',includeSubdomains:false});
-  await send({type:'STATE_PATCH',patch:{domainRules:rules.filter(item=>!(item.host==='reading.example'&&item.domain==='medical'))}},extensionSender);
-  await expect(send({type:'PAGE_DOMAIN_SET',domain:'bogus'})).rejects.toThrow();
-  const detached={id:'backend-fixture',url:'https://reading.example/article',frameId:0};
-  await expect(send({type:'PAGE_DOMAIN_SET',domain:'tech'},detached)).rejects.toThrow('目标页面');
-});
 test('sense keys merge semantically close labels through warm local embeddings',async()=>{
   const previousSend=chrome.runtime.sendMessage,previousOffscreen=chrome.offscreen,savedWords=stored.words;
   try{
@@ -202,6 +193,20 @@ test('sense keys merge semantically close labels through warm local embeddings',
     expect(committed.support).toMatchObject({senseKey:'sense-existing'});
     expect(stored.words[0].senses).toHaveLength(1);
   }finally{chrome.runtime.sendMessage=previousSend;chrome.offscreen=previousOffscreen;await new Promise(resolve=>setTimeout(resolve,20));stored.words=savedWords;}
+});
+test('a legacy sense without embedding retains its key after a close label change when local model is warm',async()=>{
+  const previousSend=chrome.runtime.sendMessage,previousOffscreen=chrome.offscreen,savedWords=stored.words;
+  try{
+    stored.words=[{id:wordId('unless','tech'),term:'unless',domain:'tech',kind:'word',revision:1,helpCount:1,requestedAt:1,senses:[{key:'legacy-sense',label:'marks an exception',definition:{hint:'except if',translation:'除非'}}]}];
+    chrome.offscreen={hasDocument:async()=>true};
+    chrome.runtime.sendMessage=async message=>message?.type==='EMBED_LOCAL'?{ok:true,data:{vectors:[[1,0,0,0],[0.99,0.01,0,0]],dimensions:4}}:{ok:false,error:'unexpected local call'};
+    nextSense='introduces an exception';
+    const result=await send({type:'ASSIST',detail:'brief',requestId:'legacy-sense-backfill',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint',bypassCache:true});
+    expect(result.support.senseKey).toBe('legacy-sense');
+    await send({type:'ASSIST_COMMIT',requestId:'legacy-sense-backfill'});
+    expect(stored.words[0].senses).toHaveLength(1);
+    expect(stored.words[0].senses[0].key).toBe('legacy-sense');
+  }finally{nextSense=null;chrome.runtime.sendMessage=previousSend;chrome.offscreen=previousOffscreen;await new Promise(resolve=>setTimeout(resolve,20));stored.words=savedWords;}
 });
 test('usage estimates prefer the warm local tokenizer over char fallback',async()=>{
   const previousSend=chrome.runtime.sendMessage,previousOffscreen=chrome.offscreen;
@@ -373,7 +378,7 @@ test('compatible JSON API serves provider checks, assistance, support, and class
     return Response.json({choices:[{message:{role:'assistant',content:JSON.stringify(envelope?.properties?.result?{result,...(extraWrapper?{tool_calls:[]}:{})}:result)},finish_reason:'stop'}]});
   }});
   try{
-    globalThis.fetch=fetchBefore;
+    globalThis.fetch=Bun.fetch;
     await send({type:'STATE_PATCH',patch:{providerKind:'api',apiServices:[{id:'loopback',name:'Loopback',baseUrl:'http://127.0.0.1:'+server.port,model:'deepseek-flash',apiKey:'loopback-only-key'}],activeApiServiceId:'loopback'}},extensionSender);
     expect(await send({type:'API_MODELS_LIST',service:{...stored.settings.apiServices[0],model:''}},extensionSender)).toEqual({models:[{id:'deepseek-flash',name:'DeepSeek Flash'}]});
     const beforeWords=structuredClone(stored.words);
@@ -1182,6 +1187,27 @@ test('pausing automatic support during capability detection never sends the arti
   }finally{gate.resolve();await pending;globalThis.chrome=previous;globalThis.fetch=previousFetch;}
 });
 
+
+test('request concurrency caps queued provider work and validates bounds',async()=>{
+  expect(normalizeSettings({}).requestConcurrency).toBe(2);
+  expect(normalizeSettings({requestConcurrency:6}).requestConcurrency).toBe(6);
+  expect(normalizeSettings({requestConcurrency:0}).requestConcurrency).toBe(2);
+  expect(normalizeSettings({requestConcurrency:9}).requestConcurrency).toBe(2);
+  await expect(send({type:'STATE_PATCH',patch:{requestConcurrency:0}},extensionSender)).rejects.toThrow();
+  await expect(send({type:'STATE_PATCH',patch:{requestConcurrency:9}},extensionSender)).rejects.toThrow();
+  await send({type:'STATE_PATCH',patch:{requestConcurrency:1}},extensionSender);
+  const before=providerCalls;let release;supportGate=new Promise(resolve=>{release=resolve;});
+  try{
+    const first=send({type:'SUPPORT_BATCH',items:[{id:'cap-one',sentence:'A unique unless condition applies.',domain:'tech',candidates:[{text:'unless'}]}]});
+    while(providerCalls===before)await new Promise(r=>setTimeout(r,0));
+    const second=send({type:'SUPPORT_BATCH',items:[{id:'cap-two',sentence:'Another unique unless condition applies.',domain:'tech',candidates:[{text:'unless'}]}]});
+    await new Promise(r=>setTimeout(r,40));
+    expect(providerCalls-before).toBe(1);
+    release();supportGate=null;
+    await Promise.allSettled([first,second]);
+    expect(providerCalls-before).toBe(2);
+  }finally{release();supportGate=null;await send({type:'STATE_PATCH',patch:{requestConcurrency:2}},extensionSender);}
+});
 
 test('domain detection accepts a jev mode with bounded fields', async () => {
   const fixture=isolatedChrome({wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'chatgpt',domainDetection:{mode:'local',subscriptionModel:'',apiModel:'',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevModel:'typesafe/jev-1.13.0',jevApiKey:'',jevBaseUrl:'https://router.requesty.ai/v1'}}},{id:'jev-settings'});
