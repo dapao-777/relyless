@@ -1,11 +1,11 @@
-// 持久化本机缓存：词条释义（glossCache）与整页译文（translationCache）。
-// 纯逻辑模块：键由调用方用 sha256 摘要生成，值只有模型产出与时间戳；
-// 不保存网址、标题、原文或密钥。LRU 以对象插入顺序为准，命中即移到末尾。
+// Session-only by default; optional local persistence holds bounded, expiring model outputs.
+// Keys are hashes of task, model and content/context, never page URLs or plaintext inputs.
 
 export const GLOSS_CACHE_LIMIT = 500;
 export const PAGE_TRANSLATION_CACHE_LIMIT = 1500;
-export const GLOSS_CACHE_VERSION = 1;
+export const GLOSS_CACHE_VERSION = 2;
 export const TRANSLATION_CACHE_VERSION = 1;
+export const PERSISTENT_CACHE_TTL = 30 * 86400000;
 
 const text = (value, max) => typeof value === 'string' ? value.slice(0, max) : '';
 const stamp = value => Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
@@ -26,30 +26,30 @@ export function normalizeTranslationEntry(value) {
   return {zh, at: stamp(value.at)};
 }
 
-export function normalizeGlossCache(raw) {
+export function normalizeGlossCache(raw, now = Date.now()) {
   const out = {};
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
   for (const [key, value] of Object.entries(raw)) {
     const entry = normalizeGlossEntry(value);
-    if (entry) out[text(key, 128)] = entry;
+    if (/^[a-f0-9]{64}$/.test(key) && entry && entry.at <= now && now - entry.at < PERSISTENT_CACHE_TTL) out[key] = entry;
   }
   return trimCache(out, GLOSS_CACHE_LIMIT);
 }
 
-export function normalizeTranslationCache(raw) {
+export function normalizeTranslationCache(raw, now = Date.now()) {
   const out = {};
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
   for (const [key, value] of Object.entries(raw)) {
     const entry = normalizeTranslationEntry(value);
-    if (entry) out[text(key, 128)] = entry;
+    if (/^[a-f0-9]{64}$/.test(key) && entry && entry.at <= now && now - entry.at < PERSISTENT_CACHE_TTL) out[key] = entry;
   }
   return trimCache(out, PAGE_TRANSLATION_CACHE_LIMIT);
 }
 
 /** 命中读取：LRU 移到末尾并计次；返回新对象（未命中返回 null）。 */
-export function readCache(cache, key, {counter = 'hits'} = {}) {
+export function readCache(cache, key, {counter = 'hits', ttl = Infinity, now = Date.now()} = {}) {
   const entry = cache?.[key];
-  if (!entry) return null;
+  if (!entry || now - entry.at >= ttl || entry.at > now) return null;
   const next = {...cache};
   delete next[key];
   next[key] = counter === 'hits' ? {...entry, hits: stamp(entry.hits) + 1} : {...entry};

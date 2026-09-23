@@ -16,6 +16,7 @@ const optionsIds = ['section-title','save-state','global-error','reading-domain'
 const optionsEls = Object.fromEntries(optionsIds.map(id => [id.replace(/-([a-z])/g,(_match,char)=>char.toUpperCase()),document.querySelector(`#${id}`)]));
 optionsEls.dataProblem = document.querySelector('#data-problem');
 Object.assign(optionsEls,Object.fromEntries(['provider-id','provider-key-link','provider-fields','provider-model-list','provider-model-note','list-provider-models','provider-fallback','usage-budget','nano-dot','nano-state','nano-detail','nano-download','nano-refresh','nano-result','nano-progress'].map(id=>[id.replace(/-([a-z])/g,(_match,char)=>char.toUpperCase()),document.querySelector('#'+id)])));
+Object.assign(optionsEls,Object.fromEntries(['persist-translation-cache','clear-translation-cache','translation-cache-result'].map(id=>[id.replace(/-([a-z])/g,(_match,char)=>char.toUpperCase()),document.querySelector('#'+id)])));
 const optionsMissing = Object.entries(optionsEls).filter(([, element]) => !element).map(([key]) => key);
 if (optionsMissing.length) throw new Error('设置页缺少元素：' + optionsMissing.join(', '));
 const optionsProviderPicker=createProviderPicker(optionsEls.providerId,API_PROVIDERS);
@@ -312,6 +313,7 @@ function optionsRenderAll(){
   const mode=document.querySelector('input[name="assistance-mode"][value="'+(optionsState.settings.assistanceMode||'ambient')+'"]');
   if(mode)mode.checked=true;
   optionsEls.rememberSupport.checked=optionsState.settings.rememberSupport!==false;
+  optionsEls.persistTranslationCache.checked=optionsState.settings.persistTranslationCache===true;
   optionsEls.fluencyHints.checked=optionsState.settings.fluencyHints!==false;
   optionsEls.keyboardNav.checked=optionsState.settings.keyboardNav?.enabled===true;
   optionsEls.usageBudget.value=String(optionsState.settings.usageBudget?.monthlyTokens||0)||'';
@@ -476,6 +478,8 @@ document.querySelectorAll('input[name="assistance-mode"]').forEach(input=>input.
 optionsLookupDisplayInputs.forEach(input=>input.addEventListener('change',()=>void optionsSavePatch({lookupDisplay:input.value},'查词显示方式已保存')));
 optionsHintDisplayInputs.forEach(input=>input.addEventListener('change',()=>void optionsSavePatch({hintDisplay:input.value},'行内提示显示已保存')));
 optionsEls.rememberSupport.addEventListener('change',()=>void optionsSavePatch({rememberSupport:optionsEls.rememberSupport.checked},optionsEls.rememberSupport.checked?'已开启本机支持记忆':'已关闭本机支持记忆'));
+optionsEls.persistTranslationCache.addEventListener('change',()=>void optionsSavePatch({persistTranslationCache:optionsEls.persistTranslationCache.checked},optionsEls.persistTranslationCache.checked?'已开启跨会话缓存':'已关闭并删除持久缓存'));
+optionsEls.clearTranslationCache.addEventListener('click',async()=>{if(!confirm('清空本次会话与本机持久的帮助和译文缓存？'))return;try{await request('CACHE_CLEAR');setResult(optionsEls.translationCacheResult,'缓存已清空。');}catch(error){setResult(optionsEls.translationCacheResult,errorText(error),true);}});
 optionsEls.fluencyHints.addEventListener('change',()=>void optionsSavePatch({fluencyHints:optionsEls.fluencyHints.checked},optionsEls.fluencyHints.checked?'已开启回读解构提示':'已关闭回读解构提示'));
 optionsEls.keyboardNav?.addEventListener('change',()=>void optionsSavePatch({keyboardNav:{enabled:optionsEls.keyboardNav.checked}},optionsEls.keyboardNav.checked?'已开启键盘导航':'已关闭键盘导航'));
 optionsEls.usageBudget.addEventListener('change',()=>{const value=Math.max(0,Math.floor(Number(optionsEls.usageBudget.value)||0));optionsEls.usageBudget.value=String(value);void optionsSavePatch({usageBudget:{monthlyTokens:value}},value?'月度预算已设为 '+value+' tokens':'已取消月度预算限制');});
