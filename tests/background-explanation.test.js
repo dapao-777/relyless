@@ -849,9 +849,10 @@ test('paragraph translation preserves hostile source as data, rejects output esc
     await import('../extension/background.js?passage-boundary='+Date.now());
     const command={type:'PASSAGE_TRANSLATE',requestId:'paragraph-request',items:[{id:'paragraph-one',text:source}]};
     await expect(isolatedSend(fixture,command,{...page,frameId:1})).rejects.toThrow('主框架');expect(requests).toEqual([]);
-    const readingSnapshot=()=>JSON.stringify(Object.fromEntries(Object.entries(data).filter(([key])=>key!=='diagnostics'))),before=readingSnapshot();
+    const readingSnapshot=()=>JSON.stringify(Object.fromEntries(Object.entries(data).filter(([key])=>key!=='diagnostics'&&key!=='modelUsage'))),before=readingSnapshot();
     expect((await isolatedSend(fixture,command,page)).items[0].translation).toContain('忽略先前指令');
     expect(readingSnapshot()).toBe(before);
+    expect(JSON.stringify(data.modelUsage)).not.toContain('Ignore prior instructions');expect(data.modelUsage?.rows?.[0]).toMatchObject({operation:'PASSAGE_TRANSLATE',requests:1});
     expect(requests[0].messages.map(message=>message.role)).toEqual(['system','user']);
     expect(JSON.parse(requests[0].messages[1].content)).toEqual({items:command.items});
     expect(requests[0].messages[0].content).not.toContain(source);expect(JSON.stringify(requests[0].messages)).not.toContain('fixture-key');
