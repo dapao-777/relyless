@@ -37,8 +37,8 @@ Request payloads do not actively include the page URL, but providers still recei
 - **API keys and service configuration**: stored in your browser's local extension storage, used to authenticate to the corresponding endpoint.
 - **Personal vocabulary profile**: on by default, used to "remember requested words and support preferences." It does not store source sentences, titles, or source URLs. You can disable it in settings (after which it is no longer read or updated) or clear it under "Data & Privacy."
 - **Reading history** (off by default; requires explicit opt-in and a list of allowed sites): stores queried terms, length-capped example sentences with their translations/explanations, reading summaries, and objective statistics. Example sentences are capped at 1,000 characters (longer sentences are not stored), per-item translations at 2,000 characters, explanations at 1,200, and sentences in automatic-annotation events at 2,000. At most 300 events are kept for up to 90 days, without source URLs. You can export or clear them under "Reading history" or "Data & Privacy."
-- **Prepared explanations and limited context cache**: kept only for the current browser session.
-- **Successful bilingual translation results**: only in a five-minute, at most 256-entry in-memory cache.
+- **Assistance and translation caches (session-only by default)**: successful short word/phrase help, passage translations and bilingual page translations are held in browser session storage and expire when the browser session ends; incognito pages neither read nor write these caches. Keys hash the term/text, context, task level and provider/model rather than storing source URLs or plaintext inputs. **Values include model-generated hints, Chinese explanations or translations and may reflect sensitive content; hashes are not a guarantee of anonymity.** Bilingual page results also have a five-minute, at most 256-entry background memory cache.
+- **Optional cross-session cache (off by default)**: only after you turn it on under “Data & Privacy” are those successful results written to local extension storage. At most 500 word/phrase entries and 1,500 combined passage/page translations are retained for up to 30 days from writing; expired entries do not hit and are pruned on access or write. Turning the setting off, using the separate clear-cache control, or clearing all reading data removes persistent entries; turning it off also clears session entries. Existing unconsented local caches from older versions are removed at startup.
 
 ## 3. Features That Require Explicit Opt-in
 
@@ -48,6 +48,7 @@ The following are off by default and run only after you explicitly enable them:
 - **Reading summaries**: built on top of reading history, require separate enabling.
 - **Remote personalization analysis**: built on top of reading history, require separate enabling.
 
+- **Cross-session assistance and translation cache**: requires its own opt-in under “Data & Privacy”; personal vocabulary or reading-history settings do not authorize it. Turning it off deletes existing cached results.
 ## 4. Data Categories
 
 The Extension may process the following categories of data:

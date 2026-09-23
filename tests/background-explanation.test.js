@@ -235,8 +235,8 @@ test('failing primary api service fails over to its configured fallback once',as
     await expect(send({type:'ASSIST',detail:'brief',requestId:'failover-3',text:'failover',context:'Without failover this fails.',domain:'general',kind:'word',level:'hint'})).rejects.toThrow('无法连接');
   }finally{tab.incognito=false;await send({type:'STATE_PATCH',patch:{apiServices:savedServices,activeApiServiceId:savedActive}},extensionSender);failedAssists=savedFailed;}
 });
-test('persistent gloss cache serves identical brief assists after a worker restart',async()=>{
-  const previous=globalThis.chrome,data={wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'}}},first=isolatedChrome(data,{id:'gloss-cache-one'}),page={url:'https://isolated.example/read',tab:{id:91},frameId:0};
+test('persistent gloss cache separates English hints from Chinese rescue after a worker restart',async()=>{
+  const previous=globalThis.chrome,data={wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',persistTranslationCache:true,provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'}}},first=isolatedChrome(data,{id:'gloss-cache-one'}),page={url:'https://isolated.example/read',tab:{id:91},frameId:0};
   try{
     globalThis.chrome=first.api;await import('../extension/background.js?gloss-cache-one='+Date.now());
     const warm=await isolatedSend(first,{type:'ASSIST',detail:'brief',requestId:'gloss-warm',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint'},page);
@@ -246,9 +246,28 @@ test('persistent gloss cache serves identical brief assists after a worker resta
     // 重启实例的会话缓存为空；同文同语境命中持久层
     const hit=await isolatedSend(restarted,{type:'ASSIST',detail:'brief',requestId:'gloss-hit',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint'},page);
     expect(hit).toMatchObject({hint:'except if this happens',source:'cache',cacheNotice:'来自本机缓存'});expect(providerCalls).toBe(before);
+    const rescue=await isolatedSend(restarted,{type:'ASSIST',detail:'brief',requestId:'gloss-rescue',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'rescue'},page);
+    expect(rescue.translation).toBe('除非；若非');expect(rescue.source).toBe('provider');
     const bypass=await isolatedSend(restarted,{type:'ASSIST',detail:'brief',requestId:'gloss-bypass',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint',bypassCache:true},page);
-    expect(bypass.source).not.toBe('cache');expect(providerCalls).toBe(before+1);
+    expect(bypass.source).not.toBe('cache');expect(providerCalls).toBe(before+2);
     await isolatedSend(restarted,{type:'MEMORY_CLEAR'});expect(data.persistentGlossCache).toBeUndefined();
+  }finally{globalThis.chrome=previous;}
+});
+test('cache consent defaults to session-only, purges legacy entries, and clears on opt-out',async()=>{
+  const previous=globalThis.chrome,seed={wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'}},persistentGlossCache:{legacy:{hint:'private',at:Date.now()}}},fixture=isolatedChrome(seed,{id:'cache-consent'}),page={url:'https://isolated.example/read',tab:{id:91},frameId:0};
+  const ask=requestId=>isolatedSend(fixture,{type:'ASSIST',detail:'brief',requestId,text:'unless',context:'A fresh consent example unless expired.',domain:'tech',kind:'word',level:'hint'},page);
+  try{
+    globalThis.chrome=fixture.api;await import('../extension/background.js?cache-consent='+Date.now());
+    await isolatedSend(fixture,{type:'STATE_GET'});expect(seed.persistentGlossCache).toBeUndefined();expect(seed.settings.persistTranslationCache).toBe(false);
+    expect((await ask('session-one')).source).toBe('provider');await new Promise(resolve=>setTimeout(resolve,0));
+    expect(Object.keys(fixture.session.persistentGlossCache||{})).toHaveLength(1);expect(seed.persistentGlossCache).toBeUndefined();
+    await expect(isolatedSend(fixture,{type:'STATE_PATCH',patch:{persistTranslationCache:'yes'}})).rejects.toThrow();
+    await isolatedSend(fixture,{type:'STATE_PATCH',patch:{persistTranslationCache:true}});expect(fixture.session.persistentGlossCache).toBeUndefined();
+    expect((await ask('local-one')).source).toBe('provider');await new Promise(resolve=>setTimeout(resolve,0));expect(Object.keys(seed.persistentGlossCache||{})).toHaveLength(1);
+    await isolatedSend(fixture,{type:'STATE_PATCH',patch:{persistTranslationCache:false}});expect(seed.persistentGlossCache).toBeUndefined();
+    expect((await ask('session-two')).source).toBe('provider');await new Promise(resolve=>setTimeout(resolve,0));
+    await isolatedSend(fixture,{type:'CACHE_CLEAR'});expect(fixture.session.persistentGlossCache).toBeUndefined();expect(seed.persistentGlossCache).toBeUndefined();
+    const beforeClearRetry=providerCalls;expect((await ask('after-clear')).source).toBe('provider');expect(providerCalls).toBe(beforeClearRetry+1);
   }finally{globalThis.chrome=previous;}
 });
 test('current document identity tolerates URL state changes but rejects replaced documents',async()=>{

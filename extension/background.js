@@ -21,7 +21,7 @@ import {createReadingHistory} from './history-service.js';
 import {createSpeechHandler} from './speech.js';
 import {SENTENCE_GROUPS_POLICY_VERSION,SENTENCE_GROUPS_INSTRUCTIONS,SENTENCE_GROUPS_SCHEMA,normalizeSentenceGroupItems,prepareSentenceGroupItems,normalizeSentenceGroupsResult} from './sentence-groups.mjs';
 import {mergeUsageEntry,normalizeUsageRow,usageDay,usageRatioFor,usageStatsView,USAGE_VERSION} from './usage-stats.js';
-import {GLOSS_CACHE_LIMIT,GLOSS_CACHE_VERSION,PAGE_TRANSLATION_CACHE_LIMIT,TRANSLATION_CACHE_VERSION,normalizeGlossCache,normalizeTranslationCache,readCache,writeCache} from './persistent-cache.js';
+import {GLOSS_CACHE_LIMIT,GLOSS_CACHE_VERSION,PERSISTENT_CACHE_TTL,PAGE_TRANSLATION_CACHE_LIMIT,TRANSLATION_CACHE_VERSION,normalizeGlossCache,normalizeTranslationCache,readCache,writeCache} from './persistent-cache.js';
 const connectSpeech=createSpeechHandler(chrome.tts);
 chrome.runtime.onConnect.addListener(port=>{
   if(port.name==='shisui-speech'&&port.sender?.id===chrome.runtime.id&&Number.isInteger(port.sender?.tab?.id)&&port.sender.frameId===0)connectSpeech(port);
@@ -46,6 +46,8 @@ function assertDataAvailable(){if(cleanupPending)throw Object.assign(new Error('
 const ready = (async () => {
   await chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});
   const data = await chrome.storage.local.get(null);
+  // Old releases wrote these without consent. Do not expose or retain them on upgrade.
+  if(!normalizeSettings(data.settings).persistTranslationCache)await chrome.storage.local.remove(['persistentGlossCache','persistentTranslationCache']);
   cleanupPending=Boolean(data[CLEANUP_KEY]);
   futureSchema = data.wordSchemaVersion > 5 || data.productSchemaVersion > 1;
   if (futureSchema) { dataProblem = '不支持的数据版本，请更新扩展'; return; }
@@ -73,13 +75,41 @@ const sentenceGroupCache = new Map();
 const sentenceGroupInFlight = new Map();
 const translationCache = new Map();
 const translationInFlight = new Map();
-// 持久化本机缓存：词条释义与整页译文，键为内容/上下文摘要哈希；仅记忆清理时删除。
+// A browser-session cache is the default; local storage is used only with explicit consent.
 const GLOSS_CACHE_KEY='persistentGlossCache',PAGE_TRANSLATION_CACHE_KEY='persistentTranslationCache';
-let glossCache=null,pageTranslationCache=null,persistentCacheWrites=Promise.resolve();
-async function loadGlossCache(){if(glossCache)return glossCache;glossCache=normalizeGlossCache((await chrome.storage.local.get(GLOSS_CACHE_KEY))[GLOSS_CACHE_KEY]);return glossCache;}
-async function loadPageTranslationCache(){if(pageTranslationCache)return pageTranslationCache;pageTranslationCache=normalizeTranslationCache((await chrome.storage.local.get(PAGE_TRANSLATION_CACHE_KEY))[PAGE_TRANSLATION_CACHE_KEY]);return pageTranslationCache;}
-function persistGlossCache(){const work=persistentCacheWrites.then(()=>chrome.storage.local.set({[GLOSS_CACHE_KEY]:glossCache||{}})).catch(()=>{});persistentCacheWrites=work;return work;}
-function persistPageTranslationCache(){const work=persistentCacheWrites.then(()=>chrome.storage.local.set({[PAGE_TRANSLATION_CACHE_KEY]:pageTranslationCache||{}})).catch(()=>{});persistentCacheWrites=work;return work;}
+const CACHE_KEYS=[GLOSS_CACHE_KEY,PAGE_TRANSLATION_CACHE_KEY];
+let glossCache=null,pageTranslationCache=null,cacheArea=null,cacheGeneration=0,persistentCacheWrites=Promise.resolve();
+function cacheStore(settings){return settings.persistTranslationCache?chrome.storage.local:chrome.storage.session;}
+async function loadResultCache(settings,key,normalize){
+  const store=cacheStore(settings),generation=cacheGeneration;
+  if(cacheArea!==store){glossCache=null;pageTranslationCache=null;cacheArea=store;}
+  const field=key===GLOSS_CACHE_KEY?'glossCache':'pageTranslationCache';
+  if(field==='glossCache'?glossCache:pageTranslationCache)return field==='glossCache'?glossCache:pageTranslationCache;
+  let raw;try{raw=(await store.get(key))[key];}catch{return {};}if(generation!==cacheGeneration)return {};const cache=normalize(raw);
+  if(field==='glossCache')glossCache=cache;else pageTranslationCache=cache;
+  if(raw && Object.keys(raw).length!==Object.keys(cache).length)void persistResultCache(settings,key,cache);
+  return cache;
+}
+const loadGlossCache=settings=>loadResultCache(settings,GLOSS_CACHE_KEY,normalizeGlossCache);
+const loadPageTranslationCache=settings=>loadResultCache(settings,PAGE_TRANSLATION_CACHE_KEY,normalizeTranslationCache);
+function persistResultCache(settings,key,cache){
+  const store=cacheStore(settings),generation=cacheGeneration;
+  const work=persistentCacheWrites.then(async()=>{
+    const current=normalizeSettings((await chrome.storage.local.get('settings')).settings);
+    if(generation!==cacheGeneration||cacheStore(current)!==store)return;
+    await store.set({[key]:cache});
+  });
+  persistentCacheWrites=work.catch(()=>{});return persistentCacheWrites;
+}
+const persistGlossCache=settings=>persistResultCache(settings,GLOSS_CACHE_KEY,glossCache||{});
+const persistPageTranslationCache=settings=>persistResultCache(settings,PAGE_TRANSLATION_CACHE_KEY,pageTranslationCache||{});
+async function clearResultCaches({local=true,session=true}={}){
+  cacheGeneration++;
+  await persistentCacheWrites;
+  glossCache=null;pageTranslationCache=null;cacheArea=null;translationCache.clear();
+  if(local)await chrome.storage.local.remove(CACHE_KEYS);
+  if(session)await chrome.storage.session.remove(CACHE_KEYS);
+}
 // 服务故障转移：刚失败过的服务冷却 5 分钟，期间直接走备用服务。
 const serviceCooldowns=new Map();
 const FAILOVER_COOLDOWN_MS=5*60000;
@@ -182,6 +212,7 @@ function validatePatch(patch,currentSettings) {
   if (patch.rulePacks !== undefined) result.rulePacks=normalizeRulePacks(patch.rulePacks);
   if (patch.routing !== undefined) result.routing=normalizeRouting(patch.routing,currentSettings?.routing||DEFAULT_SETTINGS.routing);
   if (patch.usageBudget !== undefined) { const b=patch.usageBudget; if (!b || typeof b !== 'object' || Array.isArray(b) || Object.keys(b).some(key=>key!=='monthlyTokens')) throw new Error('无效的用量预算设置。'); result.usageBudget={monthlyTokens:Number.isSafeInteger(b.monthlyTokens)&&b.monthlyTokens>=0&&b.monthlyTokens<=100000000?b.monthlyTokens:0}; }
+  if (patch.persistTranslationCache !== undefined) { if(typeof patch.persistTranslationCache!=='boolean')throw new Error('无效的译文缓存设置。');result.persistTranslationCache=patch.persistTranslationCache; }
   if (patch.rememberSupport !== undefined) { if (typeof patch.rememberSupport !== 'boolean') throw new Error('无效记忆设置。'); result.rememberSupport=patch.rememberSupport; }
   if (patch.domain !== undefined) result.domain=domain(patch.domain);
   if (patch.subscriptionModel !== undefined) result.subscriptionModel=text(patch.subscriptionModel,'订阅模型',150,false);
@@ -750,10 +781,10 @@ async function translateItems(items,settings,trace,{scope,onProgress,origin,sour
   const service=settings.providerKind==='api'?activeApiProvider(settings):settings.subscriptionModel;
   if(settings.providerKind==='api')await requireApiPermission(service);
   const instructions=scope==='page'?PAGE_TRANSLATION_INSTRUCTIONS:EMERGENCY_INSTRUCTIONS;
-  const personalization=readingHistory.policy()?.translation||null,generation=providerGeneration,keys=await Promise.all(items.map(item=>hashValue(JSON.stringify([scope,instructions,settings.providerKind,service,personalization,origin,scope==='page'?sourceHash:null,item.text,item.context||null])))),outcomes=new Map(),fresh=[],claimed=new Set(),now=Date.now();
+  const personalization=readingHistory.policy()?.translation||null,generation=providerGeneration,keys=await Promise.all(items.map(item=>hashValue(JSON.stringify([scope,incognito,instructions,settings.providerKind,service,personalization,origin,scope==='page'?sourceHash:null,item.text,item.context||null])))),outcomes=new Map(),fresh=[],claimed=new Set(),now=Date.now();
   // 持久层键只含内容哈希（无网址/文档标识）：重访、镜像、转载的同一段落跨页命中。无痕页不读写。
-  const persisted=!incognito?await loadPageTranslationCache():null,pkeys=persisted?await Promise.all(items.map(item=>hashValue(JSON.stringify([TRANSLATION_CACHE_VERSION,scope,settings.providerKind,service,personalization,String(item.text||'').replace(/\s+/g,' ').trim(),item.context||null]))) ):null,keyToPkey=new Map();let cacheHits=0;
-  for(let index=0;index<items.length;index++){const cached=translationCache.get(keys[index]);if(cached&&now-cached.at<TRANSLATION_CACHE_TTL){outcomes.set(keys[index],{translation:cached.translation});continue;}const stored=pkeys?persisted[pkeys[index]]:null;if(stored){cacheHits++;outcomes.set(keys[index],{translation:stored.zh});translationCache.delete(keys[index]);translationCache.set(keys[index],{translation:stored.zh,at:now});pageTranslationCache=writeCache(pageTranslationCache,pkeys[index],{zh:stored.zh,at:now},{limit:PAGE_TRANSLATION_CACHE_LIMIT});void persistPageTranslationCache();continue;}if(!translationInFlight.has(keys[index])&&!claimed.has(keys[index])){claimed.add(keys[index]);fresh.push({item:items[index],key:keys[index]});}if(pkeys)keyToPkey.set(keys[index],pkeys[index]);}
+  const persisted=!incognito?await loadPageTranslationCache(settings):null,pkeys=persisted?await Promise.all(items.map(item=>hashValue(JSON.stringify([TRANSLATION_CACHE_VERSION,scope,settings.providerKind,service,personalization,String(item.text||'').replace(/\s+/g,' ').trim(),item.context||null]))) ):null,keyToPkey=new Map();let cacheHits=0;
+  for(let index=0;index<items.length;index++){const cached=translationCache.get(keys[index]);if(cached&&now-cached.at<TRANSLATION_CACHE_TTL){outcomes.set(keys[index],{translation:cached.translation});continue;}const stored=pkeys?persisted[pkeys[index]]:null;if(stored&&now-stored.at<PERSISTENT_CACHE_TTL&&stored.at<=now){cacheHits++;outcomes.set(keys[index],{translation:stored.zh});translationCache.delete(keys[index]);translationCache.set(keys[index],{translation:stored.zh,at:now});pageTranslationCache=writeCache(pageTranslationCache,pkeys[index],{zh:stored.zh,at:now},{limit:PAGE_TRANSLATION_CACHE_LIMIT});void persistPageTranslationCache(settings);continue;}if(stored){delete pageTranslationCache[pkeys[index]];void persistPageTranslationCache(settings);}if(!translationInFlight.has(keys[index])&&!claimed.has(keys[index])){claimed.add(keys[index]);fresh.push({item:items[index],key:keys[index]});}if(pkeys)keyToPkey.set(keys[index],pkeys[index]);}
   if(fresh.length){
     const operation=withBackgroundSlot(async()=>{const sourceItems=fresh.map(value=>value.item),idToKey=new Map(fresh.map(value=>[value.item.id,value.key]));let raw;
       const progress=value=>{if(!onProgress||!value?.items)return;const byKey=new Map(value.items.map(item=>[idToKey.get(item.id),item.translation]));onProgress({items:items.flatMap((item,index)=>byKey.has(keys[index])?[{id:item.id,translation:byKey.get(keys[index])}]:[])});};
@@ -765,7 +796,7 @@ async function translateItems(items,settings,trace,{scope,onProgress,origin,sour
         await diagnostics.event(trace,'validation','ok');
         await requireLiveConsumer(backgroundGuards.get(operation));
         if(generation!==providerGeneration)throw staleWork();
-        const at=Date.now();for(const [key,outcome]of mapped)if(outcome.translation!==undefined){translationCache.delete(key);translationCache.set(key,{translation:outcome.translation,at});const pkey=keyToPkey.get(key);if(pkey){pageTranslationCache=writeCache(pageTranslationCache||{},pkey,{zh:outcome.translation,at},{limit:PAGE_TRANSLATION_CACHE_LIMIT});void persistPageTranslationCache();}}
+        const at=Date.now();for(const [key,outcome]of mapped)if(outcome.translation!==undefined){translationCache.delete(key);translationCache.set(key,{translation:outcome.translation,at});const pkey=keyToPkey.get(key);if(pkey){pageTranslationCache=writeCache(pageTranslationCache||{},pkey,{zh:outcome.translation,at},{limit:PAGE_TRANSLATION_CACHE_LIMIT});void persistPageTranslationCache(settings);}}
         while(translationCache.size>TRANSLATION_CACHE_LIMIT)translationCache.delete(translationCache.keys().next().value);
         return mapped;
       }catch(error){await diagnostics.event(trace,'validation','error',diagnosticError(error));throw error;}},guard);
@@ -1095,9 +1126,15 @@ const operation=previous.catch(()=>{}).then(async()=>{
       let raw=exact,fetched=false;
       if(!raw&&!command.bypassCache&&request.detail==='brief'){const fullKey=await hashValue(JSON.stringify([SUPPORT_POLICY_VERSION,requestPolicy,state.settings.providerKind,model,articleKey,{...request,detail:'full'}])),full=resultCache[fullKey];if(full?.sourceHash===source.sourceHash){const field=request.level==='rescue'?'translation':'hint';raw={level:request.level,[field]:full.result[field],...(request.kind==='passage'?{}:{sense:full.result.sense})};}}
       if(!raw&&!command.bypassCache&&request.kind!=='passage'){raw=preparedAssistanceDecision(request,source.sourceHash,serviceKey,requestPolicy,articleKey);if(raw)sourceName='prepared';}
-      const glossKey=async()=>await hashValue(JSON.stringify([GLOSS_CACHE_VERSION,state.settings.providerKind,model,command.text.trim().toLowerCase(),command.domain,await hashValue(String(command.context||'').replace(/\s+/g,' ').trim().slice(0,400))]));
-      const glossable=!command.bypassCache&&request.kind!=='passage'&&request.detail==='brief'&&!source.incognito;
-      if(!raw&&glossable){const hit=readCache(await loadGlossCache(),await glossKey());if(hit){glossCache=hit.cache;raw={level:request.level,[request.level==='rescue'?'translation':'hint']:hit.entry.hint||hit.entry.translation,sense:hit.entry.sense||''};sourceName='cache';void persistGlossCache();}}
+      const glossKey=async()=>await hashValue(JSON.stringify([GLOSS_CACHE_VERSION,request.level,request.kind,requestPolicy,state.settings.providerKind,model,command.text.trim().toLowerCase(),command.domain,await hashValue(String(command.context||'').replace(/\s+/g,' ').trim().slice(0,400))]));
+      const glossable=!command.bypassCache&&request.kind!=='passage'&&request.detail==='brief'&&!source.incognito&&!state.settings.routing?.enabled;
+      if(!raw&&glossable){
+        const cache=await loadGlossCache(state.settings),cacheKey=await glossKey(),hit=readCache(cache,cacheKey,{ttl:PERSISTENT_CACHE_TTL});
+        if(hit){
+          glossCache=hit.cache;raw={level:request.level,[request.level==='rescue'?'translation':'hint']:request.level==='rescue'?hit.entry.translation:hit.entry.hint,sense:hit.entry.sense||''};
+          sourceName='cache';void persistGlossCache(state.settings);
+        }else if(cache[cacheKey]){glossCache={...cache};delete glossCache[cacheKey];void persistGlossCache(state.settings);}
+      }
       if(!raw){
         fetched=true;
         const sharedFlightKey=[source.tabId,source.sourceHash,resultKey,providerVersion,state.supportDataGeneration].join(':');
@@ -1138,7 +1175,7 @@ const operation=previous.catch(()=>{}).then(async()=>{
         try{raw=await flight.promise;}finally{flight.listeners.delete(deliverProgress);}
       }
       if(requestPolicy!==JSON.stringify(readingHistory.policy())||providerVersion!==providerGeneration)throw new Error('服务设置已改变，请重新求助。');result=normalizeAssistanceResult(raw,request);const [latest,latestSource]=await Promise.all([load(),readingSource(sender)]);if(latestSource.url!==source.url)throw new Error('页面已变化，请重新求助。');if(latest.supportDataGeneration!==state.supportDataGeneration)throw new Error('本机支持设置已变化，请重新求助。');
-      if(fetched){const currentPending=await sessionMap(key,5*60000,128);if(currentPending[command.requestId]?.requestHash!==requestHash)throw new Error('帮助请求已被新的请求替代。');resultCache[resultKey]={result,sourceHash:source.sourceHash,at:Date.now()};await writeReadingSession({[resultCacheStorage]:Object.fromEntries(Object.entries(resultCache).slice(-128))},providerVersion);if(glossable){glossCache=writeCache(glossCache||{},await glossKey(),{hint:result.hint||'',translation:result.translation||'',sense:result.sense||'',at:Date.now(),hits:0},{limit:GLOSS_CACHE_LIMIT});void persistGlossCache();}}
+      if(fetched){const currentPending=await sessionMap(key,5*60000,128);if(currentPending[command.requestId]?.requestHash!==requestHash)throw new Error('帮助请求已被新的请求替代。');resultCache[resultKey]={result,sourceHash:source.sourceHash,at:Date.now()};await writeReadingSession({[resultCacheStorage]:Object.fromEntries(Object.entries(resultCache).slice(-128))},providerVersion);if(glossable){glossCache=writeCache(glossCache||{},await glossKey(),{hint:result.hint||'',translation:result.translation||'',sense:result.sense||'',at:Date.now(),hits:0},{limit:GLOSS_CACHE_LIMIT});void persistGlossCache(state.settings);}}
       if(result.hint===null||result.translation===null)support=null;else if(command.kind!=='passage'){const canonical=resolveCanonicalTerm(command.text,command.domain,source.incognito?[]:latest.words),id=wordId(canonical,command.domain),label=normalizeSenseLabel(result.sense),known=(source.incognito?[]:latest.words).find(v=>v.id===id),sense=known?.senses?.find(v=>v.label===label),resolvedSense=sense?{key:sense.key}:await resolveSenseKey(known,label,command.context),senseKey=resolvedSense.key;support={wordId:id,senseKey,stage:'hint',revision:known?.revision||0,canonicalTerm:canonical,label,kind:command.kind,domain:command.domain,...(resolvedSense.embedding?{embedding:resolvedSense.embedding}:{})};}
     }
     const publicResult={...result,source:sourceName,support:support?{wordId:support.wordId,senseKey:support.senseKey,stage:support.stage,revision:support.revision}:null,...(sourceName==='local-reference'?{referenceNotice:'本地参考义，未经本句语境判定'}:{}),...(sourceName==='cache'?{cacheNotice:'来自本机缓存'}:{})},current=await sessionMap(key,5*60000,128);if(current[command.requestId]?.requestHash!==requestHash)throw new Error('帮助请求已被新的请求替代。');current[command.requestId]={...entry,status:'complete',result:publicResult,support,committable:command.detail==='brief'&&(sourceName==='provider'||sourceName==='prepared'||sourceName==='cache')&&Boolean((result.hint??result.translation)!==null),at:Date.now()};await writeReadingSession({[key]:current},providerVersion);if(command.detail==='brief')await readingHistory.prepareQuery(sender,command.requestId,command,publicResult);return publicResult;
@@ -1182,7 +1219,7 @@ async function clearReadingData(scope,recovering=false){
     const update={supportDataGeneration:(Number(current.supportDataGeneration)||0)+1};
     if(target==='memory')Object.assign(update,{words:[],supportUsage:[],onDemandSuggestionShownAt:0});
     await chrome.storage.local.set(update);
-    if(target==='memory'){await chrome.storage.local.remove(['legacyReadingArchive','glossCache','supportCache','translationCache','persistentGlossCache','persistentTranslationCache']);glossCache=null;pageTranslationCache=null;await clearModelUsage();}
+    if(target==='memory'){await clearResultCaches();await chrome.storage.local.remove(['legacyReadingArchive','glossCache','supportCache','translationCache']);await clearModelUsage();}
     await Promise.allSettled([domainCacheWrites,sentenceGroupCacheWrites,emergencyWrites,readingSessionWrites]);
     await clearSupportSessions();
     const all=await chrome.storage.session.get(null);
@@ -1404,9 +1441,11 @@ async function handle(message,sender) {
     case 'RESOLVE_DOMAIN':return resolvePageDomain(message,sender);
     case 'DOMAIN_TEST':{const {settings}=await load(false);return classifyText(settings,sampleForDomain(text(message.text,'测试正文',40000)),text(message.title||'','标题',500,false),{force:true});}
     case 'STATE_PATCH':{
-      const before=await load(false),patch=validatePatch(message.patch,before.settings),rememberChanged=patch.rememberSupport!==undefined&&patch.rememberSupport!==before.settings.rememberSupport,nextSettings={...before.settings,...patch},beforeProvider=activeApiProvider(before.settings),afterProvider=activeApiProvider(nextSettings),providerChanged=patch.providerKind!==undefined&&patch.providerKind!==before.settings.providerKind||patch.subscriptionModel!==undefined&&patch.subscriptionModel!==before.settings.subscriptionModel||before.settings.activeApiServiceId!==nextSettings.activeApiServiceId||JSON.stringify(beforeProvider)!==JSON.stringify(afterProvider),classificationChanged=providerChanged||patch.domainDetection!==undefined||patch.domainRules!==undefined||patch.domain!==undefined,genericChanged=Object.keys(patch).some(key=>!['readingStyle','helpLanguage','apiServices','activeApiServiceId'].includes(key))||providerChanged;
-      const result=await mutate(state=>{state.settings={...state.settings,...patch};if(rememberChanged)state.supportDataGeneration++;if(providerChanged||patch.customTerms||patch.domainRules||patch.domain||patch.domainDetection)clearProviderState();if(classificationChanged)invalidateClassification();return publicState(state,true);},false,false);
+      const before=await load(false),patch=validatePatch(message.patch,before.settings),cacheConsentChanged=patch.persistTranslationCache!==undefined&&patch.persistTranslationCache!==before.settings.persistTranslationCache,rememberChanged=patch.rememberSupport!==undefined&&patch.rememberSupport!==before.settings.rememberSupport,nextSettings={...before.settings,...patch},beforeProvider=activeApiProvider(before.settings),afterProvider=activeApiProvider(nextSettings),providerChanged=patch.providerKind!==undefined&&patch.providerKind!==before.settings.providerKind||patch.subscriptionModel!==undefined&&patch.subscriptionModel!==before.settings.subscriptionModel||before.settings.activeApiServiceId!==nextSettings.activeApiServiceId||JSON.stringify(beforeProvider)!==JSON.stringify(afterProvider),classificationChanged=providerChanged||patch.domainDetection!==undefined||patch.domainRules!==undefined||patch.domain!==undefined,genericChanged=Object.keys(patch).some(key=>!['readingStyle','helpLanguage','apiServices','activeApiServiceId'].includes(key))||providerChanged;
+      const result=await mutate(state=>{state.settings={...state.settings,...patch};if(rememberChanged||cacheConsentChanged)state.supportDataGeneration++;if(cacheConsentChanged||providerChanged||patch.customTerms||patch.domainRules||patch.domain||patch.domainDetection)clearProviderState();if(classificationChanged)invalidateClassification();return publicState(state,true);},false,false);
+      if(cacheConsentChanged)await clearResultCaches();
       await pruneBackgroundQueue();
+      if(cacheConsentChanged)await clearSupportSessions();
       if(providerChanged||patch.domainRules||patch.domain||rememberChanged||patch.assistanceMode)await readingHistory.invalidate();
       if(rememberChanged||providerChanged)await clearSupportSessions();if(providerChanged)await reconcileAutomation();if(rememberChanged||providerChanged||patch.customTerms||patch.domainRules||patch.domain||patch.domainDetection)await clearEmergencySessions();if(genericChanged)await broadcast();
       if(patch.readingStyle!==undefined&&JSON.stringify(patch.readingStyle)!==JSON.stringify(before.settings.readingStyle))await broadcastReadingStyle(patch.readingStyle);
@@ -1447,6 +1486,7 @@ async function handle(message,sender) {
     case 'READING_DATA_EXPORT':return readingExport();
     case 'ON_DEMAND_SUGGESTION':return onDemandSuggestion(sender);
     case 'MEMORY_CLEAR':return clearReadingData('memory');
+    case 'CACHE_CLEAR':clearProviderState();await clearResultCaches();await clearSupportSessions();return {cleared:true};
     case 'OPEN_OPTIONS':await chrome.runtime.openOptionsPage();return{};
     default:throw new Error('未知请求。');
   }

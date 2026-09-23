@@ -4,13 +4,14 @@ import {normalizeRulePacks} from './rule-pack.js';
 import {normalizeRouting} from './routing.js';
 
 export const DOMAINS = {auto:'自动识别',general:'通用阅读',tech:'软件与 AI',data:'数据工程',finance:'金融与商业',medical:'医学与生命科学',legal:'法律',design:'设计与产品'};
-export const DEFAULT_SETTINGS = {assistanceMode:'ambient',rememberSupport:true,helpLanguage:'zh',lookupKey:'D',lookupDisplay:'card',hintDisplay:'direct',fluencyHints:true,readingStyle:globalThis.ShisuiReadingStyle.defaults,domain:'auto',providerKind:'chatgpt',subscriptionModel:'',apiServices:[],activeApiServiceId:'',domainRules:[],domainDetection:{mode:'local',subscriptionModel:'',apiModel:'',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevModel:'typesafe/jev-1.13.0',jevApiKey:'',jevBaseUrl:'https://router.requesty.ai/v1'},customTerms:[],automation:{allSites:false,sentenceGroupsAllSites:false,sites:[],videoSites:false},video:{fontSize:20,theme:'auto'},passageAction:{open:'click',delay:600},rulePacks:[],routing:{enabled:false,premiumServiceId:'',operations:{assist:true,passage:true,emergency:true,conversation:true,sentenceGroups:false},minConfidence:0.7,cacheTtlMinutes:1440},usageBudget:{monthlyTokens:0}};
+export const DEFAULT_SETTINGS = {assistanceMode:'ambient',rememberSupport:true,persistTranslationCache:false,helpLanguage:'zh',lookupKey:'D',lookupDisplay:'card',hintDisplay:'direct',fluencyHints:true,readingStyle:globalThis.ShisuiReadingStyle.defaults,domain:'auto',providerKind:'chatgpt',subscriptionModel:'',apiServices:[],activeApiServiceId:'',domainRules:[],domainDetection:{mode:'local',subscriptionModel:'',apiModel:'',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevModel:'typesafe/jev-1.13.0',jevApiKey:'',jevBaseUrl:'https://router.requesty.ai/v1'},customTerms:[],automation:{allSites:false,sentenceGroupsAllSites:false,sites:[],videoSites:false},video:{fontSize:20,theme:'auto'},passageAction:{open:'click',delay:600},rulePacks:[],routing:{enabled:false,premiumServiceId:'',operations:{assist:true,passage:true,emergency:true,conversation:true,sentenceGroups:false},minConfidence:0.7,cacheTtlMinutes:1440},usageBudget:{monthlyTokens:0}};
 // Removed settings must not revive through a spread of an older configuration.
 export function normalizeSettings(value = {}) {
   const pick = (defaults, source) => Object.fromEntries(Object.entries(defaults).map(([key, fallback]) => [key, source?.[key] ?? fallback]));
   const settings = pick(DEFAULT_SETTINGS,value);
   settings.assistanceMode = value.assistanceMode === 'on-demand' ? 'on-demand' : 'ambient';
   settings.rememberSupport = value.rememberSupport !== false;
+  settings.persistTranslationCache = value.persistTranslationCache === true;
   settings.helpLanguage = value.helpLanguage === 'en' ? 'en' : 'zh';
   settings.lookupKey = typeof value.lookupKey === 'string' && /^[A-Za-z]$/.test(value.lookupKey) ? value.lookupKey.toUpperCase() : DEFAULT_SETTINGS.lookupKey;
   settings.lookupDisplay = value.lookupDisplay === 'annotation' ? 'annotation' : 'card';

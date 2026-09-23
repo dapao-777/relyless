@@ -1,18 +1,20 @@
 import {expect,test} from 'bun:test';
-import {GLOSS_CACHE_LIMIT,PAGE_TRANSLATION_CACHE_LIMIT,normalizeGlossCache,normalizeTranslationCache,readCache,writeCache} from '../extension/persistent-cache.js';
+import {GLOSS_CACHE_LIMIT,PAGE_TRANSLATION_CACHE_LIMIT,PERSISTENT_CACHE_TTL,normalizeGlossCache,normalizeTranslationCache,readCache,writeCache} from '../extension/persistent-cache.js';
 import {usageRatioFor} from '../extension/usage-stats.js';
 
-test('gloss cache keeps bounded normalized entries and drops malformed rows',()=>{
+test('gloss cache drops expired, future, malformed and plaintext-key entries',()=>{
+  const now=Date.now(),good='a'.repeat(64),over='b'.repeat(64);
   const cache=normalizeGlossCache({
-    good:{hint:'except if',translation:'除非',sense:'exception',at:1,hits:3},
-    empty:{hint:'',translation:'',sense:'x',at:1},
-    junk:'nope',list:[1,2],
-    over:{hint:'x'.repeat(600),translation:'y',sense:'s',at:5,hits:99999},
-  });
-  expect(Object.keys(cache).sort()).toEqual(['good','over']);
-  expect(cache.good.hits).toBe(3);
-  expect(cache.over.hint.length).toBe(500);
-  expect(cache.over.hits).toBe(9999);
+    [good]:{hint:'except if',translation:'除非',sense:'exception',at:now,hits:3},
+    ['c'.repeat(64)]:{hint:'old',at:now-PERSISTENT_CACHE_TTL},
+    ['d'.repeat(64)]:{hint:'future',at:now+1000},
+    ['e'.repeat(64)]:{hint:'',translation:'',sense:'x',at:now},
+    plaintext:{hint:'sensitive',at:now},
+    [over]:{hint:'x'.repeat(600),translation:'y',sense:'s',at:now,hits:99999},
+  },now);
+  expect(Object.keys(cache).sort()).toEqual([good,over]);
+  expect(cache[good].hits).toBe(3);
+  expect(cache[over].hint.length).toBe(500);expect(cache[over].hits).toBe(9999);
 });
 
 test('read moves hits to the end and counts them without mutating the input',()=>{
@@ -23,6 +25,11 @@ test('read moves hits to the end and counts them without mutating the input',()=
   expect(hit.entry.hint).toBe('h');expect(hit.entry.hits).toBe(1);
   expect(before.a.hits).toBe(0);expect(Object.keys(hit.cache)).toEqual(['b','a']);
   expect(readCache(cache,'missing')).toBeNull();
+});
+test('an entry loaded before expiry cannot be served after its retention window',()=>{
+  const cache={['a'.repeat(64)]:{hint:'private output',at:1000,hits:0}};
+  expect(readCache(cache,'a'.repeat(64),{ttl:300,now:1299})?.entry.hint).toBe('private output');
+  expect(readCache(cache,'a'.repeat(64),{ttl:300,now:1300})).toBeNull();
 });
 
 test('write evicts least recently used entries beyond the limit',()=>{
@@ -35,9 +42,9 @@ test('write evicts least recently used entries beyond the limit',()=>{
 });
 
 test('translation cache entries normalize shape and cap independently',()=>{
-  const cache=normalizeTranslationCache({ok:{zh:'译文',at:9},bad:{zh:''},junk:42});
-  expect(Object.keys(cache)).toEqual(['ok']);
-  let big={};for(let i=0;i<PAGE_TRANSLATION_CACHE_LIMIT+3;i++)big=writeCache(big,'k'+i,{zh:'x',at:i},{limit:PAGE_TRANSLATION_CACHE_LIMIT});
+  const key='f'.repeat(64),cache=normalizeTranslationCache({[key]:{zh:'译文',at:Date.now()},bad:{zh:''},junk:42});
+  expect(Object.keys(cache)).toEqual([key]);
+  let big={};for(let i=0;i<PAGE_TRANSLATION_CACHE_LIMIT+3;i++)big=writeCache(big,'k'+i,{zh:'译文',at:i},{limit:PAGE_TRANSLATION_CACHE_LIMIT});
   expect(Object.keys(big)).toHaveLength(PAGE_TRANSLATION_CACHE_LIMIT);
 });
 
