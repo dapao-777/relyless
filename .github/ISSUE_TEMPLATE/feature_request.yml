@@ -1,0 +1,57 @@
+name: Feature proposal
+description: 提议符合产品方向的新能力或行为调整
+title: "feat: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先描述用户问题，不要只提交预选实现。涉及产品方向、数据、权限或自动行为的提案会先讨论再开发。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 用户问题
+      description: 谁在什么阅读场景中遇到什么阻碍？
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: 当前替代方式
+      description: 现在如何完成，为什么不够？
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 期望结果
+      description: 描述可观察结果，不必先决定实现。
+    validations:
+      required: true
+  - type: textarea
+    id: direction
+    attributes:
+      label: 与产品方向的关系
+      description: 它如何帮助用户继续阅读真实英文？是否影响明确非目标？
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: 数据、权限与费用
+      description: 是否需要发送或保存新数据、增加权限、调用新服务或产生额外费用？没有则写“无”。
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 考虑过的替代方案
+      description: 包括不做、只改文档或使用现有功能。
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前检查
+      options:
+        - label: 我已阅读产品方向和开发原则
+          required: true
+        - label: 我已搜索现有 Issue 和 PR
+          required: true
