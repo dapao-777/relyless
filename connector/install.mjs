@@ -3,7 +3,7 @@ import {constants} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {homedir} from 'node:os';
-import {delimiter,dirname,join,resolve} from 'node:path';
+import {delimiter,dirname,join,resolve,win32} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {cliSpawnTarget,executableNames} from './cli-spawn.mjs';
 
@@ -38,12 +38,12 @@ function options(args) {
   return result;
 }
 
-export async function findExecutable(name, explicit, extraDirs = [], env = process.env) {
-  const names = executableNames(name, {pathext: env.PATHEXT});
+export async function findExecutable(name, explicit, extraDirs = [], env = process.env, platform = process.platform) {
+  const names = executableNames(name, {platform,pathext: env.PATHEXT});
   const candidates = [];
   if (explicit) candidates.push(explicit);
   for (const dir of extraDirs) for (const exe of names) candidates.push(join(dir, exe));
-  for (const path of (env.PATH || '').split(delimiter).filter(Boolean)) {
+  for (const path of (env.PATH || '').split(platform === 'win32' ? win32.delimiter : delimiter).filter(Boolean)) {
     for (const exe of names) candidates.push(join(path, exe));
   }
   const seen = new Set();
