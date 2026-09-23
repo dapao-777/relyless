@@ -109,6 +109,7 @@ function migrateLegacyIdentity(word) {
     revision:integerNonNegative(word.revision),
     helpCount:integerNonNegative(word.helpCount),
     requestedAt:timestamp(word.requestedAt),
+    prevHelpAt:timestamp(word.prevHelpAt),
     knownAt:normalizeKnownAt(word.knownAt),
     lastSeen:timestamp(word.lastSeen),
     hintPreference:preference(word.hintPreference),
@@ -251,6 +252,9 @@ export function interact(word, action, now = Date.now(), pageKey = '', senseKey)
   const {index,sense:stored} = requireSense(word,senseKey);
   if (!stored) throw new RangeError('Invalid sense');
   const current = timestamp(now,Date.now());
+  const priorHelpAt = action === 'help'
+    ? (word.senses || []).reduce((latest,entry) => Math.max(latest,timestamp(entry?.lastHelpAt)),0)
+    : timestamp(word.prevHelpAt);
 
   const sense = action === 'less'
     ? {...stored,hintPreference:'less',quietUntil:0}
@@ -258,6 +262,6 @@ export function interact(word, action, now = Date.now(), pageKey = '', senseKey)
       quietCycles:0,quietOpportunityDays:0,hintPreference:null,
       assistedPageKey:typeof pageKey === 'string' ? pageKey : ''};
   const next = replaceSense(word,index,sense,current);
-  return {...next,hintPreference:null,
+  return {...next,hintPreference:null,prevHelpAt:priorHelpAt,
     helpCount:integerNonNegative(word.helpCount)+(action === 'help' ? 1 : 0)};
 }

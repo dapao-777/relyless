@@ -18,8 +18,8 @@
 
   const state = {
     enabled: false, automaticReady: false, manual: false, paused: false, videoAllowed: false,
-    settings: {assistanceMode: 'ambient', rememberSupport: true, helpLanguage: 'zh', domain: 'auto'},
-    providerConfigured: false, domain: 'general', domainResolved: false, generation: 0, contentGeneration: 0,
+    settings: {assistanceMode: 'ambient', rememberSupport: true, helpLanguage: 'zh', domain: 'auto', hintDisplay: 'direct'},
+    providerConfigured: false, domain: 'general', domainResolved: false, domainSuggestionDone: false, generation: 0, contentGeneration: 0,
     viewportGeneration: 0, page: location.href, root: null, blocks: [], records: [], processed: new Set(),
     assisted: new Set(), seen: new Set(), card: null, assistRequestId: '', selectionTool: null,
     passageRequests: new Set(), knownWords: new Set(), knownBlocks: new Map(), observer: null, intersections: null,

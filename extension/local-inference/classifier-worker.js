@@ -84,6 +84,7 @@ function scoreDomains(embedding, entries) {
     score: Number(bestScore.toFixed(4)),
     margin: Number(margin.toFixed(4)),
     confident,
+    suggested: confident ? null : bestDomain,
   };
 }
 
@@ -91,7 +92,7 @@ async function classify(text, title) {
   const body = bounded(text, MAX_TEXT_LENGTH);
   const heading = bounded(title, MAX_TITLE_LENGTH);
   const input = heading ? `${heading}. ${body}` : body;
-  if (!input) return { domain: 'general', source: 'local-model', score: 0, margin: 0, confident: false };
+  if (!input) return { domain: 'general', source: 'local-model', score: 0, margin: 0, confident: false, suggested: null };
   const runtime = await getRuntime();
   const tensor = await runtime.extractor(input, { pooling: 'mean', normalize: true });
   if (tensor.size !== runtime.dimensions) throw new Error('本地模型输出维度异常');
