@@ -171,11 +171,52 @@ test('sentence hierarchy is authorized, cached, presentation-independent, and dr
 
 test('invalid reading settings leave the last accepted configuration intact',async()=>{
   const readingStyle={original:{style:'border',color:'#b7791f',size:115},annotation:{style:'plain',color:'auto',size:80},translation:{style:'background',color:'#2255aa',size:130}};
-  await send({type:'STATE_PATCH',patch:{lookupKey:'Q',lookupDisplay:'annotation',readingStyle}},extensionSender);
+  await send({type:'STATE_PATCH',patch:{lookupKey:'Q',lookupDisplay:'annotation',hintDisplay:'veil',readingStyle}},extensionSender);
   await expect(send({type:'STATE_PATCH',patch:{lookupKey:'Shift'}},extensionSender)).rejects.toThrow();
   await expect(send({type:'STATE_PATCH',patch:{lookupDisplay:'popup'}},extensionSender)).rejects.toThrow();
+  await expect(send({type:'STATE_PATCH',patch:{hintDisplay:'blur'}},extensionSender)).rejects.toThrow();
   await expect(send({type:'STATE_PATCH',patch:{lookupKey:'R',readingStyle:{...readingStyle,translation:{...readingStyle.translation,size:101}}}},extensionSender)).rejects.toThrow();
-  expect((await send({type:'STATE_GET'},extensionSender)).settings).toMatchObject({lookupKey:'Q',lookupDisplay:'annotation',readingStyle});
+  expect((await send({type:'STATE_GET'},extensionSender)).settings).toMatchObject({lookupKey:'Q',lookupDisplay:'annotation',hintDisplay:'veil',readingStyle});
+  expect((await send({type:'STATE_GET'})).settings.hintDisplay).toBe('veil');
+});
+test('content pages can accept a suggested domain and optionally remember the site',async()=>{
+  const before=(await send({type:'STATE_GET'},extensionSender)).settings.domainRules.length;
+  expect(await send({type:'PAGE_DOMAIN_SET',domain:'medical',rememberSite:true})).toEqual({domain:'medical'});
+  const rules=(await send({type:'STATE_GET'},extensionSender)).settings.domainRules;
+  const rule=rules.at(-1);
+  expect(rules.length).toBe(before+1);
+  expect(rule).toMatchObject({host:'reading.example',pathPrefix:'/',domain:'medical',includeSubdomains:false});
+  await send({type:'STATE_PATCH',patch:{domainRules:rules.filter(item=>!(item.host==='reading.example'&&item.domain==='medical'))}},extensionSender);
+  await expect(send({type:'PAGE_DOMAIN_SET',domain:'bogus'})).rejects.toThrow();
+  const detached={id:'backend-fixture',url:'https://reading.example/article',frameId:0};
+  await expect(send({type:'PAGE_DOMAIN_SET',domain:'tech'},detached)).rejects.toThrow('目标页面');
+});
+test('sense keys merge semantically close labels through warm local embeddings',async()=>{
+  const previousSend=chrome.runtime.sendMessage,previousOffscreen=chrome.offscreen,savedWords=stored.words;
+  try{
+    stored.words=[{id:wordId('unless','tech'),term:'unless',domain:'tech',kind:'word',revision:1,helpCount:1,requestedAt:1,prevHelpAt:0,knownAt:0,lastSeen:1,hintPreference:null,senses:[{key:'sense-existing',label:'marks an exception',opportunityDays:0,lastOpportunityAt:0,lastHelpAt:0,quietUntil:0,quietCycles:0,quietOpportunityDays:0,hintPreference:null,assistedPageKey:'',embedding:[1,0,0,0],definition:{hint:'',translation:''}}]}];
+    chrome.offscreen={hasDocument:async()=>true};
+    chrome.runtime.sendMessage=async message=>message?.type==='EMBED_LOCAL'?{ok:true,data:{vectors:[[0.99,0.01,0,0]],dimensions:4}}:{ok:false,error:'unexpected local call'};
+    const command={type:'ASSIST',detail:'brief',requestId:'sense-merge',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint'};
+    const result=await send(command);
+    expect(result.support).toMatchObject({wordId:wordId('unless','tech'),senseKey:'sense-existing'});
+    const committed=await send({type:'ASSIST_COMMIT',requestId:'sense-merge'});
+    expect(committed.support).toMatchObject({senseKey:'sense-existing'});
+    expect(stored.words[0].senses).toHaveLength(1);
+  }finally{chrome.runtime.sendMessage=previousSend;chrome.offscreen=previousOffscreen;await new Promise(resolve=>setTimeout(resolve,20));stored.words=savedWords;}
+});
+test('usage estimates prefer the warm local tokenizer over char fallback',async()=>{
+  const previousSend=chrome.runtime.sendMessage,previousOffscreen=chrome.offscreen;
+  const estimated=async()=>{const view=await send({type:'USAGE_STATS',days:1},extensionSender);return (view.usage.models||[]).flatMap(model=>model.operations).filter(row=>row.operation==='ASSIST').reduce((sum,row)=>({estInput:sum.estInput+row.estInput,estOutput:sum.estOutput+row.estOutput}),{estInput:0,estOutput:0});};
+  try{
+    chrome.offscreen={hasDocument:async()=>true};
+    chrome.runtime.sendMessage=async message=>message?.type==='COUNT_TOKENS_LOCAL'?{ok:true,data:{counts:[42,7]}}:undefined;
+    const before=await estimated();
+    await send({type:'ASSIST',detail:'full',requestId:'usage-tokenizer',text:'wobble',context:'Verify the wobble again.',domain:'general',kind:'word',level:'hint'});
+    const after=await estimated();
+    expect(after.estInput-before.estInput).toBe(42);
+    expect(after.estOutput-before.estOutput).toBe(7);
+  }finally{chrome.runtime.sendMessage=previousSend;chrome.offscreen=previousOffscreen;}
 });
 test('current document identity tolerates URL state changes but rejects replaced documents',async()=>{
   const originalUrl=tab.url,originalDocumentId=currentDocumentId;
@@ -223,8 +264,12 @@ test('assist is idempotent, persists only after adopted commit, and records one 
   expect(stored.words[0].senses).toHaveLength(1);
   expect(JSON.stringify(stored.words[0])).not.toContain('expired');
   expect(JSON.stringify(stored.words[0])).not.toContain('reading.example');
-  const cachedCalls=providerCalls;await send({...command,requestId:'req-two'});expect(providerCalls).toBe(cachedCalls);await send({type:'ASSIST_COMMIT',requestId:'req-two'});expect(stored.words[0].helpCount).toBe(2);
-  await send({...command,requestId:'req-three',bypassCache:true});expect(providerCalls).toBe(cachedCalls+1);await send({type:'ASSIST_COMMIT',requestId:'req-three'});expect(stored.words[0].helpCount).toBe(3);
+  expect(commit.support).toMatchObject({history:{helps:1,lastAt:0}});
+  const cachedCalls=providerCalls;await send({...command,requestId:'req-two'});expect(providerCalls).toBe(cachedCalls);const second=await send({type:'ASSIST_COMMIT',requestId:'req-two'});expect(stored.words[0].helpCount).toBe(2);
+  expect(second.support.history).toMatchObject({helps:2});expect(second.support.history.lastAt).toBeGreaterThan(0);expect(second.termSuggestion??null).toBeNull();
+  await send({...command,requestId:'req-three',bypassCache:true});expect(providerCalls).toBe(cachedCalls+1);const third=await send({type:'ASSIST_COMMIT',requestId:'req-three'});expect(stored.words[0].helpCount).toBe(3);
+  expect(third.termSuggestion).toMatchObject({term:'unless',domain:'tech'});expect(JSON.stringify(third.termSuggestion)).not.toContain('reading.example');
+  expect((await send({type:'ASSIST_COMMIT',requestId:'req-three'})).termSuggestion).toMatchObject({term:'unless'});
   await expect(send({...command,bypassCache:true})).rejects.toThrow('同一请求编号');await expect(send({...command,context:'Different unless context.'})).rejects.toThrow('同一请求编号');
 });
 test('identical concurrent assists share one provider inference while the latest request wins',async()=>{

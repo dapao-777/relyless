@@ -32,6 +32,18 @@ test('sense labels use the persisted NFKC whitespace and lowercase identity', ()
   expect(normalizeSenseLabel(null)).toBeNull();
 });
 
+test('help records the previous cross-sense help time for the history line', () => {
+  const first = interact(fresh(), 'help', START, 'page-a', SENSE_KEY);
+  expect(first.helpCount).toBe(1);
+  expect(first.prevHelpAt).toBe(0);
+  const second = interact(first, 'help', START + 2 * DAY, 'page-b', SENSE_KEY);
+  expect(second.helpCount).toBe(2);
+  expect(second.prevHelpAt).toBe(START);
+  const quieter = interact({...second, senses: [...second.senses, {key:'other-sense',label:'other',opportunityDays:0,lastOpportunityAt:0,lastHelpAt:START + 5 * DAY,quietUntil:0,quietCycles:0,quietOpportunityDays:0,hintPreference:null,assistedPageKey:''}]}, 'help', START + 6 * DAY, 'page-c', SENSE_KEY);
+  expect(quieter.prevHelpAt).toBe(START + 5 * DAY);
+  expect(interact(quieter, 'less', START + 7 * DAY, 'page-d', SENSE_KEY).prevHelpAt).toBe(START + 5 * DAY);
+});
+
 test('legacy migration preserves identity and explicit less while dropping inferred history', () => {
   const legacy = {
     id:'finance:liability',term:'liability',domain:'finance',kind:'phrase',revision:7,
@@ -42,7 +54,7 @@ test('legacy migration preserves identity and explicit less while dropping infer
   };
   expect(migrateSupportWord(legacy,3)).toEqual({
     id:'finance:liability',term:'liability',domain:'finance',kind:'phrase',revision:7,
-    helpCount:3,requestedAt:0,knownAt:0,lastSeen:START,hintPreference:'less',senses:[],
+    helpCount:3,requestedAt:0,prevHelpAt:0,knownAt:0,lastSeen:START,hintPreference:'less',senses:[],
   });
   expect(migrateSupportWord({...legacy,kind:'sentence'},2)).toBeNull();
 });
