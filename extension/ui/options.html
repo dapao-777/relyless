@@ -1046,6 +1046,14 @@
           <p class="field-help" id="routing-stats">尚未启用。</p>
 </div>
 </div>
+      <div class="paper-card" id="usage-card">
+        <div class="adaptive-setting"><div><b>模型用量</b><p>统计本机发起的模型请求与 token 消耗；服务商未返回计数时按字符估算（≈），仅保存在本机。</p></div></div>
+        <fieldset class="history-period" aria-label="用量范围"><legend class="sr-only">用量范围</legend><label><input type="radio" name="usage-days" value="1"><span>今日</span></label><label><input type="radio" name="usage-days" value="7" checked=""><span>近 7 天</span></label><label><input type="radio" name="usage-days" value="30"><span>近 30 天</span></label><label><input type="radio" name="usage-days" value="0"><span>累计</span></label></fieldset>
+        <div id="usage-list" class="usage-list"></div>
+        <p id="usage-empty" class="empty-state" hidden="">范围内暂无用量记录。</p>
+        <p id="usage-total" class="field-help"></p>
+        <div class="data-actions"><button id="usage-clear" type="button">清空用量统计</button><span id="usage-result" class="inline-message" aria-live="polite"></span></div>
+      </div>
       <details class="paper-card settings-disclosure">
 <summary>高级：并发与排队</summary>
 <div class="form-stack">
