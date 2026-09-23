@@ -12,7 +12,7 @@ const diagnosticOperationLabels = {SENTENCE_GROUPS_BATCH:'阅读解构',HISTORY_
 const diagnosticStageLabels = {request:'请求',provider:'服务',first_content:'首段内容',validation:'校验',render:'呈现',connection:'连接',rpc:'通信',stderr:'连接器错误'};
 const diagnosticStatusLabels = {start:'开始',ok:'完成',error:'失败',cancelled:'已取消'};
 const diagnosticCodeLabels = {STARTUP_FAILED:'连接器启动失败',CODEX_EXIT:'模型进程已退出',RPC_TIMEOUT:'连接器通信超时',TURN_FAILED:'模型处理失败',UNKNOWN:'其他异常',OK:'处理完成',LOCAL_RESULT:'使用本机结果',CACHE_HIT:'使用本机缓存',TIMEOUT:'请求超时',NETWORK:'网络错误',AUTH:'服务认证失败',RATE_LIMIT:'请求过于频繁',HTTP:'服务请求失败',JSON_INVALID:'响应解析失败',OUTPUT_INVALID:'响应格式无效',BATCH_SHAPE:'批次格式无效',BATCH_COUNT:'批次数量不符',ITEM_FIELDS:'结果字段无效',ITEM_ID:'结果标识无效',ITEM_DUPLICATE:'结果重复',TRANSLATION_TYPE:'译文类型无效',TRANSLATION_EMPTY:'译文为空',TRANSLATION_WHITESPACE:'译文含首尾空白',TRANSLATION_LENGTH:'译文长度异常',TRANSLATION_NO_HAN:'译文不含汉字',STALE:'请求状态已过期',CANCELLED:'请求已取消',NOT_READY:'服务尚未准备',DISCONNECTED:'连接器已断开',NATIVE_START:'连接器已启动',NATIVE_EXIT:'连接器已退出',NATIVE_RPC:'连接器通信失败',NATIVE_STDERR:'连接器报告错误',STDERR_AUTH:'连接器认证失败',STDERR_RATE_LIMIT:'连接器请求过频',STDERR_TIMEOUT:'连接器处理超时',STDERR_UNKNOWN:'连接器未知错误',STORAGE_ERROR:'本机存储失败',RENDER_INVALID:'呈现数据无效',NOT_DISPLAYED:'结果未能呈现',INTERRUPTED:'请求意外中断',SLOW_REQUEST:'请求耗时较长',REPEATED_FAILURE:'同类请求多次失败'};
-const optionsIds = ['section-title','save-state','global-error','reading-domain','lookup-key','passage-delay','passage-delay-field','automation-all-sites','automation-video-sites','automation-site-form','automation-site-origin','automation-result','automation-site-list','automation-site-empty','rule-pack-form','rule-pack-json','rule-pack-result','rule-pack-list','rule-pack-empty','routing-enabled','routing-fields','routing-premium','routing-confidence','routing-ttl','routing-stats','request-concurrency','settings-search','search-results','video-font-size','video-theme','detection-chatgpt','detection-api','detection-subscription-model','detection-model-note','detection-use-translation-api','detection-api-model','detection-api-fields','detection-api-url','detection-api-key','detection-key-state','clear-detection-key','detection-jev','detection-jev-model','detection-jev-url','detection-jev-key','detection-jev-key-state','clear-detection-jev-key','save-recognition','domain-test-text','run-domain-test','domain-test-result','domain-rule-form','rule-host','rule-path','rule-domain','rule-subdomains','domain-rule-result','domain-rule-list','domain-rule-empty','term-form','term-source','term-translation','term-domain','term-list','term-empty','subscription-panel','api-panel','subscription-dot','subscription-state','subscription-detail','refresh-subscription','subscription-account','subscription-email','subscription-plan','subscription-model','subscription-model-note','login-subscription','cancel-subscription','logout-subscription','test-subscription','subscription-result','install-command','copy-install-command','provider-form','provider-url','provider-model','provider-keys','key-state','check-all-keys','test-provider','disconnect-provider','provider-result','remember-support','export-data','clear-memory','data-result','open-extension-manager','help-language','api-service-select','new-api-service','provider-name','delete-api-service','cancel-api-service', 'reading-style-preview', 'reset-reading-style', 'diagnostics-storage-error','diagnostics-enabled','diagnostics-recording-note','diagnostics-native-dot','diagnostics-native-state','diagnostics-native-note','diagnostics-requests','diagnostics-failures','diagnostics-slow','diagnostics-pending','diagnostics-updated','diagnostics-issues','diagnostics-issues-empty','diagnostics-events','diagnostics-events-empty','export-diagnostics','clear-diagnostics','diagnostics-result']
+const optionsIds = ['section-title','save-state','global-error','reading-domain','lookup-key','passage-delay','passage-delay-field','automation-all-sites','automation-video-sites','automation-site-form','automation-site-origin','automation-result','automation-site-list','automation-site-empty','rule-pack-form','rule-pack-json','rule-pack-result','rule-pack-list','rule-pack-empty','routing-enabled','routing-fields','routing-premium','routing-confidence','routing-ttl','routing-stats','usage-list','usage-empty','usage-total','usage-clear','usage-result','request-concurrency','settings-search','search-results','video-font-size','video-theme','detection-chatgpt','detection-api','detection-subscription-model','detection-model-note','detection-use-translation-api','detection-api-model','detection-api-fields','detection-api-url','detection-api-key','detection-key-state','clear-detection-key','detection-jev','detection-jev-model','detection-jev-url','detection-jev-key','detection-jev-key-state','clear-detection-jev-key','save-recognition','domain-test-text','run-domain-test','domain-test-result','domain-rule-form','rule-host','rule-path','rule-domain','rule-subdomains','domain-rule-result','domain-rule-list','domain-rule-empty','term-form','term-source','term-translation','term-domain','term-list','term-empty','subscription-panel','api-panel','subscription-dot','subscription-state','subscription-detail','refresh-subscription','subscription-account','subscription-email','subscription-plan','subscription-model','subscription-model-note','login-subscription','cancel-subscription','logout-subscription','test-subscription','subscription-result','install-command','copy-install-command','provider-form','provider-url','provider-model','provider-keys','key-state','check-all-keys','test-provider','disconnect-provider','provider-result','remember-support','export-data','clear-memory','data-result','open-extension-manager','help-language','api-service-select','new-api-service','provider-name','delete-api-service','cancel-api-service', 'reading-style-preview', 'reset-reading-style', 'diagnostics-storage-error','diagnostics-enabled','diagnostics-recording-note','diagnostics-native-dot','diagnostics-native-state','diagnostics-native-note','diagnostics-requests','diagnostics-failures','diagnostics-slow','diagnostics-pending','diagnostics-updated','diagnostics-issues','diagnostics-issues-empty','diagnostics-events','diagnostics-events-empty','export-diagnostics','clear-diagnostics','diagnostics-result']
 const optionsEls = Object.fromEntries(optionsIds.map(id => [id.replace(/-([a-z])/g,(_match,char)=>char.toUpperCase()),document.querySelector(`#${id}`)]));
 optionsEls.dataProblem = document.querySelector('#data-problem');
 Object.assign(optionsEls,Object.fromEntries(['provider-id','provider-key-link','provider-fields','provider-model-list','provider-model-note','list-provider-models'].map(id=>[id.replace(/-([a-z])/g,(_match,char)=>char.toUpperCase()),document.querySelector('#'+id)])));
@@ -97,7 +97,7 @@ function optionsNavigate(hit) {
     optionsDiagnosticsTimer=setInterval(()=>void optionsRefreshDiagnostics(),5000);
   }
   if(section==='appearance')optionsRenderAppearance();
-  if(section==='service'&&serviceCatalog)serviceCatalog.sync();
+  if(section==='service'){if(serviceCatalog)serviceCatalog.sync();void optionsRefreshUsage();}
   if(hit?.element){
     const target=hit.element;
     const panel=target.closest('[data-appearance-panel]');
@@ -109,6 +109,35 @@ function optionsNavigate(hit) {
     requestAnimationFrame(()=>window.scrollTo(0,0));
     if(previous)optionsEls.sectionTitle.focus({preventScroll:true});
   }
+}
+let optionsUsageDays=7;
+function usageTokensLabel(value,estimated){
+  const format=n=>n>=1000000?(n/1000000).toFixed(1)+'M':n>=1000?(n/1000).toFixed(1)+'K':String(n);
+  const parts=[];
+  if(value>0)parts.push(format(value));
+  if(estimated>0)parts.push('≈'+format(estimated));
+  return parts.join(' + ')||'—';
+}
+async function optionsRefreshUsage(){
+  try{
+    const result=await request('USAGE_STATS',{days:optionsUsageDays});
+    const usage=result.usage||{totals:{},models:[]};
+    optionsEls.usageList.replaceChildren();
+    for(const group of usage.models||[]){
+      const row=document.createElement('div');row.className='usage-row';
+      const info=document.createElement('div');info.className='usage-info';
+      const title=document.createElement('b');title.textContent=(group.service||'未知服务')+' · '+(group.model||'未知模型');
+      const detail=document.createElement('span');detail.textContent=(group.operations||[]).map(op=>(diagnosticOperationLabels[op.operation]||op.operation||'其他')+' '+op.requests+' 次').join(' · ');
+      info.append(title,detail);
+      const numbers=document.createElement('span');numbers.className='usage-numbers';
+      numbers.textContent=group.requests+' 次'+(group.errors>0?'（失败 '+group.errors+'）':'')+' · 输入 '+usageTokensLabel(group.input,group.estInput)+' · 输出 '+usageTokensLabel(group.output,group.estOutput);
+      row.append(info,numbers);
+      optionsEls.usageList.append(row);
+    }
+    const totals=usage.totals||{};
+    optionsEls.usageEmpty.hidden=Boolean((usage.models||[]).length);
+    optionsEls.usageTotal.textContent=totals.requests>0?'合计 '+totals.requests+' 次请求 · 输入 '+usageTokensLabel(totals.input,totals.estInput)+' · 输出 '+usageTokensLabel(totals.output,totals.estOutput):'';
+  }catch{optionsEls.usageTotal.textContent='统计暂不可用。';}
 }
 function optionsRenderModels(select,selected,note) { select.replaceChildren(new Option('由连接器选择默认模型',''));for(const model of optionsModels)select.append(new Option(model.name||model.id,model.id));select.value=[...select.options].some(option=>option.value===selected)?selected:'';note.textContent=optionsModels.length?'可选择账户当前可用模型。':'连接后刷新可用模型；留空由连接器选择。'; }
 function optionsRenderAutomation() { const automation=optionsAutomation?.automation||optionsState.settings.automation||{allSites:false,sites:[],videoSites:false};optionsEls.automationAllSites.checked=Boolean(automation.allSites);optionsEls.automationVideoSites.checked=Boolean(automation.videoSites);optionsEls.automationSiteList.replaceChildren();for(const site of automation.sites||[]){const row=document.createElement('div');row.className='automation-site-item';const code=document.createElement('code');code.textContent=site.origin;const toggle=document.createElement('button');toggle.type='button';toggle.textContent=site.enabled?'已启用':'已停用';toggle.addEventListener('click',()=>void optionsToggleSite(site,!site.enabled));const remove=document.createElement('button');remove.className='delete-button';remove.type='button';remove.textContent='移除';remove.addEventListener('click',()=>void optionsToggleSite(site,null));row.append(code,toggle,remove);optionsEls.automationSiteList.append(row);}optionsEls.automationSiteEmpty.hidden=Boolean(automation.sites?.length); }
@@ -183,6 +212,7 @@ function optionsPreviewReadingStyle(value){
 function optionsRenderReadingStyle(){optionsBuildReadingPalettes();const value=globalThis.ShisuiReadingStyle.normalize(optionsReadingDraft||optionsState.settings.readingStyle);for(const layer of optionsReadingLayers){const controls=optionsReadingControls[layer],layerValue=value[layer];controls.style.value=layerValue.style;controls.size.value=String(layerValue.size);controls.group.dataset.color=layerValue.color;controls.color.value=layerValue.color==='auto'?globalThis.ShisuiReadingStyle.palettes[0].color:layerValue.color;optionsUpdateReadingColorUI(layer);}optionsPreviewReadingStyle(value);}
 function optionsDiscardProviderDraft(){
   if(!optionsProviderDirty)return true;
+  if(!optionsEls.providerKeys.value.trim()){optionsProviderDirty=false;return true;}
   return confirm('表单有未保存的更改。确定放弃这些更改吗？');
 }
 function optionsProviderOptions(){return Object.fromEntries([...optionsEls.providerFields.querySelectorAll('[data-provider-option]')].map(input=>[input.dataset.providerOption,input.value.trim()]));}
@@ -587,5 +617,7 @@ globalThis.optionsStartDraftProvider = providerId => {
   setResult(optionsEls.providerResult, '请填写此服务的 API Key；保存后生效。');
 };
 
+document.querySelectorAll('input[name="usage-days"]').forEach(input=>input.addEventListener('change',()=>{optionsUsageDays=Number(input.value);void optionsRefreshUsage();}));
+optionsEls.usageClear.addEventListener('click',async()=>{if(!confirm('清空模型用量统计？只删除用量计数，不影响服务配置与阅读数据。'))return;try{await request('USAGE_CLEAR');setResult(optionsEls.usageResult,'用量统计已清空');await optionsRefreshUsage();}catch(error){setResult(optionsEls.usageResult,errorText(error),true);}});
 async function optionsInit(){optionsFillDomains(optionsEls.readingDomain,true);optionsFillDomains(optionsEls.ruleDomain,false);optionsFillDomains(optionsEls.termDomain,false);optionsEls.installCommand.textContent=`node connector/install.mjs --extension-id ${chrome.runtime.id}`;optionsNavigate();try{const densityData=await chrome.storage.local.get(['sentenceGroupsDensity','sentenceGroupsLineStyle']);optionsSentenceDensity=['coarse','medium','fine'].includes(densityData.sentenceGroupsDensity)?densityData.sentenceGroupsDensity:'medium';optionsSentenceLineStyle=['solid','dashed','dotted','wavy'].includes(densityData.sentenceGroupsLineStyle)?densityData.sentenceGroupsLineStyle:'solid';await optionsSyncState();if(!['diagnostics','history','personalization'].includes(optionsCurrentSection))await optionsRefreshSubscription();}catch(error){optionsShowError(error);}}
 void optionsInit();

@@ -23,7 +23,8 @@ export function createDiagnostics({storage,session,sync,nativeStatus}) {
     trace:message=>traces.get(message),
     event,
     async run(message,sender,operation){
-      if(sender.tab?.incognito)return operation();
+      // Keep request context without persisting diagnostics from incognito pages.
+      if(sender.tab?.incognito||globalThis.chrome?.extension?.inIncognitoContext){traces.set(message,{incognito:true,operation:message.type});return operation();}
       if(!OPERATIONS.has(message.type))return operation();
       const trace={traceId:validTraceId(message.traceId)?message.traceId:crypto.randomUUID(),operation:message.type,epoch:store.epoch,at:Date.now(),metadata:{kind:message.kind,level:message.level}};
       delete message.traceId;traces.set(message,trace);
@@ -35,7 +36,7 @@ export function createDiagnostics({storage,session,sync,nativeStatus}) {
       catch(error){const detail=diagnosticError(error),status=['STALE','CANCELLED','NOT_READY'].includes(detail.code)?'cancelled':'error';await event(trace,'request',status,{...detail,durationMs:Date.now()-trace.at});throw error;}
     },
     async provider(trace,kind,model,address,operation){
-      if(!trace)return operation();
+      if(!trace||trace.incognito)return operation();
       trace.provider=true;trace.metadata={...trace.metadata,provider:kind,modelRef:await fingerprint(model||''),providerRef:await fingerprint(address||kind)};
       const at=Date.now();await event(trace,'provider','start');
       try{const value=await operation();await event(trace,'provider','ok',{durationMs:Date.now()-at,...(typeof value==='string'?{outputChars:value.length}:{})});return value;}
