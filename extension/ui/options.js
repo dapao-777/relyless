@@ -12,7 +12,7 @@ const diagnosticOperationLabels = {SENTENCE_GROUPS_BATCH:'阅读解构',HISTORY_
 const diagnosticStageLabels = {request:'请求',provider:'服务',first_content:'首段内容',validation:'校验',render:'呈现',connection:'连接',rpc:'通信',stderr:'连接器错误'};
 const diagnosticStatusLabels = {start:'开始',ok:'完成',error:'失败',cancelled:'已取消'};
 const diagnosticCodeLabels = {STARTUP_FAILED:'连接器启动失败',CODEX_EXIT:'模型进程已退出',RPC_TIMEOUT:'连接器通信超时',TURN_FAILED:'模型处理失败',UNKNOWN:'其他异常',OK:'处理完成',LOCAL_RESULT:'使用本机结果',CACHE_HIT:'使用本机缓存',TIMEOUT:'请求超时',NETWORK:'网络错误',AUTH:'服务认证失败',RATE_LIMIT:'请求过于频繁',HTTP:'服务请求失败',JSON_INVALID:'响应解析失败',OUTPUT_INVALID:'响应格式无效',BATCH_SHAPE:'批次格式无效',BATCH_COUNT:'批次数量不符',ITEM_FIELDS:'结果字段无效',ITEM_ID:'结果标识无效',ITEM_DUPLICATE:'结果重复',TRANSLATION_TYPE:'译文类型无效',TRANSLATION_EMPTY:'译文为空',TRANSLATION_WHITESPACE:'译文含首尾空白',TRANSLATION_LENGTH:'译文长度异常',TRANSLATION_NO_HAN:'译文不含汉字',STALE:'请求状态已过期',CANCELLED:'请求已取消',NOT_READY:'服务尚未准备',DISCONNECTED:'连接器已断开',NATIVE_START:'连接器已启动',NATIVE_EXIT:'连接器已退出',NATIVE_RPC:'连接器通信失败',NATIVE_STDERR:'连接器报告错误',STDERR_AUTH:'连接器认证失败',STDERR_RATE_LIMIT:'连接器请求过频',STDERR_TIMEOUT:'连接器处理超时',STDERR_UNKNOWN:'连接器未知错误',STORAGE_ERROR:'本机存储失败',RENDER_INVALID:'呈现数据无效',NOT_DISPLAYED:'结果未能呈现',INTERRUPTED:'请求意外中断',SLOW_REQUEST:'请求耗时较长',REPEATED_FAILURE:'同类请求多次失败'};
-const optionsIds = ['section-title','save-state','global-error','reading-domain','lookup-key','passage-delay','passage-delay-field','automation-all-sites','automation-video-sites','automation-site-form','automation-site-origin','automation-result','automation-site-list','automation-site-empty','rule-pack-form','rule-pack-json','rule-pack-result','rule-pack-list','rule-pack-empty','routing-enabled','routing-fields','routing-premium','routing-confidence','routing-ttl','routing-stats','video-font-size','video-theme','detection-chatgpt','detection-api','detection-subscription-model','detection-model-note','detection-use-translation-api','detection-api-model','detection-api-fields','detection-api-url','detection-api-key','detection-key-state','clear-detection-key','detection-jev','detection-jev-model','detection-jev-url','detection-jev-key','detection-jev-key-state','clear-detection-jev-key','save-recognition','domain-test-text','run-domain-test','domain-test-result','domain-rule-form','rule-host','rule-path','rule-domain','rule-subdomains','domain-rule-result','domain-rule-list','domain-rule-empty','term-form','term-source','term-translation','term-domain','term-list','term-empty','subscription-panel','api-panel','subscription-dot','subscription-state','subscription-detail','refresh-subscription','subscription-account','subscription-email','subscription-plan','subscription-model','subscription-model-note','login-subscription','cancel-subscription','logout-subscription','test-subscription','subscription-result','install-command','copy-install-command','provider-form','provider-url','provider-model','provider-keys','key-state','check-all-keys','test-provider','disconnect-provider','provider-result','remember-support','export-data','clear-memory','data-result','open-extension-manager','help-language','api-service-select','new-api-service','provider-name','delete-api-service','cancel-api-service', 'reading-style-preview', 'reset-reading-style', 'diagnostics-storage-error','diagnostics-enabled','diagnostics-recording-note','diagnostics-native-dot','diagnostics-native-state','diagnostics-native-note','diagnostics-requests','diagnostics-failures','diagnostics-slow','diagnostics-pending','diagnostics-updated','diagnostics-issues','diagnostics-issues-empty','diagnostics-events','diagnostics-events-empty','export-diagnostics','clear-diagnostics','diagnostics-result']
+const optionsIds = ['section-title','save-state','global-error','reading-domain','lookup-key','passage-delay','passage-delay-field','automation-all-sites','automation-video-sites','automation-site-form','automation-site-origin','automation-result','automation-site-list','automation-site-empty','rule-pack-form','rule-pack-json','rule-pack-result','rule-pack-list','rule-pack-empty','routing-enabled','routing-fields','routing-premium','routing-confidence','routing-ttl','routing-stats','request-concurrency','settings-search','search-results','video-font-size','video-theme','detection-chatgpt','detection-api','detection-subscription-model','detection-model-note','detection-use-translation-api','detection-api-model','detection-api-fields','detection-api-url','detection-api-key','detection-key-state','clear-detection-key','detection-jev','detection-jev-model','detection-jev-url','detection-jev-key','detection-jev-key-state','clear-detection-jev-key','save-recognition','domain-test-text','run-domain-test','domain-test-result','domain-rule-form','rule-host','rule-path','rule-domain','rule-subdomains','domain-rule-result','domain-rule-list','domain-rule-empty','term-form','term-source','term-translation','term-domain','term-list','term-empty','subscription-panel','api-panel','subscription-dot','subscription-state','subscription-detail','refresh-subscription','subscription-account','subscription-email','subscription-plan','subscription-model','subscription-model-note','login-subscription','cancel-subscription','logout-subscription','test-subscription','subscription-result','install-command','copy-install-command','provider-form','provider-url','provider-model','provider-keys','key-state','check-all-keys','test-provider','disconnect-provider','provider-result','remember-support','export-data','clear-memory','data-result','open-extension-manager','help-language','api-service-select','new-api-service','provider-name','delete-api-service','cancel-api-service', 'reading-style-preview', 'reset-reading-style', 'diagnostics-storage-error','diagnostics-enabled','diagnostics-recording-note','diagnostics-native-dot','diagnostics-native-state','diagnostics-native-note','diagnostics-requests','diagnostics-failures','diagnostics-slow','diagnostics-pending','diagnostics-updated','diagnostics-issues','diagnostics-issues-empty','diagnostics-events','diagnostics-events-empty','export-diagnostics','clear-diagnostics','diagnostics-result']
 const optionsEls = Object.fromEntries(optionsIds.map(id => [id.replace(/-([a-z])/g,(_match,char)=>char.toUpperCase()),document.querySelector(`#${id}`)]));
 optionsEls.dataProblem = document.querySelector('#data-problem');
 Object.assign(optionsEls,Object.fromEntries(['provider-id','provider-key-link','provider-fields','provider-model-list','provider-model-note','list-provider-models'].map(id=>[id.replace(/-([a-z])/g,(_match,char)=>char.toUpperCase()),document.querySelector('#'+id)])));
@@ -71,23 +71,26 @@ function optionsProviderKind() { return optionsState?.settings?.providerKind ===
 function optionsLookupKey(){const key=optionsState?.settings?.lookupKey;return typeof key==='string'&&/^[A-Z]$/.test(key)?key:'D';}
 function optionsRenderLookupKey(){const key=optionsLookupKey();optionsEls.lookupKey.value=key;for(const copy of optionsLookupKeyCopies)copy.textContent=key;}
 function optionsFillDomains(select,includeAuto) { select.replaceChildren();for(const [value,label] of Object.entries(DOMAINS)){if(!includeAuto&&value==='auto')continue;select.append(new Option(value==='auto'?'自动识别':label,value));} }
-function optionsNavigate() {
+function optionsNavigate(hit) {
   const previous=optionsCurrentSection, requested=location.hash.slice(1);
   const section=optionsSections.includes(requested)?requested:'assistance';
-  for(const name of optionsSections)document.getElementById(name).hidden=name!==section;
-  const parent=['advanced','terms','diagnostics'].includes(section)?'advanced':section;
-  for(const link of document.querySelectorAll('[data-section]')){
-    const active=link.dataset.section===parent;
-    link.classList.toggle('active',active);
-    if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
-  }
-  for(const link of document.querySelectorAll('.section-links a')){
-    if(link.hash==='#'+section)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
-  }
-  optionsEls.sectionTitle.textContent=optionsLabels[section];
-  document.title='RelyLess · '+optionsLabels[section];
-  if(requested!==section)history.replaceState(null,'','#'+section);
-  optionsCurrentSection=section;
+  const apply=()=>{
+    for(const name of optionsSections)document.getElementById(name).hidden=name!==section;
+    const parent=['advanced','terms','diagnostics'].includes(section)?'advanced':section;
+    for(const link of document.querySelectorAll('[data-section]')){
+      const active=link.dataset.section===parent;
+      link.classList.toggle('active',active);
+      if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
+    }
+    for(const link of document.querySelectorAll('.section-links a')){
+      if(link.hash==='#'+section)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
+    }
+    optionsEls.sectionTitle.textContent=optionsLabels[section];
+    document.title='RelyLess · '+optionsLabels[section];
+    if(requested!==section)history.replaceState(null,'','#'+section);
+    optionsCurrentSection=section;
+  };
+  if(previous&&previous!==section&&!hit?.element&&typeof document.startViewTransition==='function'&&!matchMedia('(prefers-reduced-motion: reduce)').matches)document.startViewTransition(apply);else apply();
   if(previous==='diagnostics'&&section!=='diagnostics')void optionsSyncState().catch(optionsShowError);
   clearInterval(optionsDiagnosticsTimer);optionsDiagnosticsTimer=0;
   if(section==='diagnostics'){
@@ -96,7 +99,14 @@ function optionsNavigate() {
   }
   if(section==='appearance')optionsRenderAppearance();
   if(section==='service'&&serviceCatalog)serviceCatalog.sync();
-  if(previous!==section){
+  if(hit?.element){
+    const target=hit.element;
+    const panel=target.closest('[data-appearance-panel]');
+    if(panel)optionsSelectAppearance(panel.dataset.appearancePanel);
+    for(const details of document.getElementById(section).querySelectorAll('details'))if(details.contains(target))details.open=true;
+    if(!target.hasAttribute('tabindex')&&!target.matches('summary, button, a, input, select, textarea'))target.tabIndex=-1;
+    target.focus({preventScroll:true});target.scrollIntoView({block:'center'});
+  }else if(previous!==section){
     requestAnimationFrame(()=>window.scrollTo(0,0));
     if(previous)optionsEls.sectionTitle.focus({preventScroll:true});
   }
@@ -276,6 +286,7 @@ function optionsRenderAll(){
   for(const input of optionsLookupDisplayInputs)input.checked=input.value===(optionsState.settings.lookupDisplay||'card');
   for(const input of optionsHintDisplayInputs)input.checked=input.value===(optionsState.settings.hintDisplay||'direct');
   optionsEls.helpLanguage.value=optionsState.settings.helpLanguage||'zh';
+  optionsEls.requestConcurrency.value=String(optionsState.settings.requestConcurrency||2);
   const mode=document.querySelector('input[name="assistance-mode"][value="'+(optionsState.settings.assistanceMode||'ambient')+'"]');
   if(mode)mode.checked=true;
   optionsEls.rememberSupport.checked=optionsState.settings.rememberSupport!==false;
@@ -406,6 +417,61 @@ optionsEls.deleteApiService.addEventListener('click',async()=>{const services=op
 optionsEls.providerName.addEventListener('input',()=>{optionsProviderDirty=true;});
 optionsEls.providerId.addEventListener('change',async()=>{if(!optionsDiscardProviderDraft()){optionsProviderDirty=false;optionsRenderProvider();return;}await optionsCleanupDraftPermissions();const meta=getApiProvider(optionsEls.providerId.value);optionsRenderProviderFields(meta);optionsEls.providerName.value=meta.name;optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());optionsEls.providerModel.value=meta.defaultModel||'';optionsEls.providerKeys.value='';optionsProviderModels=[];optionsProviderDirty=false;optionsRenderProvider();setResult(optionsEls.providerResult,'服务商已更改；密钥不会从原服务带入。');});
 
+const optionsSearchIndex={};
+let optionsSearchReady=false,optionsSearchHits=[];
+function optionsBuildSearchIndex(){
+  if(optionsSearchReady)return;
+  for(const name of optionsSections){
+    const root=document.getElementById(name);if(!root)continue;
+    const labels=[];
+    root.querySelectorAll('legend, summary, .field > span, .choice-cards b, .adaptive-setting b, h3').forEach(element=>{
+      if(element.closest('[data-video-feature][hidden]'))return;
+      const label=element.textContent.replace(/\s+/g,' ').trim();
+      if(label)labels.push({section:name,label,element});
+    });
+    optionsSearchIndex[name]=labels;
+  }
+  optionsSearchReady=true;
+}
+function optionsApplySearch(){
+  const query=optionsEls.settingsSearch.value.trim().toLowerCase();
+  const links=[...document.querySelectorAll('.sidebar nav a')],groups=[...document.querySelectorAll('.sidebar .nav-group-label')];
+  const results=optionsEls.searchResults;
+  if(!query){optionsSearchHits=[];links.forEach(a=>a.hidden=false);groups.forEach(g=>g.hidden=false);results.hidden=true;results.replaceChildren();return;}
+  optionsBuildSearchIndex();
+  const hits=[];let anyVisible=false;
+  for(const a of links){
+    const section=a.dataset.section,navMatch=a.textContent.toLowerCase().includes(query);
+    const deep=(optionsSearchIndex[section]||[]).filter(hit=>hit.label.toLowerCase().includes(query));
+    a.hidden=!(navMatch||deep.length);
+    if(!a.hidden)anyVisible=true;
+    hits.push(...deep.slice(0,4));
+  }
+  groups.forEach(g=>g.hidden=true);
+  optionsSearchHits=hits.slice(0,12);
+  results.replaceChildren();
+  if(optionsSearchHits.length){
+    for(const [index,hit] of optionsSearchHits.entries()){
+      const button=document.createElement('button');button.type='button';button.dataset.section=hit.section;button.dataset.searchIndex=String(index);
+      const label=document.createElement('span');label.textContent=hit.label;
+      const where=document.createElement('span');where.className='search-section';where.textContent=' · '+(optionsLabels[hit.section]||hit.section);
+      button.append(label,where);results.append(button);
+    }
+  }else if(!anyVisible){const empty=document.createElement('span');empty.className='search-empty';empty.textContent='没有匹配的设置。';results.append(empty);}
+  results.hidden=!results.childElementCount;
+}
+optionsEls.settingsSearch.addEventListener('input',optionsApplySearch);
+optionsEls.settingsSearch.addEventListener('keydown',event=>{
+  if(event.key==='Escape'){optionsEls.settingsSearch.value='';optionsApplySearch();return;}
+  if(event.key==='Enter'){event.preventDefault();const button=optionsEls.searchResults.querySelector('button');const link=document.querySelector('.sidebar nav a:not([hidden])');if(button){button.click();}else if(link){location.hash=link.getAttribute('href');}}
+});
+optionsEls.searchResults.addEventListener('click',event=>{
+  const button=event.target.closest('button[data-search-index]');if(!button)return;
+  const hit=optionsSearchHits[Number(button.dataset.searchIndex)];if(!hit)return;
+  optionsEls.settingsSearch.value='';optionsApplySearch();
+  if(location.hash!=='#'+hit.section)history.pushState(null,'','#'+hit.section);
+  optionsNavigate(hit);
+});
 window.addEventListener('hashchange',optionsNavigate);
 for(const tab of optionsAppearanceTabs){
   tab.addEventListener('click',()=>optionsSelectAppearance(tab.dataset.appearanceTab));
@@ -421,6 +487,7 @@ optionsEls.routingEnabled.addEventListener('change',async()=>{const enabled=opti
 optionsEls.routingPremium.addEventListener('change',()=>void optionsSavePatch({routing:{premiumServiceId:optionsEls.routingPremium.value}},'升级目标已保存'));
 optionsEls.routingConfidence.addEventListener('change',()=>void optionsSavePatch({routing:{minConfidence:Number(optionsEls.routingConfidence.value)}},'最低把握度已保存'));
 optionsEls.routingTtl.addEventListener('change',()=>void optionsSavePatch({routing:{cacheTtlMinutes:Number(optionsEls.routingTtl.value)}},'缓存时长已保存'));
+optionsEls.requestConcurrency.addEventListener('change',()=>void optionsSavePatch({requestConcurrency:Number(optionsEls.requestConcurrency.value)},'并发请求数已保存'));
 document.querySelectorAll('input[name="routing-operation"]').forEach(input=>input.addEventListener('change',()=>void optionsSavePatch({routing:{operations:optionsRoutingOperations()}},'路由操作已保存')));
 optionsEls.rulePackForm.addEventListener('submit',event=>{
   event.preventDefault();optionsClearError();

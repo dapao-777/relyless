@@ -1151,6 +1151,27 @@ test('pausing automatic support during capability detection never sends the arti
 });
 
 
+test('request concurrency caps queued provider work and validates bounds',async()=>{
+  expect(normalizeSettings({}).requestConcurrency).toBe(2);
+  expect(normalizeSettings({requestConcurrency:6}).requestConcurrency).toBe(6);
+  expect(normalizeSettings({requestConcurrency:0}).requestConcurrency).toBe(2);
+  expect(normalizeSettings({requestConcurrency:9}).requestConcurrency).toBe(2);
+  await expect(send({type:'STATE_PATCH',patch:{requestConcurrency:0}},extensionSender)).rejects.toThrow();
+  await expect(send({type:'STATE_PATCH',patch:{requestConcurrency:9}},extensionSender)).rejects.toThrow();
+  await send({type:'STATE_PATCH',patch:{requestConcurrency:1}},extensionSender);
+  const before=providerCalls;let release;supportGate=new Promise(resolve=>{release=resolve;});
+  try{
+    const first=send({type:'SUPPORT_BATCH',items:[{id:'cap-one',sentence:'A unique unless condition applies.',domain:'tech',candidates:[{text:'unless'}]}]});
+    while(providerCalls===before)await new Promise(r=>setTimeout(r,0));
+    const second=send({type:'SUPPORT_BATCH',items:[{id:'cap-two',sentence:'Another unique unless condition applies.',domain:'tech',candidates:[{text:'unless'}]}]});
+    await new Promise(r=>setTimeout(r,40));
+    expect(providerCalls-before).toBe(1);
+    release();supportGate=null;
+    await Promise.allSettled([first,second]);
+    expect(providerCalls-before).toBe(2);
+  }finally{release();supportGate=null;await send({type:'STATE_PATCH',patch:{requestConcurrency:2}},extensionSender);}
+});
+
 test('domain detection accepts a jev mode with bounded fields', async () => {
   const fixture=isolatedChrome({wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'chatgpt',domainDetection:{mode:'local',subscriptionModel:'',apiModel:'',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevModel:'typesafe/jev-1.13.0',jevApiKey:'',jevBaseUrl:'https://router.requesty.ai/v1'}}},{id:'jev-settings'});
   globalThis.chrome=fixture.api;
