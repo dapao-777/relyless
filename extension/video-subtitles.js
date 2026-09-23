@@ -43,9 +43,9 @@
         button:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
         button[aria-pressed="true"]{background:var(--action);border-color:var(--action);color:var(--on-action)}
         :host([data-youtube="true"]){gap:0}
-        :host([data-youtube="true"]) button{width:48px;height:var(--native-control-size,48px);min-height:var(--native-control-size,48px);padding:0 4px;border:0;border-radius:0;background:transparent;color:var(--on-action);font-size:var(--type-control)}
-        :host([data-youtube="true"]) button:hover{background:var(--action)}
-        :host([data-youtube="true"]) button[aria-pressed="true"]{box-shadow:inset 0 -3px var(--on-action)}
+        :host([data-youtube="true"]) button{width:48px;height:var(--native-control-size,48px);min-height:var(--native-control-size,48px);padding:0 4px;border:0;border-radius:0;background:transparent;color:#fff;font-size:var(--type-control)}
+        :host([data-youtube="true"]) button:hover{background:#1967d2}
+        :host([data-youtube="true"]) button[aria-pressed="true"]{box-shadow:inset 0 -3px #fff}
       </style>
       <button class="assist" type="button" aria-label="帮助理解当前字幕">这句</button>
       <button class="transcript" type="button" aria-label="展开英文原文稿" aria-pressed="false">原文</button>`;
