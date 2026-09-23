@@ -1168,10 +1168,11 @@ const operation=previous.catch(()=>{}).then(async()=>{
               if(nanoScope){
                 try{
                   const nano=await nanoAssist({instructions:ASSISTANCE_INSTRUCTIONS,prompt:JSON.stringify(request),schema:assistanceSchema(request)});
+                  const validated=normalizeAssistanceResult(JSON.parse(nano.text),request);
                   nanoAvailability='available';
                   void recordModelUsage({provider:'local',service:'Gemini Nano（本机）',model:'gemini-nano',operation:'ASSIST',ok:true,usage:{input:nano.inputTokens,output:null},inputChars:JSON.stringify(request).length,outputChars:String(nano.text||'').length,outputText:String(nano.text||'')});
                   nanoUsed=true;
-                  return normalizeAssistanceResult(JSON.parse(nano.text),request);
+                  return validated;
                 }catch(error){
                   void recordModelUsage({provider:'local',service:'Gemini Nano（本机）',model:'gemini-nano',operation:'ASSIST',ok:false,inputChars:JSON.stringify(request).length});
                   await diagnostics.event(diagnostics.trace(message),'provider','error',{code:'LOCAL_FALLBACK',message:error?.message||'本机模型失败'}).catch(()=>{});
