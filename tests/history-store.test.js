@@ -70,8 +70,8 @@ test('keeps query, term, sentence, passage, annotation and reading metrics indep
 
   const result = await store.snapshot({domain:'technology',type:'query'});
   expect(result.events.map(event => event.id)).toEqual(['q2']);
-  expect(result.metrics).toEqual({activeMs:45_000,words:320,queries:3,terms:1,sentences:1,passages:1,finished:0});
-  expect(result.daily).toEqual([{day:'2026-09-13',activeMs:45_000,words:320,queries:3,terms:1,sentences:1,finished:0}]);
+  expect(result.metrics).toEqual({activeMs:45_000,words:320,queries:3,terms:1,sentences:1,passages:1});
+  expect(result.daily).toEqual([{day:'2026-09-13',activeMs:45_000,words:320,queries:3,terms:1,sentences:1}]);
   const passage = (await store.snapshot({type:'query'})).events.find(event => event.id === 'passage');
   expect(passage).not.toHaveProperty('sentence');
   expect(passage).not.toHaveProperty('translation');
@@ -217,8 +217,8 @@ test('compacts to exact daily unions across archived and retained overlap withou
   let result = await store.snapshot({days:0});
   expect(result.metrics).toMatchObject({queries:3,terms:1,sentences:1});
   expect(result.daily).toEqual([
-    {day:'2026-06-14',activeMs:0,words:0,queries:1,terms:1,sentences:1,finished:0},
-    {day:'2026-06-15',activeMs:0,words:0,queries:2,terms:1,sentences:1,finished:0},
+    {day:'2026-06-14',activeMs:0,words:0,queries:1,terms:1,sentences:1},
+    {day:'2026-06-15',activeMs:0,words:0,queries:2,terms:1,sentences:1},
   ]);
   expect((await rawRecords(name,'contributions')).map(item => item.id)).toEqual(['retained']);
   expect(JSON.stringify(await rawRecords(name,'archive'))).not.toContain('Shared');
@@ -229,21 +229,16 @@ test('compacts to exact daily unions across archived and retained overlap withou
   result = await store.snapshot({days:0});
   expect(result.metrics).toMatchObject({queries:3,terms:1,sentences:1});
   await store.clear();
-  expect(await store.snapshot({days:0})).toMatchObject({events:[],metrics:{activeMs:0,words:0,queries:0,terms:0,sentences:0,passages:0,finished:0},daily:[],startedAt:null,total:0,nextCursor:null});
+  expect(await store.snapshot({days:0})).toMatchObject({events:[],metrics:{activeMs:0,words:0,queries:0,terms:0,sentences:0,passages:0},daily:[],startedAt:null,total:0,nextCursor:null});
   expect(await rawRecords(name,'archive')).toEqual([]);
   expect(await rawRecords(name,'receipts')).toEqual([]);
   store.close();
 });
 
-test('finish events count toward daily and archived completion metrics', async () => {
+test('passive completion events cannot enter reading history', async () => {
   const store = storeFor();
-  const finish = id => ({id,type:'finish',at:BASE,sessionId:'s',domain:'general'});
-  await store.append(finish('f1'));
-  await store.append(finish('f1')); // same id deduplicates
-  await store.append(finish('f2'));
-  const result = await store.snapshot({days:0});
-  expect(result.metrics.finished).toBe(2);
-  expect(result.daily).toEqual([{day:'2026-09-13',activeMs:0,words:0,queries:0,finished:2,terms:0,sentences:0}]);
+  expect(await store.append({id:'f1',type:'finish',at:BASE,sessionId:'s',domain:'general'})).toBe(false);
+  expect((await store.snapshot()).events).toEqual([]);
   store.close();
 });
 

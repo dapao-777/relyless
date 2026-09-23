@@ -2,7 +2,7 @@ import {afterAll,beforeAll,expect,test} from 'bun:test';
 
 const event = () => ({listeners:[],addListener(listener) { this.listeners.push(listener); }});
 const runtimeMessage = event();
-const stored = {wordSchemaVersion:4,productSchemaVersion:1,words:[],supportDataGeneration:0,supportUsage:[],onDemandSuggestionShownAt:0,settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'key'}}};
+const stored = {wordSchemaVersion:4,productSchemaVersion:1,words:[],supportDataGeneration:0,settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'key'}}};
 const session = {};
 const granted = new Set();
 const registrations = [];

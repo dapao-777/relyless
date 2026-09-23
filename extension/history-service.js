@@ -59,10 +59,10 @@ export function createReadingHistory({storage,session,source,paused,writable=()=
     async configure(patch){await serial(async()=>{await ready;const next=validateConfig(patch,config);await storage.set({[CONFIG]:next});config=next;await clearPendingSessions();if(config.startedAt){await store.updateMeta(m=>({...m,revision:(m.revision||0)+1,pending:null}));await reload();}await onChange();});return snapshot();},
     async invalidate(){await ready;if(!config.startedAt)return;await serial(async()=>{const next={...config,epoch:config.epoch+1};await storage.set({[CONFIG]:next});config=next;await clearPendingSessions();await store.updateMeta(m=>({...m,revision:(m.revision||0)+1,pending:null}));await reload();});},
     snapshot,
-    async begin(sender){return serial(async()=>{const page=await allowed(sender,true);if(!page)return {enabled:false};const all=await sessions(),row=await pageSession(sender,page,all);await saveSessions(all);return {enabled:true,id:row.id,epoch:row.epoch,summaries:config.summaries,sequence:row.sequence};});},
+    async begin(sender){return serial(async()=>{const page=await allowed(sender,true);if(!page||(await state()).settings.assistanceMode!=='ambient')return {enabled:false};const all=await sessions(),row=await pageSession(sender,page,all);await saveSessions(all);return {enabled:true,id:row.id,epoch:row.epoch,summaries:config.summaries,sequence:row.sequence};});},
     async tick(message,sender){return serial(async()=>{
       await api.refresh();
-      const page=await allowed(sender,true);if(!page)return {recorded:false};const all=await sessions(),row=all[page.tabId];
+      const page=await allowed(sender,true);if(!page||(await state()).settings.assistanceMode!=='ambient')return {recorded:false};const all=await sessions(),row=all[page.tabId];
       if(message.epoch!==config.epoch||!row||row.id!==message.sessionId||row.epoch!==config.epoch||row.sourceHash!==page.sourceHash||row.documentId!==(sender.documentId||null))return {recorded:false};
       if(!Number.isSafeInteger(message.sequence)||message.sequence<=row.sequence)return {recorded:false};
       if(!Number.isInteger(message.elapsedMs)||message.elapsedMs<0||message.elapsedMs>5000||!Array.isArray(message.words)||message.words.length>500||message.words.some(v=>typeof v!=='string'||!/^[a-z0-9:._-]{1,100}$/i.test(v)))throw new Error('阅读统计信号无效。');
@@ -76,15 +76,6 @@ export function createReadingHistory({storage,session,source,paused,writable=()=
       if(config.personalization&&Date.now()>=nextAnalysisCheck){nextAnalysisCheck=Date.now()+300000;void engine.analyze().catch(()=>{});}
       return {recorded:true};
     });},
-    async finish(message,sender){return report(()=>serial(async()=>{
-      const page=await allowed(sender);if(!page)return false;
-      const all=await sessions(),row=all[page.tabId];
-      if(!row||row.epoch!==config.epoch||row.sourceHash!==page.sourceHash||row.documentId!==(sender.documentId||null)||row.finished)return false;
-      const event={id:crypto.randomUUID(),type:'finish',at:Date.now(),sessionId:row.id,domain:DOMAINS.has(message?.domain)?message.domain:'general'};
-      const recorded=await store.append(event);
-      if(recorded){row.finished=true;await saveSessions(all);}
-      return recorded;
-    }));},
     async prepareQuery(sender,requestId,request,result){return report(()=>serial(async()=>{
       const page=await allowed(sender),definition=result?.translation??result?.hint;if(!page||!result?.details?.sentenceTranslation&&!Array.isArray(result?.items)&&!((request.kind==='word'||request.kind==='phrase')&&typeof definition==='string'&&definition.trim()))return false;
       const all=await sessions(),row=await pageSession(sender,page,all);let sentence=bounded(request.context||request.text||request.items?.map(v=>v.text).join(''),4000);

@@ -1,6 +1,11 @@
 import {describe,expect,test} from 'bun:test';
+import {EventEmitter} from 'node:events';
+import {PassThrough} from 'node:stream';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {cliSpawnTarget,executableNames} from '../connector/cli-spawn.mjs';
-import {buildCodexEnv} from '../connector/codex.mjs';
+import {buildCodexEnv,CodexClient} from '../connector/codex.mjs';
 import {buildGrokEnv} from '../connector/grok.mjs';
 
 describe('cliSpawnTarget',()=>{
@@ -49,9 +54,9 @@ describe('executableNames',()=>{
 describe('connector CLI environments on Windows',()=>{
   const windows={platform:'win32'};
   test('buildCodexEnv uses ; separators, System32, and TEMP/TMP',()=>{
-    const env=buildCodexEnv({codexPath:'C:\\npm\\codex.exe',codexHome:'C:\\data\\codex',tmpDir:'C:\\tmp',...windows});
-    expect(env.PATH).toContain(';');
-    expect(env.PATH).not.toContain('/usr/bin');
+    const env=buildCodexEnv({codexPath:'C:\\npm\\codex.cmd',codexHome:'C:\\data\\codex',tmpDir:'C:\\tmp',
+      executablePath:'C:\\Program Files\\nodejs\\node.exe',sourceEnv:{SystemRoot:'C:\\Windows',PATHEXT:'.EXE;.CMD'},...windows});
+    expect(env.PATH).toBe('C:\\npm;C:\\Program Files\\nodejs;C:\\Windows\\System32');
     expect(env.TEMP).toBe('C:\\tmp');
     expect(env.TMP).toBe('C:\\tmp');
     expect(env.PATHEXT).toContain('.CMD');
@@ -68,4 +73,42 @@ describe('connector CLI environments on Windows',()=>{
       expect(env.PATH).toContain('/');
     }
   });
+});
+
+test('Windows shim spawn propagates process failure and reconnects with a fresh child',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'relyless-win-spawn-'));
+  const calls=[];
+  const children=[];
+  const spawnImpl=(command,args,options)=>{
+    calls.push({command,args,options});
+    const child=new EventEmitter();
+    child.stdout=new PassThrough();child.stderr=new PassThrough();child.stdin=new PassThrough();
+    child.kill=()=>queueMicrotask(()=>child.emit('exit',0));
+    const generation=children.push(child);
+    child.stdin.on('data',chunk=>{
+      for(const line of chunk.toString().trim().split('\n')){
+        const request=JSON.parse(line);
+        if(!request.id || (generation===1 && request.method==='model/list')) continue;
+        const result=request.method==='account/read'?{account:{type:'chatgpt'}}
+          : request.method==='model/list'?{data:[{id:'fixture',displayName:'Fixture',isDefault:true,supportedReasoningEfforts:[]}],nextCursor:null}:{};
+        queueMicrotask(()=>child.stdout.write(JSON.stringify({id:request.id,result})+'\n'));
+      }
+    });
+    return child;
+  };
+  const client=new CodexClient({codexPath:join(directory,'codex.cmd'),dataDir:directory,platform:'win32',spawnImpl,timeoutMs:500});
+  try{
+    await client.start();
+    expect(calls[0].command).toBe(process.env.ComSpec||process.env.COMSPEC||'cmd.exe');
+    expect(calls[0].args[3]).toContain('codex.cmd');
+    expect(calls[0].options.windowsVerbatimArguments).toBe(true);
+    expect(calls[0].options.windowsHide).toBe(true);
+    const pending=client.listModels();
+    await new Promise(resolve=>setTimeout(resolve,0));
+    children[0].emit('error',Object.assign(new Error('shim failed'),{code:'ENOENT'}));
+    await expect(pending).rejects.toMatchObject({code:'DISCONNECTED'});
+    await client.start();
+    expect(calls).toHaveLength(2);
+    expect(await client.listModels()).toEqual([{id:'fixture',name:'Fixture',isDefault:true,supportedReasoningEfforts:undefined}]);
+  }finally{await client.close();await rm(directory,{recursive:true,force:true});}
 });

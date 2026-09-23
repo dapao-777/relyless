@@ -6,10 +6,11 @@ import {createReadingHistory} from '../extension/history-service.js';
 function memory(){const data={};return {get:async key=>({[key]:structuredClone(data[key])}),set:async value=>Object.assign(data,structuredClone(value)),remove:async key=>{delete data[key];}};}
 function fixture(words=[]){
   const page={tabId:7,url:'https://reading.example/article?private=yes',sourceHash:'article-one',active:true,incognito:false};
+  const settings={assistanceMode:'ambient',providerKind:'api',apiServices:[]};
   const sender={tab:{id:7},frameId:0,documentId:'document-one'},store=createHistoryStore({indexedDB:new IDBFactory()});
-  const history=createReadingHistory({storage:memory(),session:memory(),source:async()=>({...page}),paused:async()=>false,state:async()=>({settings:{assistanceMode:'ambient',providerKind:'api',apiServices:[]},words}),runModel:async()=>{throw new Error('No model call expected');},onChange:async()=>{},store});
+  const history=createReadingHistory({storage:memory(),session:memory(),source:async()=>({...page}),paused:async()=>false,state:async()=>({settings,words}),runModel:async()=>{throw new Error('No model call expected');},onChange:async()=>{},store});
   const enable=()=>history.configure({enabled:true,origins:['https://reading.example']});
-  return {history,page,sender,store,enable};
+  return {history,page,sender,store,enable,settings};
 }
 const query={text:'unless',context:'The request is retried unless the token has expired.',kind:'word',domain:'tech'};
 const result={details:{meaning:{zh:'引出例外条件'},sentenceTranslation:'除非令牌已过期，否则会重试。'}};
@@ -74,20 +75,15 @@ test('visible word signals are document-bound, monotonic, and resumable without 
   await history.tick({...signal,epoch:resumed.epoch,sequence:3,words:['block:1','block:3']},sender);
   expect((await history.snapshot()).metrics.words).toBe(3);store.close();
 });
-
-test('finish counts once per live session and rejects stale or unstarted pages',async()=>{
-  const {history,page,sender,store,enable}=fixture();await enable();
-  expect(await history.finish({domain:'general'},sender)).toBe(false); // no session yet
+test('on-demand mode stops consented passive history without blocking explicit help',async()=>{
+  const {history,sender,store,enable,settings}=fixture();await enable();
   const session=await history.begin(sender);
-  expect(session.enabled).toBe(true);
-  expect(await history.finish({domain:'general'},sender)).toBe(true);
-  expect(await history.finish({domain:'general'},sender)).toBe(false); // once per session
-  expect(await history.finish({domain:'not-a-domain'},sender)).toBe(false); // already finished; domain validation unreachable
-  page.url='https://reading.example/other';page.sourceHash='article-two';
-  expect(await history.finish({domain:'general'},sender)).toBe(false); // article changed
-  page.url='https://reading.example/article';page.sourceHash='article-one';
-  expect(await history.finish({domain:'general'},sender)).toBe(false); // still finished for the session
-  expect((await history.snapshot()).metrics.finished).toBe(1);store.close();
+  settings.assistanceMode='on-demand';
+  expect(await history.begin(sender)).toEqual({enabled:false});
+  expect(await history.tick({sessionId:session.id,epoch:session.epoch,sequence:1,elapsedMs:100,words:['block:1'],domain:'general'},sender)).toEqual({recorded:false});
+  await history.prepareQuery(sender,'explicit',query,result);
+  expect(await history.commit(sender,'explicit')).toBe(true);
+  expect((await history.snapshot()).metrics).toMatchObject({words:0,queries:1});store.close();
 });
 
 test('known words remain visible without history consent and annotation depth applies beyond priority terms',async()=>{

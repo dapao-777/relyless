@@ -11,18 +11,24 @@
 <body class="options-body">
 <header class="settings-toolbar"><a href="#assistance" aria-label="RelyLess设置"><img class="brand-icon" src="../icons/relyless.svg" width="28" height="28" alt=""><span>RelyLess</span></a><span class="toolbar-context">扩展设置</span></header>
 <div class="workspace">
-<aside class="sidebar"><nav aria-label="设置导航">
-<p class="nav-group-label">阅读体验</p>
+<aside class="sidebar">
+<div class="settings-search">
+<input id="settings-search" type="search" placeholder="搜索设置…" aria-label="搜索设置" autocomplete="off">
+<div id="search-results" class="search-results" hidden></div>
+</div>
+<nav aria-label="设置导航">
+<p class="nav-group-label">阅读</p>
 <a href="#assistance" data-section="assistance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M8 8h8M8 12h8M8 16h5"></path></svg><span>阅读偏好</span></a>
 <a href="#appearance" data-section="appearance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 5h16M8 5v14m-3 0h6M15 11h5m-2-2v10m-2 0h4"></path></svg><span>显示与解构</span></a>
-<a href="#sites" data-section="sites"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a18 18 0 0 1 0 18 18 18 0 0 1 0-18Z"></path></svg><span>网站规则</span></a>
-<p class="nav-group-label">我的阅读</p>
-<a href="#history" data-section="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 5h16v14H4zM8 2v6m8-6v6M4 10h16"></path><path d="M8 14h3m2 0h3"></path></svg><span>阅读记录</span></a>
 <a href="#personalization" data-section="personalization"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2m4 0h10M14 4v6M6 14v6"></path></svg><span>提示偏好</span></a>
-<p class="nav-group-label">系统</p>
+<a href="#sites" data-section="sites"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a18 18 0 0 1 0 18 18 18 0 0 1 0-18Z"></path></svg><span>网站规则</span></a>
+<p class="nav-group-label">AI 与识别</p>
 <a href="#service" data-section="service"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-12 0V8Zm6 9v4"></path></svg><span>模型服务</span></a>
-<a href="#privacy" data-section="privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m12 3 8 3v5c0 5-8 10-8 10S4 16 4 11V6l8-3Z"></path><path d="m8 12 3 3 5-6"></path></svg><span>数据与隐私</span></a>
 <a href="#advanced" data-section="advanced"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 14h3l2-7 4 12 2-5h5"></path><path d="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"></path></svg><span>领域识别</span></a>
+<p class="nav-group-label">数据</p>
+<a href="#history" data-section="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 5h16v14H4zM8 2v6m8-6v6M4 10h16"></path><path d="M8 14h3m2 0h3"></path></svg><span>阅读记录</span></a>
+<a href="#privacy" data-section="privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m12 3 8 3v5c0 5-8 10-8 10S4 16 4 11V6l8-3Z"></path><path d="m8 12 3 3 5-6"></path></svg><span>数据与隐私</span></a>
+<p class="nav-group-label">帮助</p>
 <a href="#guide" data-section="guide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 5v15M12 5C9 3 5 3 3 4v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-2-1-6-1-9 1Z"></path></svg><span>使用说明</span></a>
 <a href="#about" data-section="about"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"></path></svg><span>关于作者</span></a>
 </nav></aside>
@@ -128,21 +134,6 @@
 </label>
 </div>
 <p class="field-help">回忆遮罩让你先试着自己想起词义，再核对提示。</p>
-</fieldset>
-        <fieldset>
-<legend>流畅度信号</legend>
-<div class="adaptive-setting">
-<div>
-<b>回读时浮现解构入口</b>
-<p>同一段落内反复上下滚动时，在段落角落显示「本句解构」入口。只统计滚动方向，不采集任何内容。</p>
-</div>
-<label class="switch">
-<input id="fluency-hints" type="checkbox">
-<span aria-hidden="true">
-</span>
-<span class="sr-only">回读时浮现解构入口</span>
-</label>
-</div>
 </fieldset>
         <fieldset>
 <legend>划词动作打开方式</legend>
@@ -803,7 +794,7 @@
 </div>
 <div class="detail-heading">
 <div class="detail-title-row">
-<h4 id="catalog-hero-title">ChatGPT 订阅</h4>
+<h2 id="catalog-hero-title">ChatGPT 订阅</h2>
 <span class="catalog-active-badge" id="catalog-hero-active-badge" hidden="">当前默认</span>
 <button type="button" class="catalog-set-default-btn" id="catalog-hero-set-default" hidden="">设为默认使用</button>
 <a id="catalog-hero-website" class="service-website-link" href="#" target="_blank" rel="noopener noreferrer" hidden="">
@@ -1061,7 +1052,7 @@
 </div>
 </div>
       <div class="paper-card" id="usage-card">
-        <div class="adaptive-setting"><div><b>模型用量</b><p>统计本机发起的模型请求与 token 消耗；服务商未返回计数时按字符估算（≈），仅保存在本机。</p></div></div>
+        <div class="adaptive-setting"><div><b>模型用量</b><p>仅服务商上报的 token 是实际计数；≈ 为粗略估计：本机 MiniLM 分词器与服务模型不同，未预热或文本过长时按完整载荷字符数估算（约 4 字符/个）。输入估计不包含服务指令，不能用于精确计费。仅保存聚合计数。</p></div></div>
         <fieldset class="history-period" aria-label="用量范围"><legend class="sr-only">用量范围</legend><label><input type="radio" name="usage-days" value="1"><span>今日</span></label><label><input type="radio" name="usage-days" value="7" checked=""><span>近 7 天</span></label><label><input type="radio" name="usage-days" value="30"><span>近 30 天</span></label><label><input type="radio" name="usage-days" value="0"><span>累计</span></label></fieldset>
         <div id="usage-list" class="usage-list"></div>
         <p id="usage-empty" class="empty-state" hidden="">范围内暂无用量记录。</p>
@@ -1073,6 +1064,23 @@
 </label>
         <div class="data-actions"><button id="usage-clear" type="button">清空用量统计</button><span id="usage-result" class="inline-message" aria-live="polite"></span></div>
       </div>
+      <details class="paper-card settings-disclosure">
+<summary>高级：并发与排队</summary>
+<div class="form-stack">
+        <label class="field setting-select">
+<span>并发请求数</span>
+<select id="request-concurrency">
+<option value="1">1 · 最稳，最省额度</option>
+<option value="2">2 · 默认</option>
+<option value="3">3</option>
+<option value="4">4</option>
+<option value="6">6</option>
+<option value="8">8 · 最快，容易触发限流</option>
+</select>
+<small>同时发往模型服务的后台请求上限，订阅与 API 服务共用。超出上限的请求会排队等待；调高更快但更耗额度。</small>
+</label>
+</div>
+</details>
       <aside class="privacy-note">
 <b>发送哪些内容？</b>
 <p>辅助会发送标题、章节及附近的有限上下文，不发送页面网址。</p>
@@ -1250,7 +1258,7 @@
     <span class="guide-eyebrow">RELYLESS · 阅读指南</span>
     <h3>词义卡住，看注释。长句绕住，看解构。</h3>
     <p><strong>注释</strong>帮你理解一个词在这里是什么意思；<strong>阅读解构</strong>帮你看清一句话里谁在做什么、哪些部分是补充。两者可以配合，也可以只开需要的一个。目标是接着读原文，而不是把页面换成中文。</p>
-    <p>第一次使用：先到 <a href="#service">模型服务</a> 连接 ChatGPT 订阅或 API 并测试连接，再打开英文文章，点击扩展图标，在弹窗中开启本页或打开「阅读解构」。需要的网站可在 <a href="#sites">网站规则</a> 设置自动开启。</p>
+    <p>第一次使用：先到 <a href="#service">模型服务</a> 连接订阅服务或 API 并测试连接。自备 API 可一行填写一个密钥并逐项检查；只用一个密钥也兼容。再打开普通 HTTP 或 HTTPS 英文文章，点击扩展图标，在弹窗中开启本页或打开「阅读解构」。浏览器内部页和扩展页无法开启阅读辅助，弹窗会显示使用说明入口。需要的网站可在 <a href="#sites">网站规则</a> 设置自动开启。</p>
   </article>
 
   <article class="paper-card guide-scene" aria-labelledby="guide-annotation-heading">
@@ -1264,7 +1272,7 @@
     <ol class="guide-list">
       <li><strong>主动查这个词：</strong>按住 <kbd data-lookup-key>D</kbd> 并单击原词。这是你当前设置的查词键；只悬停或普通单击不会求助，在输入框里打字也不会触发。</li>
       <li><strong>选适合自己的呈现：</strong>在 <a href="#assistance">阅读偏好</a> 选「解释卡片」，可以继续看语境；选「顶部释义」，意思直接放在原词上方，不弹卡片。解释语言可选中文或简明英文。</li>
-      <li><strong>一条释义还不够：</strong>使用解释卡片时，可点「用中文说明」，或展开「本句翻译」查看中文句译和详细语境。简释与详情分开获取，已有结果可复用；补充或重试可能产生新请求。</li>
+      <li><strong>一条释义还不够：</strong>使用解释卡片时，可点「用中文说明」，展开「本句翻译」查看中文句译和详细语境，或在追问框继续问当前表达为什么这样用。追问只带有限上下文和最近几轮问答；补充、追问或重试可能产生新请求。</li>
       <li><strong>复制干净原文：</strong>鼠标停在段落上按 <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd>，或选中段落后用右键菜单「复制选中段落的原文」。复制的是原始英文，提示、词注和译文都不会混进去。</li>
       <li><strong>不点浮条也能译段：</strong>选中英文段落后按 <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> 直接翻译；选中单词时译整段。快捷键可在浏览器扩展快捷键设置里改。</li>
     </ol>
@@ -1303,7 +1311,7 @@
     <div>
       <p>能读通时，不必逐个点开注释。RelyLess 的提示会逐步退后；这只是减少打扰，不是一次“已经掌握”的判定。</p>
       <dl class="guide-definitions">
-        <div><dt>一个词已经认识，不想再自动看到它</dt><dd>在词注旁或解释卡片里点「我已认识」。保存后，这个词已有的标记、自动词注、手动词注和解释卡片会撤下；其他词的注释与段落译文保持原位，不重译整页。它也影响跨领域的同词与可识别词形，不只针对当前用法。误点可在 8 秒内「撤销」，以后也可到 <a href="#personalization">提示偏好 → 已认识词</a> 恢复；仍能主动查词。</dd></div>
+        <div><dt>一个词已经认识，不想再自动看到它</dt><dd>在词注旁或解释卡片里点「我已认识」。保存后，这个词已有的标记、自动词注、手动词注和解释卡片会撤下；其他词的注释与段落译文保持原位，不重译整页。它也影响跨领域的同词与可识别词形，不只针对当前用法。误点可在 8 秒内「撤销」，以后也可到 <a href="#personalization">提示偏好 → 已认识词</a> 恢复；仍能主动查词。这个用法到期且再次出现在当前阅读区域时，页面右下角会出现「复习 N」，选择「认识了」或「还不熟」即可，本地复习本身不发送页面内容。</dd></div>
         <div><dt>只是当前这个意思不需要提示</dt><dd>在解释卡片的「更多」中选「少提示这个用法」，只让当前用法安静下来，不把这个词的所有意思都藏起来。这个选择不因久未遇见自动解除；再次求助或恢复自适应可让帮助回来。</dd></div>
         <div><dt>想完全由自己决定何时求助</dt><dd>在 <a href="#assistance">阅读偏好</a> 选「只在主动求助时」，停止自动词汇扫描、解释预备和遇见计数，保留按键查词、选段翻译。若还开着阅读解构，需要另外关闭；阅读记录也有独立授权。</dd></div>
       </dl>
@@ -1348,6 +1356,16 @@
       <p>先在 <a href="#sites">网站规则</a> 限定自动开启范围，单站点规则优先于「全部网站」，本页暂停时不自动运行。导出或清理已有数据，到 <a href="#privacy">数据与隐私</a>。</p>
     </div>
   </details>
+  <details class="paper-card settings-disclosure guide-chapter">
+    <summary>06 · 服务不稳定，或者想把重要请求交给更强模型</summary>
+    <div>
+      <ul class="guide-list">
+        <li><strong>多个 API Key：</strong>在 <a href="#service">模型服务</a> 的密钥框中一行填写一个密钥，最多 8 个。保存后按权重轮询；认证、配额、限流或临时故障会触发切换。使用「逐项检查密钥」可以单独验证每一行，不受当前冷却状态影响。</li>
+        <li><strong>模型路由：</strong>默认关闭。开启后，Jev 只判断你勾选的主动求助、选段或整页翻译、追问等高价值请求；普通自动词注不判卷，阅读解构默认也不判卷。升级目标不可用或判断失败时回落当前服务。</li>
+        <li><strong>先看清成本：</strong>判卷本身也会发起一次模型请求；升级后由目标服务处理正式请求。密钥、端点和升级服务都由你管理，统计区会显示判卷、升级、失败和缓存命中次数。</li>
+      </ul>
+    </div>
+  </details>
   <nav class="related-settings" aria-label="说明相关设置"><a href="#assistance">调整注释与查词</a><a href="#appearance">调整显示与解构</a><a href="#service">连接模型服务</a></nav>
 </section>
 <section id="about" class="settings-section about-section" aria-labelledby="about-heading" hidden>
@@ -1361,7 +1379,7 @@
     <dl class="about-contacts">
       <div class="about-contact">
         <dt>哔哩哔哩</dt>
-        <dd><a href="https://search.bilibili.com/all?keyword=%E5%81%9C%E8%BD%A6%E6%8B%BE%E7%A9%97" target="_blank" rel="noopener noreferrer">停车拾穗</a></dd>
+        <dd><a href="https://live.bilibili.com/392612" target="_blank" rel="noopener noreferrer">停车拾穗</a><small>直播间与视频</small></dd>
       </div>
       <div class="about-contact">
         <dt>微信</dt>
