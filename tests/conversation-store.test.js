@@ -1,6 +1,9 @@
 import {expect,test} from 'bun:test';
-import 'fake-indexeddb/auto';
+import {indexedDB,IDBKeyRange} from 'fake-indexeddb';
 import {createConversationStore,conversationHistoryWindow,normalizeConversationTurn,CONVERSATION_LIMITS} from '../extension/conversation-store.js';
+
+globalThis.indexedDB=indexedDB;
+globalThis.IDBKeyRange=IDBKeyRange;
 
 const turn = (overrides = {}) => ({
   id: '11111111-1111-1111-1111-111111111111',
