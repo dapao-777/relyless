@@ -29,6 +29,7 @@ import {diagnosticError} from './diagnostics.mjs';
 import {createReadingHistory} from './history-service.js';
 import {createSpeechHandler} from './speech.js';
 import {SENTENCE_GROUPS_POLICY_VERSION,SENTENCE_GROUPS_INSTRUCTIONS,SENTENCE_GROUPS_SCHEMA,normalizeSentenceGroupItems,prepareSentenceGroupItems,normalizeSentenceGroupsResult} from './sentence-groups.mjs';
+import {mergeUsageEntry,normalizeUsageRow,usageStatsView,USAGE_VERSION} from './usage-stats.js';
 const connectSpeech=createSpeechHandler(chrome.tts);
 chrome.runtime.onConnect.addListener(port=>{
   if(port.name==='shisui-speech'&&port.sender?.id===chrome.runtime.id&&Number.isInteger(port.sender?.tab?.id)&&port.sender.frameId===0)connectSpeech(port);
@@ -72,7 +73,7 @@ const dataReady=ready.then(async()=>{
   catch{dataProblem='上次清理尚未完成，已暂停数据访问，请重试清理。';}
 });
 async function invalidateReadingProfile({keepDefinitions=false}={}){if(keepDefinitions){supportInFlight.clear();sentenceGroupInFlight.clear();translationCache.clear();translationInFlight.clear();providerGeneration++;void pruneBackgroundQueue();void clearEmergencySessions();}else{clearProviderState();invalidateClassification();domainCache.clear();await chrome.storage.session.remove('domainCache');}await mutate(state=>{state.supportDataGeneration++;},false,false);await persistSupportCache();await clearSupportSessions();void broadcast();}
-async function runHistoryModel(kind,payload,instructions,schema){const command={type:kind==='summary'?'HISTORY_SUMMARY':'PERSONALIZATION_ANALYZE'};return diagnostics.run(command,{id:chrome.runtime.id},async()=>{const {settings}=await load(false);if(!configured(settings))throw Object.assign(new Error('请先配置可用服务。'),{code:'NOT_READY'});const trace=diagnostics.trace(command);if(isSubscriptionKind(settings.providerKind))return providerOperation(()=>historyModelSubscription(kind,payload,settings.subscriptionModel,trace?.traceId,nativeKind(settings)),trace,settings.subscriptionModel,nativeKind(settings));return apiRequest(activeApiProvider(settings),payload,instructions,schema,{trace});});}
+async function runHistoryModel(kind,payload,instructions,schema){const command={type:kind==='summary'?'HISTORY_SUMMARY':'PERSONALIZATION_ANALYZE'};return diagnostics.run(command,{id:chrome.runtime.id},async()=>{const {settings}=await load(false);if(!configured(settings))throw Object.assign(new Error('请先配置可用服务。'),{code:'NOT_READY'});const trace=diagnostics.trace(command);if(isSubscriptionKind(settings.providerKind))return providerOperation(()=>historyModelSubscription(kind,payload,settings.subscriptionModel,trace?.traceId,nativeKind(settings)),trace,settings.subscriptionModel,nativeKind(settings),JSON.stringify(payload).length);return apiRequest(activeApiProvider(settings),payload,instructions,schema,{trace});});}
 let writes = Promise.resolve();
 const supportCache = new Map();
 const supportInFlight = new Map();
@@ -297,7 +298,7 @@ async function classifyText(settings,source,title,{force = false,guard = async (
     if (isSubscriptionKind(detection.mode)) {
       if (!subscriptionStatus(detection.mode).authenticated) throw new Error(detection.mode==='grok'?'请先连接 Grok 订阅。':detection.mode==='antigravity'?'请先连接 Google 订阅。':'请先连接 ChatGPT 订阅。');
       if (!detection.subscriptionModel) throw new Error('请选择领域识别使用的订阅模型。');
-      return await withBackgroundSlot(()=>providerOperation(()=>classifySubscription(source,title,detection.subscriptionModel,trace?.traceId,detection.mode),trace,detection.subscriptionModel,detection.mode),guard);
+      return await withBackgroundSlot(()=>providerOperation(()=>classifySubscription(source,title,detection.subscriptionModel,trace?.traceId,detection.mode),trace,detection.subscriptionModel,detection.mode,String(source||'').length+String(title||'').length),guard);
     }
     if (detection.mode === 'jev') {
       if (!detection.jevApiKey) throw new Error('请先填写 Jev API Key，再使用 Jev 增强识别。');
@@ -381,11 +382,17 @@ async function apiRequest(provider,payload,instructions,schema,{onContent,trace,
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),timeoutMs);
   const generation=providerGeneration;
   const checkRequest=async()=>{if(generation!==providerGeneration)throw staleWork();await beforeRequest?.();if(generation!==providerGeneration)throw staleWork();};
+  const inputChars=JSON.stringify(payload).length+String(instructions||'').length+JSON.stringify(schema||null).length;
+  let usageReport=null;
+  const onUsage=usage=>{if(usage)usageReport={input:(usageReport?.input||0)+(usage.input||0),output:(usageReport?.output||0)+(usage.output||0)};};
   try {
-    const output=await diagnostics.provider(trace,'api',service.model,new URL(service.baseUrl).origin,()=>runWithApiKeyRotation(service,snapshot=>performProviderRequest(snapshot,payload,instructions,schema,{signal:controller.signal,onContent,beforeRequest:checkRequest}),{signal:controller.signal}));
+    const output=await diagnostics.provider(trace,'api',service.model,new URL(service.baseUrl).origin,()=>runWithApiKeyRotation(service,snapshot=>performProviderRequest(snapshot,payload,instructions,schema,{signal:controller.signal,onContent,onUsage,beforeRequest:checkRequest}),{signal:controller.signal}));
     if(instructions===ASSISTANCE_INSTRUCTIONS&&(!Object.hasOwn(output,'result')||Object.keys(output).length!==1))throw Object.assign(new Error('帮助服务返回的结果封装无效。'),{code:'OUTPUT_INVALID'});
-    providerError='';return output;
+    providerError='';
+    void recordModelUsage({provider:'api',service:service.name||service.model,model:service.model,operation:trace?.operation||'',ok:true,usage:usageReport,inputChars,outputChars:JSON.stringify(output).length});
+    return output;
   } catch(error) {
+    void recordModelUsage({provider:'api',service:service.name||service.model,model:service.model,operation:trace?.operation||'',ok:false,usage:usageReport,inputChars});
     let reported=error;
     if(controller.signal.aborted||error.name==='AbortError')reported=new Error(`请求超过 ${Math.round(timeoutMs/1000)} 秒，请稍后重试。${service.providerId==='stepfun'?'阶跃星辰推理较慢时，可把该服务的思考等级设为“低”。':''}`);else if(error instanceof TypeError)reported=new Error('无法连接服务，请检查网络、API 地址与服务跨域支持。');
     providerError=reported.message||'服务连接失败。';throw reported;
@@ -398,7 +405,8 @@ async function apiModelsList(service) {
   catch(error){if(controller.signal.aborted||error.name==='AbortError')throw new Error('模型列表请求超过 25 秒，请稍后重试。');if(error instanceof TypeError)throw new Error('无法连接服务，请检查网络、API 地址与服务跨域支持。');throw error;}
   finally {clearTimeout(timeout);}
 }
-async function providerOperation(operation,trace,model='',provider='chatgpt'){return diagnostics.provider(trace,provider,model,provider,async()=>{try{const result=await operation();providerError='';return result;}catch(error){providerError=error.message||'服务连接失败。';throw error;}});}
+const SUBSCRIPTION_SERVICE_LABELS = {chatgpt:'ChatGPT 订阅',grok:'Grok 订阅',antigravity:'Google 订阅'};
+async function providerOperation(operation,trace,model='',provider='chatgpt',inputChars=0){return diagnostics.provider(trace,provider,model,provider,async()=>{const service=SUBSCRIPTION_SERVICE_LABELS[provider]||'订阅服务';try{const result=await operation();providerError='';void recordModelUsage({provider,service,model:model||'默认模型',operation:trace?.operation||'',ok:true,inputChars,outputChars:JSON.stringify(result??null).length});return result;}catch(error){providerError=error.message||'服务连接失败。';void recordModelUsage({provider,service,model:model||'默认模型',operation:trace?.operation||'',ok:false,inputChars});throw error;}});}
 function staleWork(){return Object.assign(new Error('页面或设置已变化，请在当前页面重新操作。'),{code:'STALE'});}
 async function requireLiveConsumer(guards){
   let failure;
@@ -536,7 +544,7 @@ async function supportBatch(message,sender){
           const payload=prepareSupportItems(group.map(({item})=>({...item,candidates:cachePayload(item).candidates})));
           const response=await requestSupportWithCorrection(payload,article,async(requestItems,corrections)=>{
             await requireLiveConsumer(backgroundGuards.get(operation));
-            if(isSubscriptionKind(state.settings.providerKind))return providerOperation(()=>supportSubscription(requestItems,state.settings.subscriptionModel,article,diagnostics.trace(message)?.traceId,readingHistory.policy()?.translation,corrections,nativeKind(state.settings)),diagnostics.trace(message),state.settings.subscriptionModel,nativeKind(state.settings));
+            if(isSubscriptionKind(state.settings.providerKind))return providerOperation(()=>supportSubscription(requestItems,state.settings.subscriptionModel,article,diagnostics.trace(message)?.traceId,readingHistory.policy()?.translation,corrections,nativeKind(state.settings)),diagnostics.trace(message),state.settings.subscriptionModel,nativeKind(state.settings),JSON.stringify(requestItems).length+String(article||'').length);
             const instructions=corrections.length?SUPPORT_CORRECTION_INSTRUCTIONS:SUPPORT_INSTRUCTIONS;
             const raw=await apiRequest(activeApiProvider(state.settings),{items:requestItems,article,...(corrections.length?{corrections}:{})},instructions,SUPPORT_SCHEMA,{beforeRequest:()=>requireLiveConsumer(backgroundGuards.get(operation)),trace:diagnostics.trace(message)});
             return inspectSupportResponse(raw,requestItems,article);
@@ -605,7 +613,7 @@ async function sentenceGroupsBatch(message,sender){
   const serviceKey=await hashValue(JSON.stringify([state.settings.providerKind,service])),keys=await Promise.all(items.map(item=>hashValue(JSON.stringify([SENTENCE_GROUPS_POLICY_VERSION,serviceKey,item.sentence])))),groupsByKey=new Map(),newItems=[],claimed=new Set(),now=Date.now();
   for(let index=0;index<items.length;index++){const cached=sentenceGroupCache.get(keys[index]);if(cached&&now-cached.at<SENTENCE_GROUP_CACHE_TTL)groupsByKey.set(keys[index],cached.groups);else if(!sentenceGroupInFlight.has(keys[index])&&!claimed.has(keys[index])){claimed.add(keys[index]);newItems.push({item:items[index],key:keys[index]});}}
   if(newItems.length){
-    const operation=withBackgroundSlot(async()=>{const trace=diagnostics.trace(message),sourceItems=newItems.map(value=>value.item);let result;if(isSubscriptionKind(state.settings.providerKind))result=await providerOperation(()=>sentenceGroupsSubscription(sourceItems,state.settings.subscriptionModel,trace?.traceId,nativeKind(state.settings)),trace,state.settings.subscriptionModel,nativeKind(state.settings));else{result=await apiRequest(activeApiProvider(state.settings),{items:prepareSentenceGroupItems(sourceItems)},SENTENCE_GROUPS_INSTRUCTIONS,SENTENCE_GROUPS_SCHEMA,{trace,beforeRequest:()=>requireLiveConsumer(backgroundGuards.get(operation))});}
+    const operation=withBackgroundSlot(async()=>{const trace=diagnostics.trace(message),sourceItems=newItems.map(value=>value.item);let result;if(isSubscriptionKind(state.settings.providerKind))result=await providerOperation(()=>sentenceGroupsSubscription(sourceItems,state.settings.subscriptionModel,trace?.traceId,nativeKind(state.settings)),trace,state.settings.subscriptionModel,nativeKind(state.settings),JSON.stringify(sourceItems).length);else{result=await apiRequest(activeApiProvider(state.settings),{items:prepareSentenceGroupItems(sourceItems)},SENTENCE_GROUPS_INSTRUCTIONS,SENTENCE_GROUPS_SCHEMA,{trace,beforeRequest:()=>requireLiveConsumer(backgroundGuards.get(operation))});}
       try{const validated=isSubscriptionKind(state.settings.providerKind)?result:normalizeSentenceGroupsResult(result,sourceItems),mapped=new Map(validated.items.map((value,index)=>[newItems[index].key,value.groups]));await diagnostics.event(trace,'validation','ok');if(generation===providerGeneration){const at=Date.now();for(const [key,groups]of mapped){sentenceGroupCache.delete(key);sentenceGroupCache.set(key,{groups,at});}while(sentenceGroupCache.size>SENTENCE_GROUP_CACHE_LIMIT)sentenceGroupCache.delete(sentenceGroupCache.keys().next().value);await persistSentenceGroupCache(generation).catch(()=>{});}return mapped;}catch(error){await diagnostics.event(trace,'validation','error',diagnosticError(error));throw error;}},guard);
     for(const value of newItems)sentenceGroupInFlight.set(value.key,operation);
     void operation.finally(()=>{for(const value of newItems)if(sentenceGroupInFlight.get(value.key)===operation)sentenceGroupInFlight.delete(value.key);}).catch(()=>{});
@@ -693,7 +701,7 @@ async function translateItems(items,settings,trace,{scope,onProgress,origin,sour
   if(fresh.length){
     const operation=withBackgroundSlot(async()=>{const sourceItems=fresh.map(value=>value.item),idToKey=new Map(fresh.map(value=>[value.item.id,value.key]));let raw;
       const progress=value=>{if(!onProgress||!value?.items)return;const byKey=new Map(value.items.map(item=>[idToKey.get(item.id),item.translation]));onProgress({items:items.flatMap((item,index)=>byKey.has(keys[index])?[{id:item.id,translation:byKey.get(keys[index])}]:[])});};
-      if(isSubscriptionKind(settings.providerKind))raw=await providerOperation(()=>emergencyTranslateSubscription({scope,items:sourceItems,model:settings.subscriptionModel,traceId:trace?.traceId,preferences:personalization,onProgress:progress,kind:nativeKind(settings)}),trace,settings.subscriptionModel,nativeKind(settings));else try{raw=await apiRequest(service,{items:sourceItems},instructions,EMERGENCY_SCHEMA,{trace,beforeRequest:()=>requireLiveConsumer(backgroundGuards.get(operation)),...(onProgress?{onContent:content=>progress(translationProgress(content,sourceItems))}:{})});}catch(error){if(scope!=='page'||(error?.code!=='INVALID_JSON'&&diagnosticError(error).code!=='JSON_INVALID'))throw error;providerError='';raw='';}
+      if(isSubscriptionKind(settings.providerKind))raw=await providerOperation(()=>emergencyTranslateSubscription({scope,items:sourceItems,model:settings.subscriptionModel,traceId:trace?.traceId,preferences:personalization,onProgress:progress,kind:nativeKind(settings)}),trace,settings.subscriptionModel,nativeKind(settings),JSON.stringify(sourceItems).length);else try{raw=await apiRequest(service,{items:sourceItems},instructions,EMERGENCY_SCHEMA,{trace,beforeRequest:()=>requireLiveConsumer(backgroundGuards.get(operation)),...(onProgress?{onContent:content=>progress(translationProgress(content,sourceItems))}:{})});}catch(error){if(scope!=='page'||(error?.code!=='INVALID_JSON'&&diagnosticError(error).code!=='JSON_INVALID'))throw error;providerError='';raw='';}
       try{
         const result=scope==='page'?(isSubscriptionKind(settings.providerKind)?normalizePageTranslationResult(raw,sourceItems):inspectPageTranslationResult(raw,sourceItems)):normalizeEmergencyResult(raw,sourceItems),mapped=new Map();
         for(const value of result.items)mapped.set(idToKey.get(value.id),{translation:value.translation});
@@ -825,6 +833,30 @@ let routeCacheWrite = Promise.resolve();
 async function saveRouteCache() {
   routeCacheWrite = routeCacheWrite.then(async () => { await chrome.storage.local.set({[ROUTE_CACHE_KEY]: routeCache}); }).catch(() => {});
   return routeCacheWrite;
+}
+// 模型用量统计：仅聚合 请求数/错误数/token 数（按天+服务+模型+操作），不存任何内容；本地保存，记忆清理时一并删除。
+const MODEL_USAGE_KEY = 'modelUsage';
+let modelUsageRows = null, modelUsageLoaded = false, modelUsageWrites = Promise.resolve();
+async function loadModelUsage() {
+  if (modelUsageLoaded) return modelUsageRows;
+  const stored = (await chrome.storage.local.get(MODEL_USAGE_KEY))[MODEL_USAGE_KEY];
+  modelUsageRows = Array.isArray(stored?.rows) ? stored.rows.map(normalizeUsageRow).filter(Boolean) : [];
+  modelUsageLoaded = true;
+  return modelUsageRows;
+}
+function recordModelUsage(entry) {
+  const work = modelUsageWrites.then(async () => {
+    const rows = await loadModelUsage();
+    modelUsageRows = mergeUsageEntry(rows, entry);
+    await chrome.storage.local.set({[MODEL_USAGE_KEY]: {version: USAGE_VERSION, rows: modelUsageRows}});
+  }).catch(() => {});
+  modelUsageWrites = work;
+  return work;
+}
+async function clearModelUsage() {
+  const work = modelUsageWrites.then(async () => { modelUsageRows = []; modelUsageLoaded = true; await chrome.storage.local.remove(MODEL_USAGE_KEY); }).catch(() => {});
+  modelUsageWrites = work;
+  return work;
 }
 function routingSettingsOf(settings) { return normalizeRouting(settings?.routing || {}, DEFAULT_SETTINGS.routing); }
 function routingVersion(settings) {
@@ -1019,7 +1051,7 @@ const operation=previous.catch(()=>{}).then(async()=>{
               // 主动求助是高价值路径：先判卷，premium 档切到升级服务，其余按原设置。
               const route=await chooseRoute('assist',summarizeRequest('assist',{text:command.text,context:command.context,level:command.level,kind:command.kind}),{settings:state.settings,incognito:source.incognito});
               const routed=route.kind==='api'&&route.service?{...state.settings,providerKind:'api',activeApiServiceId:route.service.id}:state.settings;
-              if(isSubscriptionKind(routed.providerKind))return await providerOperation(()=>assistSubscription(request,routed.subscriptionModel,diagnostics.trace(message)?.traceId,readingHistory.policy()?.translation,onProgress,nativeKind(routed)),diagnostics.trace(message),routed.subscriptionModel,nativeKind(routed));
+              if(isSubscriptionKind(routed.providerKind))return await providerOperation(()=>assistSubscription(request,routed.subscriptionModel,diagnostics.trace(message)?.traceId,readingHistory.policy()?.translation,onProgress,nativeKind(routed)),diagnostics.trace(message),routed.subscriptionModel,nativeKind(routed),JSON.stringify(request).length);
               const onContent=content=>onProgress(assistanceProgress(content,request,{envelope:'result'}));
               const wrapped=await apiRequest(activeApiProvider(routed),request,ASSISTANCE_INSTRUCTIONS,assistanceSchema(request),{onContent,trace:diagnostics.trace(message)});
               return wrapped.result;
@@ -1077,7 +1109,7 @@ async function clearReadingData(scope,recovering=false){
     const update={supportDataGeneration:(Number(current.supportDataGeneration)||0)+1};
     if(target==='memory')Object.assign(update,{words:[],supportUsage:[],onDemandSuggestionShownAt:0});
     await chrome.storage.local.set(update);
-    if(target==='memory')await chrome.storage.local.remove(['legacyReadingArchive','glossCache','supportCache']);
+    if(target==='memory'){await chrome.storage.local.remove(['legacyReadingArchive','glossCache','supportCache']);await clearModelUsage();}
     await Promise.allSettled([domainCacheWrites,sentenceGroupCacheWrites,emergencyWrites,readingSessionWrites]);
     await clearSupportSessions();
     const all=await chrome.storage.session.get(null);
@@ -1311,6 +1343,8 @@ async function handle(message,sender) {
     case 'LANGUAGE_PROFILE':{await lexiconReady();return identifyPageLanguage(text(message.text,'正文',40000,false));}
     case 'REVIEW_DUE':return reviewDue(message,sender);
     case 'ROUTING_STATS':return {routing:routingStatsView(routingStats),settings:routingSettingsOf((await load(false)).settings)};
+    case 'USAGE_STATS':{await modelUsageWrites;const days=Number.isSafeInteger(message.days)?Math.min(Math.max(message.days,0),3650):7;return {usage:usageStatsView(await loadModelUsage(),{days})};}
+    case 'USAGE_CLEAR':await clearModelUsage();return {cleared:true};
     case 'REVIEW_FEEDBACK':return reviewFeedback(message,sender);
     case 'CONVERSATION_ASK':return conversationAsk(message,sender);
     case 'CONVERSATION_STOP':return conversationStop(message,sender);
@@ -1330,7 +1364,7 @@ async function handle(message,sender) {
     case 'ASSIST':return assist(message,sender);
     case 'ASSIST_COMMIT':return assistCommit(message,sender);
     case 'PROVIDER_TEST':{
-      const state=await load();if(!configured(state.settings))throw new Error('请先连接服务。');const request={text:'index',context:'The database query uses an index.',domain:'data',kind:'word',level:'hint',detail:'full'};let raw;if(isSubscriptionKind(state.settings.providerKind))raw=await providerOperation(()=>assistSubscription(request,state.settings.subscriptionModel,diagnostics.trace(message)?.traceId,undefined,undefined,nativeKind(state.settings)),diagnostics.trace(message),state.settings.subscriptionModel,nativeKind(state.settings));else{raw=(await apiRequest(activeApiProvider(state.settings), request, ASSISTANCE_INSTRUCTIONS, assistanceSchema(request),{trace:diagnostics.trace(message)})).result;}return{hint:normalizeAssistanceResult(raw,request).hint};
+      const state=await load();if(!configured(state.settings))throw new Error('请先连接服务。');const request={text:'index',context:'The database query uses an index.',domain:'data',kind:'word',level:'hint',detail:'full'};let raw;if(isSubscriptionKind(state.settings.providerKind))raw=await providerOperation(()=>assistSubscription(request,state.settings.subscriptionModel,diagnostics.trace(message)?.traceId,undefined,undefined,nativeKind(state.settings)),diagnostics.trace(message),state.settings.subscriptionModel,nativeKind(state.settings),JSON.stringify(request).length);else{raw=(await apiRequest(activeApiProvider(state.settings), request, ASSISTANCE_INSTRUCTIONS, assistanceSchema(request),{trace:diagnostics.trace(message)})).result;}return{hint:normalizeAssistanceResult(raw,request).hint};
     }
     case 'ENCOUNTER':return encounterOffered(message,sender);
     case 'INTERACT':return interactOffered(message,sender);
