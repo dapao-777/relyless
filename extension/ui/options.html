@@ -953,6 +953,11 @@
 <input id="provider-url" type="url" required="" spellcheck="false">
 <small>仅 HTTPS；localhost 可使用 HTTP。更换域名不会带入旧密钥。</small>
 </label>
+<label class="field">
+<span>失败后切换到</span>
+<select id="provider-fallback"><option value="">不切换</option></select>
+<small>认证失败、限流或网络错误时改走备用服务；模型类错误不切换。仅支持其他 API 服务。</small>
+</label>
 </div>
 </details>
             <div class="provider-actions">
@@ -1084,6 +1089,11 @@
         <div id="usage-list" class="usage-list"></div>
         <p id="usage-empty" class="empty-state" hidden="">范围内暂无用量记录。</p>
         <p id="usage-total" class="field-help"></p>
+        <label class="field usage-budget">
+<span>月度 token 预算</span>
+<input id="usage-budget" type="number" min="0" step="1000" inputmode="numeric" placeholder="0">
+<small>整页翻译预计超出此额度时会先二次确认；0 = 不限制。token 数为累计近似值。</small>
+</label>
         <div class="data-actions"><button id="usage-clear" type="button">清空用量统计</button><span id="usage-result" class="inline-message" aria-live="polite"></span></div>
       </div>
       <aside class="privacy-note">
