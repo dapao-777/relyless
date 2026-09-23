@@ -1,5 +1,5 @@
 import {afterEach,beforeEach,expect,test} from 'bun:test';
-import 'fake-indexeddb/auto';
+import {indexedDB} from 'fake-indexeddb';
 import {performProviderRequest} from '../extension/api-transport.mjs';
 import {mergeUsageEntry,normalizeUsageRow,usageStatsView} from '../extension/usage-stats.js';
 import {isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
@@ -150,6 +150,8 @@ test('provider reporting only input tokens leaves output unreported',async()=>{
 });
 
 test('incognito model calls never persist usage, failed clear remains visible and retryable',async()=>{
+  const previousIndexedDB=globalThis.indexedDB;
+  globalThis.indexedDB=indexedDB;
   const primary={id:'svc-primary',name:'Primary',providerId:'openai',baseUrl:'https://primary.example/v1',model:'primary-model',apiKey:'primary-key'};
   const fixture=isolatedChrome({wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',apiServices:[primary],activeApiServiceId:primary.id,domainDetection:{mode:'local'},rememberSupport:false}},{id:'usage-private-fixture'});
   globalThis.chrome=fixture.api;
@@ -190,5 +192,5 @@ test('incognito model calls never persist usage, failed clear remains visible an
     await isolatedSend(fixture,{type:'MEMORY_CLEAR'},owner);
     expect(fixture.local.modelUsage).toBeUndefined();
     expect(fixture.local.readingCleanup).toBeUndefined();
-  }finally{globalThis.chrome=chromeBefore;}
+  }finally{globalThis.chrome=chromeBefore;globalThis.indexedDB=previousIndexedDB;}
 });
