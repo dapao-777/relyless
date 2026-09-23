@@ -127,7 +127,7 @@ function clearProviderState() {
 let nanoAvailability='unknown';
 function probeNano(){void nanoStatus().then(status=>{if(status?.availability)nanoAvailability=status.availability;});}
 function localFallbackSettings(settings){
-  const ready=(settings.apiServices||[]).find(apiServiceReady);
+  const services=settings.apiServices||[],active=services.find(service=>service.id===settings.activeApiServiceId),ready=apiServiceReady(active)?active:services.find(apiServiceReady);
   if(ready)return {...settings,providerKind:'api',activeApiServiceId:ready.id};
   const kind=SUBSCRIPTION_KINDS.find(value=>subscriptionStatus(value).authenticated);
   return kind?{...settings,providerKind:kind}:null;
