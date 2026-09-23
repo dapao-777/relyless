@@ -38,9 +38,12 @@ async function probeOutputMode(service,protocol,signal,onUsage){
   catch(error){if(error.code==='SCHEMA_UNSUPPORTED')return 'json_object';throw error;}
   const value=await jsonResponse(response);responseError(value);emitUsage({onUsage},usageExtractors[protocol==='chat'?'chat':'responses'](value));let text;
   if(protocol==='chat'){
-    const choice=value.choices?.[0];if(choice?.finish_reason!=='stop'||choice.message?.refusal)throw transportError('结构化输出检测未完成，请稍后重试。','INVALID_RESPONSE');
+    const choice=value.choices?.[0];if(choice?.message?.refusal)throw transportError('结构化输出检测未完成，请稍后重试。','INVALID_RESPONSE');
+    if(choice?.finish_reason==='length')return 'json_object';
+    if(choice?.finish_reason!=='stop')throw transportError('结构化输出检测未完成，请稍后重试。','INVALID_RESPONSE');
     text=choice.message?.content;
   }else{
+    if(value.status==='incomplete'&&value.incomplete_details?.reason==='max_output_tokens')return 'json_object';
     if(value.status!=='completed')throw transportError('结构化输出检测未完成，请稍后重试。','INVALID_RESPONSE');
     text=typeof value.output_text==='string'?value.output_text:(value.output||[]).flatMap(item=>item?.content||[]).filter(item=>item?.type==='output_text').map(item=>item.text||'').join('');
   }
@@ -61,6 +64,8 @@ function waitForOutputProbe(entry,signal){
 
 async function outputMode(service,protocol,signal,onUsage){
   aborted(signal);
+  // 恒思考模型在严格 json_schema 约束解码下产出退化字段（语言混杂、字段截断），直接走 json_object；schema 仍在系统提示中，结果照常过归一化校验。
+  if(alwaysReasoningChat(service))return 'json_object';
   const identity=JSON.stringify([service.providerId,endpointFor(service,protocol).href,service.model,service.apiKey||'',protocol==='chat'?chatThinking(service):responsesThinking(service)]);
   const key=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(identity))),byte=>byte.toString(16).padStart(2,'0')).join('');
   aborted(signal);
@@ -149,8 +154,10 @@ function ensureNoForcedReasoning(service){const model=(service.model||'').toLowe
   if(/(?:^|\/)grok-(?:4\.(?:5|6)(?:$|-)|4\.20-multi-agent|4-1-fast-reasoning)/i.test(model)||/(?:^|\/)grok-4(?:-|$)/i.test(model)&&!model.includes('non-reasoning'))throw transportError('该 Grok 模型始终使用推理，无法关闭思考；请选择无推理版本。','THINKING_REQUIRED');
   if(/(?:^|[\/_-])(?:gpt-oss|qwq)(?:$|[\/_:.-])|sonar-(?:reasoning|deep-research)|glm-5\.3|(?:^|[\/_-])thinking(?:$|[\/_:.-])/i.test(model))throw transportError('该模型无法关闭思考；请选择支持无思考模式的模型。','THINKING_REQUIRED');
 }
+function alwaysReasoningChat(service){return service.providerId==='stepfun'&&/^step-(?:3\.\d|5)/i.test(service.model||'');}
 function chatThinking(service){const id=service.providerId,model=service.model||'',base=service.baseUrl||'';
   if(['deepseek','moonshotai','volcengine','minimax'].includes(id))return {thinking:{type:'disabled'}};
+  if(alwaysReasoningChat(service))return {reasoning_effort:'low'};
   if((id==='jalapenocloud'||id==='atlascloud')&&isHybridChatModel(model))return {thinking:{type:'disabled'}};
   if(id==='openai-compatible'){const host=new URL(base).hostname;if((host==='api.openai.com'||host.endsWith('.openai.com'))&&/^(?:chatgpt-4o|gpt-(?:3\.5|4o?))(?:[-_.]|$)/i.test(model))return {};return /deepseek/i.test(model)||/deepseek/i.test(base)?{thinking:{type:'disabled'}}:{reasoning_effort:'none'};}
   if(id==='azure')return /^(?:chatgpt-4o|gpt-(?:3\.5|4o?))(?:[-_.]|$)/i.test(model)?{}:{reasoning_effort:'none'};
