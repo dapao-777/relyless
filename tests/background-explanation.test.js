@@ -169,7 +169,21 @@ test('sentence hierarchy is authorized, cached, presentation-independent, and dr
   await send({type:'SENTENCE_GROUPS_LINE_STYLE_SET',lineStyle:'solid'},extensionSender);
   expect(await send({type:'SENTENCE_GROUPS_GET'})).toMatchObject({enabled:false,lineStyle:'solid'});expect(providerCalls).toBe(stoppedAt);
 });
-
+test('on-demand sentence hierarchy rejects background scans but serves deliberate selection',async()=>{
+  await send({type:'PAGE_UI_INJECT',tabId:7},extensionSender);
+  await send({type:'SENTENCE_GROUPS_SET',tabId:7,enabled:true},extensionSender);
+  await send({type:'STATE_PATCH',patch:{assistanceMode:'on-demand'}},extensionSender);
+  try{
+    const items=[{id:'selected',sentence:'After users select a sentence, its structure appears.'}],before=providerCalls;
+    await expect(send({type:'SENTENCE_GROUPS_BATCH',items})).rejects.toThrow('不自动解构');
+    expect(providerCalls).toBe(before);
+    expect((await send({type:'SENTENCE_GROUPS_BATCH',items,explicit:true})).items[0].groups[0]).toMatchObject({role:'clause',start:0,end:items[0].sentence.length});
+    expect(providerCalls).toBe(before+1);
+  }finally{
+    await send({type:'STATE_PATCH',patch:{assistanceMode:'ambient'}},extensionSender);
+    await send({type:'SENTENCE_GROUPS_SET',tabId:7,enabled:false},extensionSender);
+  }
+});
 test('invalid reading settings leave the last accepted configuration intact',async()=>{
   const readingStyle={original:{style:'border',color:'#b7791f',size:115},annotation:{style:'plain',color:'auto',size:80},translation:{style:'background',color:'#2255aa',size:130}};
   await send({type:'STATE_PATCH',patch:{lookupKey:'Q',lookupDisplay:'annotation',hintDisplay:'veil',readingStyle}},extensionSender);

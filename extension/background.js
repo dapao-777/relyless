@@ -600,13 +600,14 @@ async function sentenceGroupsBatch(message,sender){
   const source=await readingSource(sender);if(!source.active||await tabPaused(source.tabId))throw new Error('网页当前未活动，暂停阅读解构。');
   const modeKey=sentenceModeKey(source.tabId),mode=(await chrome.storage.session.get(modeKey))[modeKey];if(!mode?.enabled||mode.page!==source.sourceHash)throw new Error('当前页面未启用阅读解构模式。');
   let state=await load();
+  if(state.settings.assistanceMode==='on-demand'&&message.explicit!==true)throw new Error('仅在需要时不自动解构正文；请先选择句子并主动请求。');
   const items=normalizeSentenceGroupItems(message.items),generation=providerGeneration,modeGeneration=mode.generation;
   // 解构默认不判卷（频次高）；开启后按策略先选路，缓存键随之切换到实际服务。
   {const route=await chooseRoute('sentenceGroups',summarizeRequest('sentenceGroups',{text:items.map(item=>item.sentence).join('\n').slice(0,900)}),{settings:state.settings,guard:async()=>{},incognito:source.incognito});
    if(route.kind==='api'&&route.service)state={...state,settings:{...state.settings,providerKind:'api',activeApiServiceId:route.service.id}};
    else if(route.kind==='subscription')state={...state,settings:{...state.settings,providerKind:'chatgpt'}};}
   const service=state.settings.providerKind==='api'?activeApiProvider(state.settings):state.settings.subscriptionModel;
-  const guard=async()=>{const [latest,current,currentMode]=await Promise.all([load(),readingSource(sender),chrome.storage.session.get(modeKey).then(value=>value[modeKey])]);if(generation!==providerGeneration||state.supportDataGeneration!==latest.supportDataGeneration||current.sourceHash!==source.sourceHash||!current.active||await tabPaused(source.tabId)||!currentMode?.enabled||currentMode.page!==source.sourceHash||currentMode.generation!==modeGeneration)throw staleWork();};
+  const guard=async()=>{const [latest,current,currentMode]=await Promise.all([load(),readingSource(sender),chrome.storage.session.get(modeKey).then(value=>value[modeKey])]);if(latest.settings.assistanceMode==='on-demand'&&message.explicit!==true||generation!==providerGeneration||state.supportDataGeneration!==latest.supportDataGeneration||current.sourceHash!==source.sourceHash||!current.active||await tabPaused(source.tabId)||!currentMode?.enabled||currentMode.page!==source.sourceHash||currentMode.generation!==modeGeneration)throw staleWork();};
   if(!configured(state.settings))throw new Error('请先连接服务；原文保持不变。');if(state.settings.providerKind==='api')await requireApiPermission(service);
   await sentenceGroupCacheReady;
   const serviceKey=await hashValue(JSON.stringify([state.settings.providerKind,service])),keys=await Promise.all(items.map(item=>hashValue(JSON.stringify([SENTENCE_GROUPS_POLICY_VERSION,serviceKey,item.sentence])))),groupsByKey=new Map(),newItems=[],claimed=new Set(),now=Date.now();
