@@ -781,7 +781,7 @@
     return target.block?.isConnected && target.anchor?.startContainer?.isConnected && target.anchor.toString()===target.text && blockText(target.block)===target.sourceText && visibleRange(target.anchor,target.block);
   }
   function closeCard() {
-    const view=state.card;if(!view)return;stopCardSpeech(view);state.card=null;view.host.remove();view.target.onClose?.();if(view.refreshPreparedOnClose)void refreshPreparedNow().catch(()=>{});
+    const view=state.card;if(!view)return;stopCardSpeech(view);state.card=null;releaseCardAnchor(view);view.host.remove();view.target.onClose?.();if(view.refreshPreparedOnClose)void refreshPreparedNow().catch(()=>{});
     // 卡片关闭即中止在途追问；已生成的回合按本机规则保留 30 天。
     if(view.convoTurnId)void request('CONVERSATION_STOP',{turnId:view.convoTurnId}).catch(()=>{});
   }
@@ -814,10 +814,33 @@
     });
     button.className='listen';button.setAttribute('aria-label',label);button.title=label;return button;
   }
+  function cardAnchorSheet(){let sheet=document.getElementById('relyless-card-anchoring');if(!sheet){sheet=document.createElement('style');sheet.id='relyless-card-anchoring';sheet.textContent='@position-try --relyless-card-above{top:auto;bottom:anchor(top);margin-top:0;margin-bottom:8px}';document.documentElement.append(sheet);}return sheet;}
+  function cardAnchorElement(target){
+    if(target.sourceKey||target.anchorRect)return null;
+    const range=target.anchor;if(!range||!range.startContainer)return null;
+    const node=range.startContainer,el=node.nodeType===1?node:node.parentElement;
+    return el&&el.isConnected?el:null;
+  }
+  function releaseCardAnchor(view){if(view.anchorEl){if(view.anchorName===null)view.anchorEl.style.removeProperty('anchor-name');else view.anchorEl.style.setProperty('anchor-name',view.anchorName,view.anchorNamePriority);view.anchorEl=null;view.anchorName=null;}const style=view.host.style;['position-anchor','position-try-fallbacks','margin','bottom','right'].forEach(name=>style.removeProperty(name));}
   function positionCard(view) {
+    const width=Math.min(380,innerWidth-24);
+    view.host.style.width=width+'px';
+    const el=cardAnchorElement(view.target);
+    if(el&&CSS.supports('top: anchor(bottom)')&&CSS.supports('position-try-fallbacks: flip-block')){
+      cardAnchorSheet();
+      if(view.anchorEl!==el){releaseCardAnchor(view);view.anchorName=el.style.getPropertyValue('anchor-name')||null;view.anchorNamePriority=el.style.getPropertyPriority('anchor-name');el.style.setProperty('anchor-name','--relyless-card');view.anchorEl=el;}
+      const style=view.host.style;
+      style.setProperty('position-anchor','--relyless-card');
+      style.setProperty('position-try-fallbacks','--relyless-card-above');
+      style.setProperty('top','anchor(bottom)');style.setProperty('bottom','auto');
+      style.setProperty('left','clamp(12px,anchor(start),calc(100vw - '+width+'px - 12px))');style.setProperty('right','auto');
+      style.setProperty('margin','0');style.setProperty('margin-top','8px');
+      return;
+    }
+    releaseCardAnchor(view);
     const rect=view.target.anchorRect || view.target.anchor?.getBoundingClientRect?.() || {left:20,bottom:20};
-    const bounds=view.host.getBoundingClientRect(), width=Math.min(380,innerWidth-24);
-    view.host.style.width=width+'px';view.host.style.left=Math.max(12,Math.min(rect.left,innerWidth-width-12))+'px';
+    const bounds=view.host.getBoundingClientRect();
+    view.host.style.left=Math.max(12,Math.min(rect.left,innerWidth-width-12))+'px';
     view.host.style.top=Math.max(12,Math.min(rect.bottom+8,innerHeight-bounds.height-12))+'px';
   }
   function renderHelpCard(target,error='') {
@@ -834,7 +857,7 @@
       .definition-value{color:var(--green);background:var(--green-soft);border:1px solid var(--green-line);border-radius:var(--radius-control);padding:2px 6px;font-weight:var(--weight-medium);-webkit-box-decoration-break:clone;box-decoration-break:clone}.inline-term{font-family:var(--mono);font-size:.95em;color:var(--accent);background:var(--accent-soft);border:1px solid var(--accent-line);border-radius:4px;padding:0 .25em;-webkit-box-decoration-break:clone;box-decoration-break:clone}.meaning-key{color:var(--green);font-weight:var(--weight-medium)}
 
       .language-action{background:var(--violet-soft);border-color:var(--violet-line);color:var(--violet)}.language-action:where(:enabled):hover{background:var(--violet-soft);border-color:var(--violet);color:var(--violet)}.known-action{background:var(--teal);border-color:var(--teal);color:var(--on-teal)}.known-action:where(:enabled):hover,.known-action:where(:enabled):active{background:var(--teal-hover);border-color:var(--teal-hover);color:var(--on-teal)}.dismiss{background:var(--surface);border-color:var(--line);color:var(--muted-strong)}.sentence{border-top:0;padding-top:0}.sentence>summary{padding:var(--space-2) var(--space-3);border-radius:var(--radius-control);background:var(--accent-soft);color:var(--accent)}.answer.error{background:var(--danger-soft);border-color:var(--danger)}
-      .conversation{margin:var(--space-3) 0 0;border-top:1px solid var(--line);padding-top:var(--space-3)}.conversation-log{max-height:220px;overflow:auto;margin-bottom:var(--space-2)}.conversation-turn{margin:0 0 var(--space-3)}.conversation-question{margin:0 0 var(--space-1);font-weight:var(--weight-medium);color:var(--accent);white-space:pre-wrap;overflow-wrap:anywhere}.conversation-answer{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}.conversation-memory{display:block;margin-top:2px;color:var(--muted);font-size:var(--type-support)}.conversation-form{display:flex;align-items:flex-end;gap:var(--space-2)}.conversation-input{flex:1;min-height:36px;max-height:120px;resize:vertical;box-sizing:border-box;font:var(--type-control)/var(--leading-control) var(--sans);color:var(--ink);padding:var(--space-2) var(--space-3);border:1px solid var(--line);border-radius:var(--radius-control);background:var(--surface)}.conversation-input:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}.conversation-form button{margin:0;flex:none}
+      .conversation{margin:var(--space-3) 0 0;border-top:1px solid var(--line);padding-top:var(--space-3)}.conversation-log{max-height:220px;overflow:auto;margin-bottom:var(--space-2)}.conversation-turn{margin:0 0 var(--space-3)}.conversation-question{margin:0 0 var(--space-1);font-weight:var(--weight-medium);color:var(--accent);white-space:pre-wrap;overflow-wrap:anywhere}.conversation-answer{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}.conversation-memory{display:block;margin-top:2px;color:var(--muted);font-size:var(--type-support)}.conversation-form{display:flex;align-items:flex-end;gap:var(--space-2)}.conversation-input{flex:1;min-height:36px;max-height:120px;resize:vertical;field-sizing:content;box-sizing:border-box;font:var(--type-control)/var(--leading-control) var(--sans);color:var(--ink);padding:var(--space-2) var(--space-3);border:1px solid var(--line);border-radius:var(--radius-control);background:var(--surface)}.conversation-input:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}.conversation-form button{margin:0;flex:none}
     `;shadow.append(style);const card=document.createElement('section');card.className='card';card.setAttribute('role','dialog');card.setAttribute('aria-label','RelyLess · 帮助理解选中内容');shadow.append(card);
     const brand=createBrandLabel(target.kind==='word'?'词语释义':'内容释义');brand.style.marginBottom='var(--space-3)';card.append(brand);
     const sourceHeader=document.createElement('div');sourceHeader.className='source-heading';card.append(sourceHeader);const source=document.createElement('p');source.className='source'+(target.kind==='passage'?' passage':'');source.textContent=target.text;sourceHeader.append(source);
@@ -844,7 +867,7 @@
     const originalLabel=document.createElement('dt'),original=document.createElement('dd'),translationLabel=document.createElement('dt'),sentenceTranslation=document.createElement('dd');
     originalLabel.textContent='英文原文';originalLabel.className='sentence-label';original.textContent=target.context||'';original.lang='en';translationLabel.textContent='中文翻译';sentenceTranslation.lang='zh-CN';sentenceTranslation.textContent=error?'尚未获取本句翻译。':'展开后获取本句翻译。';sentenceBody.append(originalLabel,original,translationLabel,sentenceTranslation);
     if(target.context)explanationText(original,target.context,target.text);
-    const view={host,card,target,answer,explanation,sentence,sentenceTranslation,speech:null,requestId:'',level:'hint',detail:'brief',retries:0,support:null,fullDetails:null,fullResult:null,detailsLoading:false,pendingDetails:false,confirmedDisplayed:false,referenceDisplayed:false,hasUnconfirmedProgress:false,progressBackup:null,progressFields:{},assistFinished:false};state.card=view;
+    const view={host,card,target,answer,explanation,sentence,sentenceTranslation,speech:null,requestId:'',level:'hint',detail:'brief',retries:0,support:null,fullDetails:null,fullResult:null,detailsLoading:false,pendingDetails:false,confirmedDisplayed:false,referenceDisplayed:false,hasUnconfirmedProgress:false,progressBackup:null,progressFields:{},assistFinished:false,anchorEl:null};state.card=view;
     speechButton(view,sourceHeader,target.text,target.kind==='word'?'朗读英文单词':'朗读选中英文');
     const sentenceSpeech=speechButton(view,originalLabel,target.context,'朗读英文原句');
     sentence.addEventListener('toggle',()=>{if(state.card!==view)return;if(sentence.open)void expandDetails(view);else if(view.speech?.button===sentenceSpeech)stopCardSpeech(view);positionCard(view);});
