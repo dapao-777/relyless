@@ -35,9 +35,9 @@ test('usage rows merge by day+service+model+operation and estimate missing token
   expect(sub).toMatchObject({requests:1,errors:1,input:0,output:0,estInput:200,estOutput:0});
 });
 
-test('tokenizer-derived estimates override char fallback and mark estKind',()=>{
+test('local MiniLM rough estimates override char fallback and mark estKind',()=>{
   let rows=[];
-  // 本地 tokenizer 已热的条目直接用真实 token 数，标记 estKind。
+  // 分词器的计数只是本机粗估，与服务模型的实际 token 不同。
   rows=mergeUsageEntry(rows,{provider:'api',service:'主力',model:'m1',operation:'ASSIST',ok:true,inputChars:400,outputChars:80,estInput:97,estOutput:21,estKind:'tokenizer'},{now:Date.parse('2026-01-10T08:00:00Z')});
   expect(rows[0]).toMatchObject({estInput:97,estOutput:21,estKind:'tokenizer'});
   // 部分走 tokenizer、部分回退字符 → mixed。

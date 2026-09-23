@@ -230,21 +230,24 @@ const domainCacheReady = chrome.storage.session.get('domainCache').then(({domain
   }
 });
 function invalidateClassification() { classificationGeneration++;void pruneBackgroundQueue(); }
-const SENSE_MERGE_THRESHOLD = 0.86;
-// 义项键解析：先精确标签，再与同一词条已存义项的向量做余弦相似（仅本地模型已热时），最后退回哈希新键。
-async function resolveSenseKey(word,label,sentence){
+const SENSE_MERGE_THRESHOLD = 0.90;
+// 旧义项没有向量：模型已热时按需嵌入其短标签；冷启动仅接受精确标签。
+async function resolveSenseKey(word,label){
   const senses=Array.isArray(word?.senses)?word.senses:[];
   const exact=senses.find(sense=>sense.label===label);
   if(exact)return {key:exact.key};
   const minted=async()=>({key:await hashValue((word?.id||'')+':'+label)});
-  const probe=await embedLocal([label+' | '+String(sentence||'').slice(0,200)],{onlyIfWarm:true});
+  const missing=senses.filter(sense=>!Array.isArray(sense.embedding)||sense.embedding.length!==384).slice(0,8);
+  const probe=await embedLocal([label,...missing.map(sense=>sense.label)],{onlyIfWarm:true});
   const vector=probe?.vectors?.[0];
   if(!Array.isArray(vector)||!vector.length)return minted();
   let best=null,bestScore=0;
   for(const sense of senses){
-    if(!Array.isArray(sense.embedding)||sense.embedding.length!==vector.length)continue;
+    const missingIndex=missing.indexOf(sense);
+    const previous=sense.embedding?.length===vector.length?sense.embedding:missingIndex<0?null:probe.vectors[missingIndex+1];
+    if(!Array.isArray(previous)||previous.length!==vector.length)continue;
     let similarity=0;
-    for(let index=0;index<vector.length;index+=1)similarity+=vector[index]*sense.embedding[index];
+    for(let index=0;index<vector.length;index+=1)similarity+=vector[index]*previous[index];
     if(similarity>bestScore){bestScore=similarity;best=sense;}
   }
   if(best&&bestScore>=SENSE_MERGE_THRESHOLD)return {key:best.key,merged:true};
@@ -850,12 +853,12 @@ async function loadModelUsage() {
   modelUsageLoaded = true;
   return modelUsageRows;
 }
-// 模型已热时用本地 tokenizer 估计未上报的 token；冷启动与超时都退回字符估计。
+// MiniLM tokenizer 与远端服务的 tokenizer 不同；只对完整输入作粗略估计。
 async function estimateUsageTokens(entry) {
-  const needsInput = !(entry?.usage?.input > 0), needsOutput = !(entry?.usage?.output > 0);
+  const needsInput = entry?.usage?.input == null, needsOutput = entry?.usage?.output == null;
   if (!needsInput && !needsOutput) return entry;
-  const inputText = needsInput ? String(entry?.inputText || '').slice(0, 6000) : '';
-  const outputText = needsOutput ? String(entry?.outputText || '').slice(0, 6000) : '';
+  const inputText = needsInput && entry?.inputText?.length <= 6000 ? entry.inputText : '';
+  const outputText = needsOutput && entry?.outputText?.length <= 6000 ? entry.outputText : '';
   if (!inputText && !outputText) return entry;
   const counted = await countTokensLocal([inputText, outputText], { onlyIfWarm: true, timeoutMs: 300 });
   if (!counted?.counts) return entry;

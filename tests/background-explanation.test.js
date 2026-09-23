@@ -205,6 +205,20 @@ test('sense keys merge semantically close labels through warm local embeddings',
     expect(stored.words[0].senses).toHaveLength(1);
   }finally{chrome.runtime.sendMessage=previousSend;chrome.offscreen=previousOffscreen;await new Promise(resolve=>setTimeout(resolve,20));stored.words=savedWords;}
 });
+test('a legacy sense without embedding retains its key after a close label change when local model is warm',async()=>{
+  const previousSend=chrome.runtime.sendMessage,previousOffscreen=chrome.offscreen,savedWords=stored.words;
+  try{
+    stored.words=[{id:wordId('unless','tech'),term:'unless',domain:'tech',kind:'word',revision:1,helpCount:1,requestedAt:1,senses:[{key:'legacy-sense',label:'marks an exception',definition:{hint:'except if',translation:'除非'}}]}];
+    chrome.offscreen={hasDocument:async()=>true};
+    chrome.runtime.sendMessage=async message=>message?.type==='EMBED_LOCAL'?{ok:true,data:{vectors:[[1,0,0,0],[0.99,0.01,0,0]],dimensions:4}}:{ok:false,error:'unexpected local call'};
+    nextSense='introduces an exception';
+    const result=await send({type:'ASSIST',detail:'brief',requestId:'legacy-sense-backfill',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint',bypassCache:true});
+    expect(result.support.senseKey).toBe('legacy-sense');
+    await send({type:'ASSIST_COMMIT',requestId:'legacy-sense-backfill'});
+    expect(stored.words[0].senses).toHaveLength(1);
+    expect(stored.words[0].senses[0].key).toBe('legacy-sense');
+  }finally{nextSense=null;chrome.runtime.sendMessage=previousSend;chrome.offscreen=previousOffscreen;await new Promise(resolve=>setTimeout(resolve,20));stored.words=savedWords;}
+});
 test('usage estimates prefer the warm local tokenizer over char fallback',async()=>{
   const previousSend=chrome.runtime.sendMessage,previousOffscreen=chrome.offscreen;
   const estimated=async()=>{const view=await send({type:'USAGE_STATS',days:1},extensionSender);return (view.usage.models||[]).flatMap(model=>model.operations).filter(row=>row.operation==='ASSIST').reduce((sum,row)=>({estInput:sum.estInput+row.estInput,estOutput:sum.estOutput+row.estOutput}),{estInput:0,estOutput:0});};
