@@ -34,6 +34,7 @@ beforeAll(async () => {
       sendMessage: (msg, cb) => {
         if(msg.type==='STATE_PATCH'){patches.push(msg.patch);settings={...settings,...msg.patch};}
         const data=msg.type==='AUTOMATION_GET'?{automation:{sites:[]}}:
+          msg.type==='DOMAIN_TEST'?{domain:'general',source:'local-model',confident:false,suggested:'data'}:
           msg.type==='SUBSCRIPTION_STATUS'?{connected:false,authenticated:false}:
           {settings,providerConfigured:true,subscription:{connected:false,authenticated:false},sessions:[],config:{enabled:false}};
         const res = {ok:true,data};
@@ -150,4 +151,14 @@ test('switching hash across all main sections properly displays each section', a
     const activeLink = document.querySelector('.sidebar a.active');
     expect(activeLink?.dataset.section).toBe(item.hash);
   }
+});
+
+test('a low-confidence domain test suggests a manual site rule only in settings',async()=>{
+  document.getElementById('domain-test-text').value='Data pipelines transform events into warehouse tables.';
+  document.getElementById('run-domain-test').click();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  const result=document.getElementById('domain-test-result').textContent;
+  expect(result).toContain('本机识别不确定');
+  expect(result).toContain('网站规则');
+  expect(result).toContain('数据工程');
 });
