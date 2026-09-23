@@ -212,7 +212,7 @@ npm run frequency:build
 npm run release:package
 ```
 
-`npm run release:package` 只接受干净且已经提交的 `HEAD`，按 `package.json` 当前版本生成 `dist/relyless-<version>.zip` 和 `dist/SHA256SUMS`。Release ZIP 只包含可运行的 `extension/`、`connector/` 和根目录说明/许可文件，不包含 `node_modules`、测试或开发工具。
+`npm run release:package` 只接受干净且已经提交的 `HEAD`，按 `package.json` 当前版本生成 `dist/relyless-<version>.zip` 和 `dist/SHA256SUMS`。Release ZIP 只包含可运行的 `extension/`、`connector/` 和根目录说明/许可文件，不包含 `node_modules`、测试或开发工具；未启用的视频字幕线（`VIDEO_SUPPORT_ENABLED=false`）通过 `export-ignore` 排除在归档外。
 
 目录概览：
 
