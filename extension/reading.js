@@ -133,6 +133,7 @@ function migrateSense(sense) {
     quietOpportunityDays:integerNonNegative(sense.quietOpportunityDays),
     hintPreference:preference(sense.hintPreference),
     assistedPageKey:typeof sense.assistedPageKey === 'string' ? sense.assistedPageKey : '',
+    ...(Array.isArray(sense.embedding)?{embedding:sense.embedding.filter(value=>typeof value==='number'&&Number.isFinite(value)).slice(0,512)}:{}),
     definition:{
       hint:typeof sense.definition?.hint === 'string' ? sense.definition.hint.slice(0,80) : '',
       translation:typeof sense.definition?.translation === 'string' ? sense.definition.translation.slice(0,160) : '',

@@ -99,11 +99,42 @@ async function classify(text, title) {
   return scoreDomains(tensor.data, runtime.entries);
 }
 
+const MAX_EMBED_BATCH = 16;
+const MAX_EMBED_LENGTH = 600;
+
+async function embedTexts(texts) {
+  const runtime = await getRuntime();
+  const vectors = [];
+  for (const source of (Array.isArray(texts) ? texts : []).slice(0, MAX_EMBED_BATCH)) {
+    const input = bounded(source, MAX_EMBED_LENGTH);
+    if (!input) { vectors.push(null); continue; }
+    const tensor = await runtime.extractor(input, { pooling: 'mean', normalize: true });
+    if (tensor.size !== runtime.dimensions) throw new Error('本地模型输出维度异常');
+    vectors.push(Array.from(tensor.data));
+  }
+  return { vectors, dimensions: runtime.dimensions };
+}
+
+function countTokens(texts) {
+  return getRuntime().then((runtime) => ({
+    counts: (Array.isArray(texts) ? texts : []).slice(0, MAX_EMBED_BATCH).map((source) => {
+      const input = bounded(source, MAX_TEXT_LENGTH);
+      if (!input) return 0;
+      const ids = runtime.extractor.tokenizer(input)?.input_ids;
+      return Number(ids?.size ?? ids?.data?.length ?? ids?.length) || 0;
+    }),
+  }));
+}
+
 self.addEventListener('message', (event) => {
-  if (event.data?.type !== 'classify') return;
-  const { id, text, title } = event.data;
+  const data = event.data || {};
+  if (!['classify', 'embed', 'countTokens'].includes(data.type)) return;
+  const { id } = data;
+  const work = data.type === 'classify' ? classify(data.text, data.title)
+    : data.type === 'embed' ? embedTexts(data.texts)
+    : countTokens(data.texts);
   inferenceChain = inferenceChain
-    .then(() => classify(text, title))
+    .then(() => work)
     .then(
       (result) => self.postMessage({ id, ok: true, data: result }),
       (error) => self.postMessage({ id, ok: false, error: error?.message || String(error) }),

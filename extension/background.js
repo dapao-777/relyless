@@ -6,7 +6,7 @@ import { encounter, interact, migrateSupportWord, normalizeKnownAt, normalizeSen
 import {historyModelSubscription,subscriptionStatus,onNativeDiagnostic,syncNativeDiagnostics,onSubscriptionStatus,ensureSubscription,refreshSubscription,loginSubscription,cancelSubscription,logoutSubscription,listSubscriptionModels,classifySubscription,supportSubscription,assistSubscription,emergencyTranslateSubscription,sentenceGroupsSubscription,isSubscriptionKind,nativeKind} from './subscription.js';
 import {ROUTE_VERSION,normalizeDomainRules,resolveRuleDomain} from './domain-routing.js';
 import {normalizeRulePacks} from './rule-pack.js';
-import {classifyLocal} from './local-classifier.js';
+import {classifyLocal,embedLocal,countTokensLocal} from './local-classifier.js';
 import {assistanceProgress,translationProgress,conversationProgress} from './assistance-stream.mjs';
 import {SOURCE_DATA_INSTRUCTIONS,SUPPORT_POLICY_VERSION,SUPPORT_INSTRUCTIONS,SUPPORT_SCHEMA,ASSISTANCE_INSTRUCTIONS,assistanceSchema,normalizeSupportItems,prepareSupportItems,inspectSupportResponse,requestSupportWithCorrection,SUPPORT_CORRECTION_INSTRUCTIONS,normalizeSupportResult,normalizeAssistanceCommand,normalizeAssistanceRequest,normalizeAssistanceResult,normalizePreparationContext,EMERGENCY_SCHEMA,EMERGENCY_INSTRUCTIONS,normalizeEmergencyItems,normalizeEmergencyResult,PAGE_TRANSLATION_INSTRUCTIONS,normalizePageTranslationItems,inspectPageTranslationResult,normalizePageTranslationResult,CONVERSATION_INSTRUCTIONS,conversationSchema,normalizeConversationRequest,normalizeConversationResult} from './gloss.mjs';
 import {AUTO_SCRIPT_ID,ALL_HOSTS,VIDEO_SUPPORT_ENABLED,pageOrigin,sitePattern,validateAutomation,validateVideo,resolveAutomation,registrationMatches,requiredPermissionOrigins} from './activation.js';
@@ -230,6 +230,26 @@ const domainCacheReady = chrome.storage.session.get('domainCache').then(({domain
   }
 });
 function invalidateClassification() { classificationGeneration++;void pruneBackgroundQueue(); }
+const SENSE_MERGE_THRESHOLD = 0.86;
+// 义项键解析：先精确标签，再与同一词条已存义项的向量做余弦相似（仅本地模型已热时），最后退回哈希新键。
+async function resolveSenseKey(word,label,sentence){
+  const senses=Array.isArray(word?.senses)?word.senses:[];
+  const exact=senses.find(sense=>sense.label===label);
+  if(exact)return {key:exact.key};
+  const minted=async()=>({key:await hashValue((word?.id||'')+':'+label)});
+  const probe=await embedLocal([label+' | '+String(sentence||'').slice(0,200)],{onlyIfWarm:true});
+  const vector=probe?.vectors?.[0];
+  if(!Array.isArray(vector)||!vector.length)return minted();
+  let best=null,bestScore=0;
+  for(const sense of senses){
+    if(!Array.isArray(sense.embedding)||sense.embedding.length!==vector.length)continue;
+    let similarity=0;
+    for(let index=0;index<vector.length;index+=1)similarity+=vector[index]*sense.embedding[index];
+    if(similarity>bestScore){bestScore=similarity;best=sense;}
+  }
+  if(best&&bestScore>=SENSE_MERGE_THRESHOLD)return {key:best.key,merged:true};
+  return {...(await minted()),embedding:vector};
+}
 async function hashValue(value) {
   const digest = await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest),byte => byte.toString(16).padStart(2,'0')).join('');
@@ -379,10 +399,10 @@ async function apiRequest(provider,payload,instructions,schema,{onContent,trace,
     const output=await diagnostics.provider(trace,'api',service.model,new URL(service.baseUrl).origin,()=>runWithApiKeyRotation(service,snapshot=>performProviderRequest(snapshot,payload,instructions,schema,{signal:controller.signal,onContent,onUsage,beforeRequest:checkRequest}),{signal:controller.signal}));
     if(instructions===ASSISTANCE_INSTRUCTIONS&&(!Object.hasOwn(output,'result')||Object.keys(output).length!==1))throw Object.assign(new Error('帮助服务返回的结果封装无效。'),{code:'OUTPUT_INVALID'});
     providerError='';
-    void recordModelUsage({provider:'api',service:service.name||service.model,model:service.model,operation:trace?.operation||'',ok:true,usage:usageReport,inputChars,outputChars:JSON.stringify(output).length});
+    void recordModelUsage({provider:'api',service:service.name||service.model,model:service.model,operation:trace?.operation||'',ok:true,usage:usageReport,inputChars,outputChars:JSON.stringify(output).length,inputText:JSON.stringify(payload),outputText:JSON.stringify(output)});
     return output;
   } catch(error) {
-    void recordModelUsage({provider:'api',service:service.name||service.model,model:service.model,operation:trace?.operation||'',ok:false,usage:usageReport,inputChars});
+    void recordModelUsage({provider:'api',service:service.name||service.model,model:service.model,operation:trace?.operation||'',ok:false,usage:usageReport,inputChars,inputText:JSON.stringify(payload)});
     let reported=error;
     if(controller.signal.aborted||error.name==='AbortError')reported=new Error(`请求超过 ${Math.round(timeoutMs/1000)} 秒，请稍后重试。${service.providerId==='stepfun'?'阶跃星辰推理较慢时，可把该服务的思考等级设为“低”。':''}`);else if(error instanceof TypeError)reported=new Error('无法连接服务，请检查网络、API 地址与服务跨域支持。');
     providerError=reported.message||'服务连接失败。';throw reported;
@@ -396,7 +416,7 @@ async function apiModelsList(service) {
   finally {clearTimeout(timeout);}
 }
 const SUBSCRIPTION_SERVICE_LABELS = {chatgpt:'ChatGPT 订阅',grok:'Grok 订阅',antigravity:'Google 订阅'};
-async function providerOperation(operation,trace,model='',provider='chatgpt',inputChars=0){return diagnostics.provider(trace,provider,model,provider,async()=>{const service=SUBSCRIPTION_SERVICE_LABELS[provider]||'订阅服务';try{const result=await operation();providerError='';void recordModelUsage({provider,service,model:model||'默认模型',operation:trace?.operation||'',ok:true,inputChars,outputChars:JSON.stringify(result??null).length});return result;}catch(error){providerError=error.message||'服务连接失败。';void recordModelUsage({provider,service,model:model||'默认模型',operation:trace?.operation||'',ok:false,inputChars});throw error;}});}
+async function providerOperation(operation,trace,model='',provider='chatgpt',inputChars=0){return diagnostics.provider(trace,provider,model,provider,async()=>{const service=SUBSCRIPTION_SERVICE_LABELS[provider]||'订阅服务';try{const result=await operation();providerError='';const resultText=JSON.stringify(result??null);void recordModelUsage({provider,service,model:model||'默认模型',operation:trace?.operation||'',ok:true,inputChars,outputChars:resultText.length,outputText:resultText});return result;}catch(error){providerError=error.message||'服务连接失败。';void recordModelUsage({provider,service,model:model||'默认模型',operation:trace?.operation||'',ok:false,inputChars});throw error;}});}
 function staleWork(){return Object.assign(new Error('页面或设置已变化，请在当前页面重新操作。'),{code:'STALE'});}
 async function requireLiveConsumer(guards){
   let failure;
@@ -485,8 +505,8 @@ async function refreshRequestedDefinitions(items,decisions,state,expectedProvide
       if(!word&&!requestedHere)continue;
       if(!word)word=freshWord(canonical,item.domain,target.text.trim().includes(' ')?'phrase':'word');
       if(!(word.helpCount>0||word.requestedAt>0||requestedHere))continue;
-      const label=normalizeSenseLabel(target.sense),senseKey=word.senses.find(value=>value.label===label)?.key||await hashValue(id+':'+label),index=word.senses.findIndex(value=>value.key===senseKey),definition={hint:target.hint,translation:target.translation};
-      const senses=index<0?[...word.senses,{key:senseKey,label,stage:'hint',locked:false,lastHelpAt:0,opportunityDays:0,quietUntil:0,quietCycles:0,quietOpportunityDays:0,hintPreference:null,assistedPageKey:'',definition}]:word.senses.map((sense,senseIndex)=>senseIndex===index?{...sense,label,definition}:sense);
+      const label=normalizeSenseLabel(target.sense),resolved=await resolveSenseKey(word,label,item.sentence),senseKey=resolved.key,index=word.senses.findIndex(value=>value.key===senseKey),definition={hint:target.hint,translation:target.translation};
+      const senses=index<0?[...word.senses,{key:senseKey,label,stage:'hint',locked:false,lastHelpAt:0,opportunityDays:0,quietUntil:0,quietCycles:0,quietOpportunityDays:0,hintPreference:null,assistedPageKey:'',definition,...(resolved.embedding?{embedding:resolved.embedding}:{})}]:word.senses.map((sense,senseIndex)=>senseIndex===index?{...sense,label,definition}:sense);
       await saveRecord(current,{...word,senses,revision:(word.revision||0)+1,lastSeen:Date.now()});
       void noteReviewOpportunity(id,senseKey);
     }
@@ -551,7 +571,7 @@ async function supportBatch(message,sender){
   const validated=normalizeSupportResult({items:tasks.map(item=>({id:item.id,...decisions.get(item.id)}))},tasks,article),validDecisions=new Map(validated.items.map(({id,...value})=>[id,value]));
   await refreshRequestedDefinitions(tasks,validDecisions,latest,generation,source);latest=await load();
   const output=[],offers=[];
-  for(const item of enriched){const owned=tasks.filter(task=>owners.get(task.id)===item.id),decision=owned.map(task=>validDecisions.get(task.id)).find(value=>value?.target)||validDecisions.get(owned[0]?.id)||{target:null,meaning:{en:null,zh:null},sentenceTranslation:null},details={meaning:decision.meaning,sentenceTranslation:decision.sentenceTranslation,coverage:article.coverage};const remembered=!source.incognito&&canRemember(latest)?latest.words:[];if(decision.target===null||isKnownTerm(decision.target.text,remembered)){output.push({id:item.id,target:null,...details});continue;}const canonical=resolveCanonicalTerm(decision.target.text,item.domain,remembered),id=wordId(canonical,item.domain),word=remembered.find(value=>value.id===id),label=normalizeSenseLabel(decision.target.sense),known=word?.senses?.find(value=>value.label===label),senseKey=known?.key||await hashValue(id+':'+label),support=suggestedStage(word,senseKey,latest),target={...decision.target,...support,wordId:id,personal:Boolean(word)};output.push({id:item.id,target,...details});offers.push({...target,canonicalTerm:canonical,domain:item.domain,kind:target.text.trim().includes(' ')?'phrase':'word'});}
+  for(const item of enriched){const owned=tasks.filter(task=>owners.get(task.id)===item.id),decision=owned.map(task=>validDecisions.get(task.id)).find(value=>value?.target)||validDecisions.get(owned[0]?.id)||{target:null,meaning:{en:null,zh:null},sentenceTranslation:null},details={meaning:decision.meaning,sentenceTranslation:decision.sentenceTranslation,coverage:article.coverage};const remembered=!source.incognito&&canRemember(latest)?latest.words:[];if(decision.target===null||isKnownTerm(decision.target.text,remembered)){output.push({id:item.id,target:null,...details});continue;}const canonical=resolveCanonicalTerm(decision.target.text,item.domain,remembered),id=wordId(canonical,item.domain),word=remembered.find(value=>value.id===id),label=normalizeSenseLabel(decision.target.sense),known=word?.senses?.find(value=>value.label===label),resolvedKey=known?{key:known.key}:await resolveSenseKey(word,label,item.sentence),senseKey=resolvedKey.key,support=suggestedStage(word,senseKey,latest),target={...decision.target,...support,wordId:id,personal:Boolean(word)};output.push({id:item.id,target,...details});offers.push({...target,canonicalTerm:canonical,domain:item.domain,kind:target.text.trim().includes(' ')?'phrase':'word'});}
   if(offers.length)await registerOffers(source,offers,generation,supportGeneration);return readingHistory.offer(sender,enriched,{items:output});
 }
 const SENTENCE_GROUPS_DENSITY_KEY='sentenceGroupsDensity';
@@ -830,10 +850,25 @@ async function loadModelUsage() {
   modelUsageLoaded = true;
   return modelUsageRows;
 }
+// 模型已热时用本地 tokenizer 估计未上报的 token；冷启动与超时都退回字符估计。
+async function estimateUsageTokens(entry) {
+  const needsInput = !(entry?.usage?.input > 0), needsOutput = !(entry?.usage?.output > 0);
+  if (!needsInput && !needsOutput) return entry;
+  const inputText = needsInput ? String(entry?.inputText || '').slice(0, 6000) : '';
+  const outputText = needsOutput ? String(entry?.outputText || '').slice(0, 6000) : '';
+  if (!inputText && !outputText) return entry;
+  const counted = await countTokensLocal([inputText, outputText], { onlyIfWarm: true, timeoutMs: 300 });
+  if (!counted?.counts) return entry;
+  const enriched = { ...entry };
+  if (needsInput && counted.counts[0] > 0) enriched.estInput = counted.counts[0];
+  if (needsOutput && counted.counts[1] > 0) enriched.estOutput = counted.counts[1];
+  if (enriched.estInput || enriched.estOutput) enriched.estKind = 'tokenizer';
+  return enriched;
+}
 function recordModelUsage(entry) {
   const work = modelUsageWrites.then(async () => {
     const rows = await loadModelUsage();
-    modelUsageRows = mergeUsageEntry(rows, entry);
+    modelUsageRows = mergeUsageEntry(rows, await estimateUsageTokens(entry));
     await chrome.storage.local.set({[MODEL_USAGE_KEY]: {version: USAGE_VERSION, rows: modelUsageRows}});
   }).catch(() => {});
   modelUsageWrites = work;
@@ -1051,7 +1086,7 @@ const operation=previous.catch(()=>{}).then(async()=>{
       }
       if(requestPolicy!==JSON.stringify(readingHistory.policy())||providerVersion!==providerGeneration)throw new Error('服务设置已改变，请重新求助。');result=normalizeAssistanceResult(raw,request);const [latest,latestSource]=await Promise.all([load(),readingSource(sender)]);if(latestSource.url!==source.url)throw new Error('页面已变化，请重新求助。');if(latest.supportDataGeneration!==state.supportDataGeneration)throw new Error('本机支持设置已变化，请重新求助。');
       if(fetched){const currentPending=await sessionMap(key,5*60000,128);if(currentPending[command.requestId]?.requestHash!==requestHash)throw new Error('帮助请求已被新的请求替代。');resultCache[resultKey]={result,sourceHash:source.sourceHash,at:Date.now()};await writeReadingSession({[resultCacheStorage]:Object.fromEntries(Object.entries(resultCache).slice(-128))},providerVersion);}
-      if(result.hint===null||result.translation===null)support=null;else if(command.kind!=='passage'){const canonical=resolveCanonicalTerm(command.text,command.domain,source.incognito?[]:latest.words),id=wordId(canonical,command.domain),label=normalizeSenseLabel(result.sense),known=(source.incognito?[]:latest.words).find(v=>v.id===id),sense=known?.senses?.find(v=>v.label===label),senseKey=sense?.key||await hashValue(id+':'+label);support={wordId:id,senseKey,stage:'hint',revision:known?.revision||0,canonicalTerm:canonical,label,kind:command.kind,domain:command.domain};}
+      if(result.hint===null||result.translation===null)support=null;else if(command.kind!=='passage'){const canonical=resolveCanonicalTerm(command.text,command.domain,source.incognito?[]:latest.words),id=wordId(canonical,command.domain),label=normalizeSenseLabel(result.sense),known=(source.incognito?[]:latest.words).find(v=>v.id===id),sense=known?.senses?.find(v=>v.label===label),resolvedSense=sense?{key:sense.key}:await resolveSenseKey(known,label,command.context),senseKey=resolvedSense.key;support={wordId:id,senseKey,stage:'hint',revision:known?.revision||0,canonicalTerm:canonical,label,kind:command.kind,domain:command.domain,...(resolvedSense.embedding?{embedding:resolvedSense.embedding}:{})};}
     }
     const publicResult={...result,source:sourceName,support:support?{wordId:support.wordId,senseKey:support.senseKey,stage:support.stage,revision:support.revision}:null,...(sourceName==='local-reference'?{referenceNotice:'本地参考义，未经本句语境判定'}:{})},current=await sessionMap(key,5*60000,128);if(current[command.requestId]?.requestHash!==requestHash)throw new Error('帮助请求已被新的请求替代。');current[command.requestId]={...entry,status:'complete',result:publicResult,support,committable:command.detail==='brief'&&(sourceName==='provider'||sourceName==='prepared')&&Boolean((result.hint??result.translation)!==null),at:Date.now()};await writeReadingSession({[key]:current},providerVersion);if(command.detail==='brief')await readingHistory.prepareQuery(sender,command.requestId,command,publicResult);return publicResult;
   }catch(error){const current=await sessionMap(key,5*60000,128);if(current[command.requestId]?.requestHash===requestHash){current[command.requestId]={...entry,status:'failed',error:error.message||'帮助请求失败。',at:Date.now()};await writeReadingSession({[key]:current},providerVersion);}throw error;}
@@ -1068,7 +1103,7 @@ async function assistCommit(message,sender){
   const operation=mutate(async current=>{
     const [currentSource,currentPending]=await Promise.all([readingSource(sender),sessionMap(key,5*60000,128)]),latest=currentPending[requestId];
     if(!latest||latest.status!=='complete'||latest.requestHash!==entry.requestHash||latest.sourceHash!==currentSource.sourceHash||latest.generation!==current.supportDataGeneration)throw new Error('帮助结果已过期，请重新求助。');if(latest.committed)return {support:latest.commitSupport||null,termSuggestion:latest.commitTermSuggestion||null};let support=null,termSuggestion=null;
-    if(!currentSource.incognito&&latest.committable&&latest.support&&canRemember(current)){const info=latest.support;let word=current.words.find(v=>v.id===info.wordId);if(!word)word=freshWord(info.canonicalTerm,info.domain,info.kind);if(!word.senses.some(s=>s.key===info.senseKey)){if(word.senses.length>=8)return {support:null};word={...word,senses:[...word.senses,{key:info.senseKey,label:info.label,opportunityDays:0,lastOpportunityAt:0,lastHelpAt:0,quietUntil:0,quietCycles:0,quietOpportunityDays:0,hintPreference:null,assistedPageKey:'',definition:{hint:'',translation:''}}]};}const si=word.senses.findIndex(v=>v.key===info.senseKey),definition={hint:latest.result?.hint||word.senses[si].definition?.hint||'',translation:latest.result?.translation||word.senses[si].definition?.translation||''};word={...word,requestedAt:Date.now(),senses:word.senses.map((v,i)=>i===si?{...v,definition}:v)};word=interact(word,'help',Date.now(),currentSource.pageKey,info.senseKey);if(!await saveRecord(current,word))return {support:null};void noteReviewOpportunity(info.wordId,info.senseKey,{lapse:true});support=publicSupport(word,info.senseKey,current);const domains=new Set(current.words.filter(record=>record.term===word.term).map(record=>record.domain));if(domains.size>=2||word.helpCount>=3)termSuggestion={term:word.term,domain:word.domain,translation:word.senses[si]?.definition?.translation||latest.result?.translation||''};}
+    if(!currentSource.incognito&&latest.committable&&latest.support&&canRemember(current)){const info=latest.support;let word=current.words.find(v=>v.id===info.wordId);if(!word)word=freshWord(info.canonicalTerm,info.domain,info.kind);if(!word.senses.some(s=>s.key===info.senseKey)){if(word.senses.length>=8)return {support:null};word={...word,senses:[...word.senses,{key:info.senseKey,label:info.label,opportunityDays:0,lastOpportunityAt:0,lastHelpAt:0,quietUntil:0,quietCycles:0,quietOpportunityDays:0,hintPreference:null,assistedPageKey:'',definition:{hint:'',translation:''},...(Array.isArray(info.embedding)?{embedding:info.embedding.slice(0,512)}:{})}]};}const si=word.senses.findIndex(v=>v.key===info.senseKey),definition={hint:latest.result?.hint||word.senses[si].definition?.hint||'',translation:latest.result?.translation||word.senses[si].definition?.translation||''};word={...word,requestedAt:Date.now(),senses:word.senses.map((v,i)=>i===si?{...v,definition}:v)};word=interact(word,'help',Date.now(),currentSource.pageKey,info.senseKey);if(!await saveRecord(current,word))return {support:null};void noteReviewOpportunity(info.wordId,info.senseKey,{lapse:true});support=publicSupport(word,info.senseKey,current);const domains=new Set(current.words.filter(record=>record.term===word.term).map(record=>record.domain));if(domains.size>=2||word.helpCount>=3)termSuggestion={term:word.term,domain:word.domain,translation:word.senses[si]?.definition?.translation||latest.result?.translation||''};}
     const verified=(await sessionMap(key,5*60000,128))[requestId];if(!verified||verified.requestHash!==entry.requestHash||verified.generation!==current.supportDataGeneration)throw new Error('帮助结果已过期，请重新求助。');return {support,termSuggestion};
   },false).then(async result=>{const current=await sessionMap(key,5*60000,128),latest=current[requestId];if(latest?.requestHash===entry.requestHash){latest.committed=true;latest.commitSupport=result.support;latest.commitTermSuggestion=result.termSuggestion||null;latest.at=Date.now();current[requestId]=latest;await chrome.storage.session.set({[key]:current});}await readingHistory.commit(sender,requestId);return result;}).finally(()=>commitFlights.delete(flightId));commitFlights.set(flightId,operation);return operation;
 }
