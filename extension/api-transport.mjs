@@ -82,7 +82,7 @@ async function outputMode(service,protocol,signal,onUsage){
 
 function transportError(message,code,detail){const error=new Error(message);if(code)error.code=code;if(detail)error.detail=detail;return error;}
 // 用量上报：各协议把自家 usage 字段归一化为 {input,output} 后经 options.onUsage 抛出；缺失则保持 null 由调用方估算。
-function tokenNumber(value){const n=Number(value);return Number.isFinite(n)&&n>=0?Math.floor(n):null;}
+function tokenNumber(value){if(value===null||value===undefined||value==='')return null;const n=Number(value);return Number.isFinite(n)&&n>=0?Math.floor(n):null;}
 function emitUsage(options,usage){if(typeof options?.onUsage!=='function'||!usage)return;const input=tokenNumber(usage.input),output=tokenNumber(usage.output);if(input===null&&output===null)return;try{options.onUsage({input,output});}catch{}}
 const usageExtractors={
   chat:value=>value?.usage?{input:value.usage.prompt_tokens,output:value.usage.completion_tokens}:null,
