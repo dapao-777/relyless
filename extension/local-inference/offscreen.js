@@ -46,29 +46,39 @@ function getWorker() {
   return instance;
 }
 
-function classify(text, title) {
-  if (pending.size >= MAX_PENDING) return Promise.reject(new Error('本地领域识别队列已满'));
+function sendToWorker(payload) {
+  if (pending.size >= MAX_PENDING) return Promise.reject(new Error('本地推理队列已满'));
   clearTimeout(idleTimer);
   const id = nextRequestId++;
   return new Promise((resolve, reject) => {
     const activeWorker = getWorker();
     pending.set(id, { resolve, reject });
-    activeWorker.postMessage({
-      type: 'classify',
-      id,
-      text: bounded(text, MAX_TEXT_LENGTH),
-      title: bounded(title, MAX_TITLE_LENGTH),
-    });
+    activeWorker.postMessage({ ...payload, id });
+  });
+}
+
+function classify(text, title) {
+  return sendToWorker({
+    type: 'classify',
+    text: bounded(text, MAX_TEXT_LENGTH),
+    title: bounded(title, MAX_TITLE_LENGTH),
   });
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.target !== 'local-classifier' || message?.type !== 'CLASSIFY_LOCAL') return false;
+  if (message?.target !== 'local-classifier') return false;
   if (sender.id !== chrome.runtime.id || sender.tab) {
     sendResponse({ ok: false, error: '不允许网页直接调用本地领域模型' });
     return false;
   }
-  classify(message.text, message.title).then(
+  let work;
+  if (message.type === 'CLASSIFY_LOCAL') work = classify(message.text, message.title);
+  else if (message.type === 'EMBED_LOCAL' || message.type === 'COUNT_TOKENS_LOCAL') {
+    // 只为已经预热的工作线程服务；冷启动成本不应由辅助任务承担。
+    if (message.onlyIfWarm && !worker) { sendResponse({ ok: false, error: 'cold' }); return false; }
+    work = sendToWorker({ type: message.type === 'EMBED_LOCAL' ? 'embed' : 'countTokens', texts: message.texts });
+  } else return false;
+  work.then(
     (data) => sendResponse({ ok: true, data }),
     (error) => sendResponse({ ok: false, error: error?.message || String(error) }),
   );

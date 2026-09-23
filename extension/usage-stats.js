@@ -11,6 +11,7 @@ const usageProvider = value => ['chatgpt', 'grok', 'antigravity'].includes(value
 export const usageDay = (time = Date.now()) => new Date(time).toISOString().slice(0, 10);
 const cutoffDay = (now, days) => new Date(now - (days - 1) * 86400000).toISOString().slice(0, 10);
 const tokenEstimate = chars => Math.ceil(count(chars) / 4);
+const estKind = value => ['tokenizer', 'mixed'].includes(value) ? value : 'chars';
 
 export function usageRowKey(row) {
   return [row.day, row.provider, row.service, row.model, row.operation].join('|');
@@ -28,6 +29,7 @@ export function normalizeUsageRow(row) {
     requests: count(row.requests), errors: count(row.errors),
     input: count(row.input), output: count(row.output),
     estInput: count(row.estInput), estOutput: count(row.estOutput),
+    estKind: estKind(row.estKind),
   };
 }
 
@@ -43,12 +45,16 @@ export function usageEntryToRow(entry, day = usageDay()) {
   const usage = entry.usage && typeof entry.usage === 'object' ? entry.usage : null;
   const reportedInput = usage && usage.input != null ? count(usage.input) : null;
   const reportedOutput = usage && usage.output != null ? count(usage.output) : null;
+  const estInput = reportedInput === null ? (count(entry.estInput) || tokenEstimate(entry.inputChars)) : 0;
+  const estOutput = reportedOutput === null ? (count(entry.estOutput) || tokenEstimate(entry.outputChars)) : 0;
+  const tokenized = (reportedInput === null && count(entry.estInput) > 0) || (reportedOutput === null && count(entry.estOutput) > 0);
+  const charred = (reportedInput === null && !count(entry.estInput) && count(entry.inputChars) > 0) || (reportedOutput === null && !count(entry.estOutput) && count(entry.outputChars) > 0);
   return {
     day, provider, service, model, operation,
     requests: 1, errors: entry.ok === false ? 1 : 0,
     input: reportedInput ?? 0, output: reportedOutput ?? 0,
-    estInput: reportedInput === null ? tokenEstimate(entry.inputChars) : 0,
-    estOutput: reportedOutput === null ? tokenEstimate(entry.outputChars) : 0,
+    estInput, estOutput,
+    estKind: tokenized ? (charred ? 'mixed' : 'tokenizer') : 'chars',
   };
 }
 
@@ -59,6 +65,7 @@ export function mergeUsageEntry(rows, entry, { now = Date.now(), retentionDays =
   if (row) {
     const key = usageRowKey(row), found = list.find(value => usageRowKey(value) === key);
     if (found) {
+      if ((row.estInput || row.estOutput) && found.estKind !== row.estKind) found.estKind = 'mixed';
       for (const field of ['requests', 'errors', 'input', 'output', 'estInput', 'estOutput']) found[field] += row[field];
     } else list.push(row);
   }

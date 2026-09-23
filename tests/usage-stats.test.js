@@ -36,6 +36,21 @@ test('usage rows merge by day+service+model+operation and estimate missing token
   expect(sub).toMatchObject({requests:1,errors:1,input:0,output:0,estInput:200,estOutput:0});
 });
 
+test('local MiniLM rough estimates override char fallback and mark estKind',()=>{
+  let rows=[];
+  // 分词器的计数只是本机粗估，与服务模型的实际 token 不同。
+  rows=mergeUsageEntry(rows,{provider:'api',service:'主力',model:'m1',operation:'ASSIST',ok:true,inputChars:400,outputChars:80,estInput:97,estOutput:21,estKind:'tokenizer'},{now:Date.parse('2026-01-10T08:00:00Z')});
+  expect(rows[0]).toMatchObject({estInput:97,estOutput:21,estKind:'tokenizer'});
+  // 部分走 tokenizer、部分回退字符 → mixed。
+  rows=mergeUsageEntry(rows,{provider:'api',service:'主力',model:'m1',operation:'ASSIST',ok:true,inputChars:400},{now:Date.parse('2026-01-10T09:00:00Z')});
+  expect(rows[0].estKind).toBe('mixed');
+  expect(rows[0].estInput).toBe(97+100);
+  // 服务上报了 usage 时忽略条目内估计，也不改 estKind。
+  rows=mergeUsageEntry(rows,{provider:'api',service:'主力',model:'m1',operation:'ASSIST',ok:true,usage:{input:10,output:5},estInput:99,estKind:'tokenizer'},{now:Date.parse('2026-01-10T10:00:00Z')});
+  expect(rows[0].input).toBe(10);
+  expect(normalizeUsageRow({day:'2026-01-10',provider:'api',service:'s',model:'m',operation:'ASSIST',estKind:'bogus'}).estKind).toBe('chars');
+});
+
 test('usageStatsView groups by service+model and honors the day window',()=>{
   const oldDay='2025-11-01',today=Date.parse('2026-01-10T12:00:00Z');
   let rows=[];

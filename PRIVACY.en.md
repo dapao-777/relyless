@@ -35,11 +35,13 @@ Request payloads do not actively include the page URL, but providers still recei
 ### 2.3 What is stored on-device
 
 - **API keys and service configuration**: stored in your browser's local extension storage, used to authenticate to the corresponding endpoint.
-- **Personal vocabulary profile**: on by default, used to "remember requested words and support preferences." It does not store source sentences, titles, or source URLs. You can disable it in settings (after which it is no longer read or updated) or clear it under "Data & Privacy."
+- **Personal vocabulary profile**: on by default, used to remember requested words and support preferences. It stores short sense labels and numeric vectors generated on-device when the local model is already warm; it does not store source sentences, titles, or source URLs. Older senses without vectors are compared by computing temporary vectors only when needed and the model is warm. You can disable it in settings (after which it is no longer read or updated) or clear it under "Data & Privacy."
 - **Reading history** (off by default; requires explicit opt-in and a list of allowed sites): stores queried terms, length-capped example sentences with their translations/explanations, reading summaries, and objective statistics. Example sentences are capped at 1,000 characters (longer sentences are not stored), per-item translations at 2,000 characters, explanations at 1,200, and sentences in automatic-annotation events at 2,000. At most 300 events are kept for up to 90 days, without source URLs. You can export or clear them under "Reading history" or "Data & Privacy."
 - **Model usage statistics**: after model calls, local extension storage aggregates request and error counts and provider-reported input/output tokens by date, service name, model ID, and operation. Missing token counts are estimated separately from request/response character lengths, not presented as exact billing. Up to 90 days and 400 aggregate rows are retained. Request text, page URLs, and keys are not stored in these statistics; incognito model calls are excluded. You can clear them independently under “Model usage” or together with “Clear all reading data.” Turning off reading history does not automatically delete existing usage statistics.
 - **Prepared explanations and limited context cache**: kept only for the current browser session.
 - **Successful bilingual translation results**: only in a five-minute, at most 256-entry in-memory cache.
+
+- **Model usage statistics**: request/error counts and provider-reported or rough estimated token counts aggregated by day, service, model, and operation for up to 90 days. Request text is processed in memory only for this count; statistics do not store content, URLs, or keys and can be cleared in settings.
 
 ## 3. Features That Require Explicit Opt-in
 
