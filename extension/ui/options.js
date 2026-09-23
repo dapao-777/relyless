@@ -620,9 +620,6 @@ globalThis.optionsStartDraftProvider = providerId => {
   setResult(optionsEls.providerResult, '请填写此服务的 API Key；保存后生效。');
 };
 
-document.querySelectorAll('input[name="usage-days"]').forEach(input=>input.addEventListener('change',()=>{optionsUsageDays=Number(input.value);void optionsRefreshUsage();}));
-optionsEls.usageClear.addEventListener('click',async()=>{if(!confirm('清空模型用量统计？只删除用量计数，不影响服务配置与阅读数据。'))return;try{await request('USAGE_CLEAR');setResult(optionsEls.usageResult,'用量统计已清空');await optionsRefreshUsage();}catch(error){setResult(optionsEls.usageResult,errorText(error),true);}});
-
 async function optionsConsumePendingTerm(value){
   if(!value||typeof value.term!=='string'||!value.term.trim())return;
   optionsEls.termSource.value=value.term.trim();
@@ -633,5 +630,7 @@ async function optionsConsumePendingTerm(value){
 }
 chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local'&&changes.pendingTerm?.newValue)void optionsConsumePendingTerm(changes.pendingTerm.newValue);});
 
+document.querySelectorAll('input[name="usage-days"]').forEach(input=>input.addEventListener('change',()=>{optionsUsageDays=Number(input.value);void optionsRefreshUsage();}));
+optionsEls.usageClear.addEventListener('click',async()=>{if(!confirm('清空模型用量统计？只删除用量计数，不影响服务配置与阅读数据。'))return;try{await request('USAGE_CLEAR');setResult(optionsEls.usageResult,'用量统计已清空');await optionsRefreshUsage();}catch(error){setResult(optionsEls.usageResult,errorText(error),true);}});
 async function optionsInit(){optionsFillDomains(optionsEls.readingDomain,true);optionsFillDomains(optionsEls.ruleDomain,false);optionsFillDomains(optionsEls.termDomain,false);optionsEls.installCommand.textContent=`node connector/install.mjs --extension-id ${chrome.runtime.id}`;optionsNavigate();try{const densityData=await chrome.storage.local.get(['sentenceGroupsDensity','sentenceGroupsLineStyle']);optionsSentenceDensity=['coarse','medium','fine'].includes(densityData.sentenceGroupsDensity)?densityData.sentenceGroupsDensity:'medium';optionsSentenceLineStyle=['solid','dashed','dotted','wavy'].includes(densityData.sentenceGroupsLineStyle)?densityData.sentenceGroupsLineStyle:'solid';await optionsSyncState();if(!['diagnostics','history','personalization'].includes(optionsCurrentSection))await optionsRefreshSubscription();const pending=(await chrome.storage.local.get('pendingTerm')).pendingTerm;if(pending)await optionsConsumePendingTerm(pending);}catch(error){optionsShowError(error);}}
 void optionsInit();
