@@ -14,6 +14,7 @@ beforeAll(async () => {
     height: 800
   });
   window.document.write(html);
+  window.HTMLElement.prototype.scrollIntoView=()=>{};
   document = window.document;
 
   function MockOption(text, value) {
@@ -127,6 +128,54 @@ test('switching hash to #history switches visible section and active link', asyn
   const activeLink = document.querySelector('.sidebar a.active');
   expect(activeLink?.dataset.section).toBe('history');
   expect(document.getElementById('section-title').textContent).toBe('阅读记录');
+});
+
+test('settings search filters navigation, lists deep matches, and navigates on click', async () => {
+  const input=document.getElementById('settings-search');
+  input.value='并发';
+  input.dispatchEvent(new window.Event('input',{bubbles:true}));
+  const visible=[...document.querySelectorAll('.sidebar nav a')].filter(a=>!a.hidden).map(a=>a.dataset.section);
+  expect(visible).toEqual(['service']);
+  const results=[...document.querySelectorAll('#search-results button')];
+  expect(results.length).toBeGreaterThan(0);
+  expect(results.every(b=>b.dataset.section==='service')).toBe(true);
+  results[0].click();
+  await new Promise(r=>setTimeout(r,20));
+  expect(document.getElementById('service').hidden).toBe(false);
+  expect(document.querySelector('#service .settings-disclosure').open).toBe(true);
+  expect(document.activeElement.textContent).toContain('并发');
+  expect(input.value).toBe('');
+  input.value='绝不可能匹配xyz';
+  input.dispatchEvent(new window.Event('input',{bubbles:true}));
+  expect(document.querySelector('#search-results .search-empty')).toBeTruthy();
+  expect([...document.querySelectorAll('.sidebar nav a')].every(a=>a.hidden)).toBe(true);
+
+  input.value='';
+  input.dispatchEvent(new window.Event('input',{bubbles:true}));
+  expect([...document.querySelectorAll('.sidebar nav a')].every(a=>!a.hidden)).toBe(true);
+  expect([...document.querySelectorAll('.sidebar .nav-group-label')].every(g=>!g.hidden)).toBe(true);
+  expect(document.getElementById('search-results').hidden).toBe(true);
+});
+
+test('deep search reveals a hidden appearance tab and focuses the exact label in the current section', async () => {
+  window.location.hash='#appearance';
+  window.dispatchEvent(new window.Event('hashchange'));
+  const input=document.getElementById('settings-search');
+  input.value='被提示的原词';
+  input.dispatchEvent(new window.Event('input',{bubbles:true}));
+  document.querySelector('#search-results button').click();
+  await new Promise(r=>setTimeout(r,20));
+  expect(document.getElementById('appearance-panel-original').hidden).toBe(false);
+  expect(document.activeElement.textContent).toBe('被提示的原词');
+  expect(document.querySelector('#appearance-tab-original').getAttribute('aria-selected')).toBe('true');
+});
+test('request concurrency select persists a bounded integer patch', async () => {
+  const select=document.getElementById('request-concurrency');
+  expect(select).toBeTruthy();
+  select.value='4';
+  select.dispatchEvent(new window.Event('change',{bubbles:true}));
+  await new Promise(r=>setTimeout(r,20));
+  expect(patches.at(-1)).toMatchObject({requestConcurrency:4});
 });
 
 test('switching hash across all main sections properly displays each section', async () => {
