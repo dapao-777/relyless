@@ -45,7 +45,6 @@ Request payloads do not actively include the page URL, but providers still recei
 - **Optional cross-session cache (off by default)**: only after you turn it on under “Data & Privacy” are those successful results written to local extension storage. At most 500 word/phrase entries and 1,500 combined passage/page translations are retained for up to 30 days from writing; expired entries do not hit and are pruned on access or write. Turning the setting off, using the separate clear-cache control, or clearing all reading data removes persistent entries; turning it off also clears session entries. Existing unconsented local caches from older versions are removed at startup.
 - **Usage and monthly budget**: before bilingual page translation, the extension estimates tokens from pending characters and the service/model’s 30-day tokens-per-character ratio (falling back to four characters per token). It compares the estimate plus recorded monthly usage against the monthly token budget you set under Model Services (zero means unlimited). Exceeding the budget requires a second confirmation in the popup. Only counts, not source text, are used for these estimates.
 
-
 ## 3. Features That Require Explicit Opt-in
 
 The following are off by default and run only after you explicitly enable them:
