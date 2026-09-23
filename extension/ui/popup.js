@@ -1,6 +1,6 @@
 import {request, errorText, upsertSiteEntry} from '../shared.js';
 
-const popupEls={status:document.querySelector('#page-status'),hostname:document.querySelector('#site-hostname'),siteAuto:document.querySelector('#site-auto'),siteAutoNote:document.querySelector('#site-auto-note'),siteAutoError:document.querySelector('#site-auto-error'),toggle:document.querySelector('#toggle-page'),toggleLabel:document.querySelector('#toggle-label'),pageNote:document.querySelector('#page-note'),actionError:document.querySelector('#action-error'),sentenceGroups:document.querySelector('#sentence-groups'),sentenceGroupsNote:document.querySelector('#sentence-groups-note'),sentenceGroupsError:document.querySelector('#sentence-groups-error'),options:document.querySelector('#open-options'),serviceWarning:document.querySelector('#service-warning'),serviceWarningCopy:document.querySelector('#service-warning-copy'),repairService:document.querySelector('#repair-service'),suggestion:document.querySelector('#on-demand-suggestion'),chooseOnDemand:document.querySelector('#choose-on-demand')};
+const popupEls={status:document.querySelector('#page-status'),hostname:document.querySelector('#site-hostname'),siteAuto:document.querySelector('#site-auto'),siteAutoNote:document.querySelector('#site-auto-note'),siteAutoError:document.querySelector('#site-auto-error'),toggle:document.querySelector('#toggle-page'),toggleLabel:document.querySelector('#toggle-label'),pageNote:document.querySelector('#page-note'),actionError:document.querySelector('#action-error'),sentenceGroups:document.querySelector('#sentence-groups'),sentenceGroupsNote:document.querySelector('#sentence-groups-note'),sentenceGroupsError:document.querySelector('#sentence-groups-error'),options:document.querySelector('#open-options'),serviceWarning:document.querySelector('#service-warning'),serviceWarningCopy:document.querySelector('#service-warning-copy'),repairService:document.querySelector('#repair-service'),suggestion:document.querySelector('#on-demand-suggestion'),chooseOnDemand:document.querySelector('#choose-on-demand'),stats:document.querySelector('#reading-stats'),statsCopy:document.querySelector('#reading-stats-copy'),statsSpark:document.querySelector('#reading-stats-spark')};
 for(const name of ['panel','open','confirm','start','cancel','progress','progress-copy','counts','actions','stop','resume','retry','clear','result','status']){
   const key='emergency'+name.split('-').map(part=>part[0].toUpperCase()+part.slice(1)).join('');
   popupEls[key]=document.querySelector('#emergency-'+name);
@@ -161,7 +161,26 @@ async function popupEmergencyAction(type){
   finally{popupBusy=false;popupRender();popupFocusEmergency();}
 }
 function popupOpenOptions(section=''){chrome.runtime.openOptionsPage(()=>{if(section)chrome.tabs.query({url:chrome.runtime.getURL('ui/options.html*')},tabs=>{const tab=tabs.at(-1);if(tab?.id)chrome.tabs.update(tab.id,{url:chrome.runtime.getURL('ui/options.html#'+section)});});});}
-async function popupInit(){try{[popupTab]=await chrome.tabs.query({active:true,currentWindow:true});[popupState,popupAutomation]=await Promise.all([request('STATE_GET'),request('AUTOMATION_GET',{tabId:popupTab?.id})]);try{await popupGetSentenceGroups();}catch(error){popupSentenceGroupsLoaded=false;popupSentenceGroups.error='无法读取阅读解构设置：'+errorText(error);popupEls.sentenceGroupsError.textContent=popupSentenceGroups.error;popupEls.sentenceGroupsError.hidden=false;}await popupGetPageStatus();popupRender();const intent=popupSupported()?await request('POPUP_INTENT_TAKE',{tabId:popupTab.id,url:popupTab.url}).catch(()=>({focus:false})):{focus:false};if(intent?.focus){if(popupEmergency.phase!=='off')popupEls.emergencyPanel.focus();else popupEmergencyPrompt(true);}if(popupState.settings.assistanceMode==='ambient'){const suggestion=await request('ON_DEMAND_SUGGESTION');popupEls.suggestion.hidden=!suggestion.show;}}catch(error){popupShowError(popupEls.actionError,error);popupRender();}}
+async function popupRenderStats(){
+  const view=await request('HISTORY_GET',{days:30,limit:1}).catch(()=>null);
+  const daily=(view?.daily||[]).filter(day=>day&&(day.words||day.queries||day.finished));
+  if(!daily.length)return;
+  const sum=(rows,key)=>rows.reduce((total,day)=>total+(day[key]||0),0);
+  const words=sum(daily,'words'),queries=sum(daily,'queries'),finished=sum(daily,'finished');
+  const rate=rows=>{const w=sum(rows,'words');return w>0?sum(rows,'queries')/w*1000:null;};
+  const now=rate(daily.slice(-15)),before=rate(daily.slice(0,-15));
+  const trend=now!==null&&before!==null?(now<before*0.9?' ↓':now>before*1.1?' ↑':' →'):'';
+  const per=words>0?queries/words*1000:0;
+  popupEls.statsCopy.textContent=`近30天 · 每千词求助 ${per.toFixed(1)} 次${trend} · 读完 ${finished} 篇`;
+  const values=daily.map(day=>day.words>0?day.queries/day.words*1000:0),max=Math.max(...values,1);
+  const points=values.map((value,index)=>`${(2+index/Math.max(values.length-1,1)*116).toFixed(1)},${(22-value/max*20).toFixed(1)}`).join(' ');
+  popupEls.statsSpark.replaceChildren();
+  const line=document.createElementNS('http://www.w3.org/2000/svg','polyline');
+  line.setAttribute('points',points);line.setAttribute('fill','none');line.setAttribute('stroke','currentColor');line.setAttribute('stroke-width','1.5');line.setAttribute('stroke-linejoin','round');line.setAttribute('stroke-linecap','round');
+  popupEls.statsSpark.append(line);
+  popupEls.stats.hidden=false;
+}
+async function popupInit(){try{[popupTab]=await chrome.tabs.query({active:true,currentWindow:true});[popupState,popupAutomation]=await Promise.all([request('STATE_GET'),request('AUTOMATION_GET',{tabId:popupTab?.id})]);try{await popupGetSentenceGroups();}catch(error){popupSentenceGroupsLoaded=false;popupSentenceGroups.error='无法读取阅读解构设置：'+errorText(error);popupEls.sentenceGroupsError.textContent=popupSentenceGroups.error;popupEls.sentenceGroupsError.hidden=false;}await popupGetPageStatus();popupRender();void popupRenderStats();const intent=popupSupported()?await request('POPUP_INTENT_TAKE',{tabId:popupTab.id,url:popupTab.url}).catch(()=>({focus:false})):{focus:false};if(intent?.focus){if(popupEmergency.phase!=='off')popupEls.emergencyPanel.focus();else popupEmergencyPrompt(true);}if(popupState.settings.assistanceMode==='ambient'){const suggestion=await request('ON_DEMAND_SUGGESTION');popupEls.suggestion.hidden=!suggestion.show;}}catch(error){popupShowError(popupEls.actionError,error);popupRender();}}
 async function popupWatchPage(){
   try{if(!popupBusy&&(popupSentenceGroups.enabled||popupEmergency.phase!=='off')&&document.visibilityState==='visible'){await popupGetPageStatus();popupRender();}}
   catch{/* 轮询为尽力而为，失败下一秒重试，不写入界面 */}

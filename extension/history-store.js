@@ -12,7 +12,7 @@ const INITIAL_META = Object.freeze({
   pending:null,
 });
 
-const TYPES = new Set(['query','annotation','reading','summary']);
+const TYPES = new Set(['query','annotation','reading','summary','finish']);
 const KINDS = new Set(['word','phrase','sentence','passage']);
 const SOURCES = new Set(['personal','system']);
 const STAGES = new Set(['hint','mark','quiet']);
@@ -100,6 +100,8 @@ function sanitize(input) {
     event.modelGenerated = input.modelGenerated === true;
     return event;
   }
+
+  if (type === 'finish') return event;
 
   const term = optional(input.term,200);
   const kind = KINDS.has(input.kind) ? input.kind : null;
@@ -240,13 +242,14 @@ export function createHistoryStore({name='shisui-reading-history',indexedDB:inje
           const item = cursor.value;
           let daily = archivedByDay.get(item.day);
           if (!daily) {
-            daily = {day:item.day,activeMs:0,words:0,queries:0,passages:0,terms:new Set(),sentences:new Set()};
+            daily = {day:item.day,activeMs:0,words:0,queries:0,passages:0,finished:0,terms:new Set(),sentences:new Set()};
             archivedByDay.set(item.day,daily);
           }
           daily.activeMs += item.activeMs;
           daily.words += item.words;
           daily.queries += item.queries;
           daily.passages += item.passages;
+          daily.finished += item.finished || 0;
           if (item.termFingerprint) daily.terms.add(item.termFingerprint);
           if (item.sentenceFingerprint) daily.sentences.add(item.sentenceFingerprint);
           receipts.put({id:item.id,at:item.at,day:item.day,sequence:item.sequence || 0,archived:true});
@@ -267,11 +270,12 @@ export function createHistoryStore({name='shisui-reading-history',indexedDB:inje
               daily.words += prior.words;
               daily.queries += prior.queries;
               daily.passages += prior.passages || 0;
+              daily.finished += prior.finished || 0;
               for (const value of prior.termFingerprints || []) daily.terms.add(value);
               for (const value of prior.sentenceFingerprints || []) daily.sentences.add(value);
             }
             archive.put({
-              day:daily.day,activeMs:daily.activeMs,words:daily.words,queries:daily.queries,passages:daily.passages,
+              day:daily.day,activeMs:daily.activeMs,words:daily.words,queries:daily.queries,passages:daily.passages,finished:daily.finished,
               termFingerprints:[...daily.terms],sentenceFingerprints:[...daily.sentences],
             });
             merge(index + 1);
@@ -311,6 +315,7 @@ export function createHistoryStore({name='shisui-reading-history',indexedDB:inje
         words:event.type === 'reading' ? event.wordCount : 0,
         queries:event.type === 'query' ? 1 : 0,
         passages:event.type === 'query' && event.kind === 'passage' ? 1 : 0,
+        finished:event.type === 'finish' ? 1 : 0,
         termFingerprint,sentenceFingerprint,
         ...(event.type==='reading'?{sequence:event.sequence}:{}),
       };
@@ -419,14 +424,14 @@ export function createHistoryStore({name='shisui-reading-history',indexedDB:inje
       if (indexedCount) total = indexedTotal;
       await transactionDone(transaction);
 
-      const metrics = {activeMs:0,words:0,queries:0,terms:0,sentences:0,passages:0};
+      const metrics = {activeMs:0,words:0,queries:0,terms:0,sentences:0,passages:0,finished:0};
       const terms = new Set();
       const sentences = new Set();
       const perDay = new Map();
       const dailyFor = day => {
         let daily = perDay.get(day);
         if (!daily) {
-          daily = {day,activeMs:0,words:0,queries:0,termSet:new Set(),sentenceSet:new Set()};
+          daily = {day,activeMs:0,words:0,queries:0,finished:0,termSet:new Set(),sentenceSet:new Set()};
           perDay.set(day,daily);
         }
         return daily;
@@ -437,10 +442,12 @@ export function createHistoryStore({name='shisui-reading-history',indexedDB:inje
         metrics.words += item.words;
         metrics.queries += item.queries;
         metrics.passages += item.passages || 0;
+        metrics.finished += item.finished || 0;
         const daily = dailyFor(item.day);
         daily.activeMs += item.activeMs;
         daily.words += item.words;
         daily.queries += item.queries;
+        daily.finished += item.finished || 0;
         for (const value of item.termFingerprints || []) { terms.add(value); daily.termSet.add(value); }
         for (const value of item.sentenceFingerprints || []) { sentences.add(value); daily.sentenceSet.add(value); }
       }
@@ -450,20 +457,22 @@ export function createHistoryStore({name='shisui-reading-history',indexedDB:inje
         metrics.words += item.words;
         metrics.queries += item.queries;
         metrics.passages += item.passages;
+        metrics.finished += item.finished || 0;
         if (item.termFingerprint) terms.add(item.termFingerprint);
         if (item.sentenceFingerprint) sentences.add(item.sentenceFingerprint);
-        if (!item.activeMs && !item.words && !item.queries && !item.termFingerprint && !item.sentenceFingerprint) continue;
+        if (!item.activeMs && !item.words && !item.queries && !item.finished && !item.termFingerprint && !item.sentenceFingerprint) continue;
         const daily = dailyFor(item.day);
         daily.activeMs += item.activeMs;
         daily.words += item.words;
         daily.queries += item.queries;
+        daily.finished += item.finished || 0;
         if (item.termFingerprint) daily.termSet.add(item.termFingerprint);
         if (item.sentenceFingerprint) daily.sentenceSet.add(item.sentenceFingerprint);
       }
       metrics.terms = terms.size;
       metrics.sentences = sentences.size;
       const daily = [...perDay.values()].sort((a,b) => a.day.localeCompare(b.day)).map(item => ({
-        day:item.day,activeMs:item.activeMs,words:item.words,queries:item.queries,terms:item.termSet.size,sentences:item.sentenceSet.size,
+        day:item.day,activeMs:item.activeMs,words:item.words,queries:item.queries,finished:item.finished,terms:item.termSet.size,sentences:item.sentenceSet.size,
       }));
       const nextCursor = hasMore && lastProjection ? {at:lastProjection.at,id:lastProjection.id} : null;
       return {events:pageEvents.filter(Boolean),metrics,daily,startedAt:started?.value || null,total,nextCursor,retentionDays:RETENTION_DAYS};

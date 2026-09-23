@@ -75,6 +75,21 @@ test('visible word signals are document-bound, monotonic, and resumable without 
   expect((await history.snapshot()).metrics.words).toBe(3);store.close();
 });
 
+test('finish counts once per live session and rejects stale or unstarted pages',async()=>{
+  const {history,page,sender,store,enable}=fixture();await enable();
+  expect(await history.finish({domain:'general'},sender)).toBe(false); // no session yet
+  const session=await history.begin(sender);
+  expect(session.enabled).toBe(true);
+  expect(await history.finish({domain:'general'},sender)).toBe(true);
+  expect(await history.finish({domain:'general'},sender)).toBe(false); // once per session
+  expect(await history.finish({domain:'not-a-domain'},sender)).toBe(false); // already finished; domain validation unreachable
+  page.url='https://reading.example/other';page.sourceHash='article-two';
+  expect(await history.finish({domain:'general'},sender)).toBe(false); // article changed
+  page.url='https://reading.example/article';page.sourceHash='article-one';
+  expect(await history.finish({domain:'general'},sender)).toBe(false); // still finished for the session
+  expect((await history.snapshot()).metrics.finished).toBe(1);store.close();
+});
+
 test('known words remain visible without history consent and annotation depth applies beyond priority terms',async()=>{
   const word={id:'tech:unless',term:'unless',domain:'tech',kind:'word',knownAt:123,helpCount:0,requestedAt:0,hintPreference:null,senses:[{key:'sense',label:'exception',opportunityDays:0,lastOpportunityAt:0,lastHelpAt:0,quietUntil:0,quietCycles:0,quietOpportunityDays:0,hintPreference:null,assistedPageKey:'',definition:{hint:'',translation:''}}]};
   const {history,store}=fixture([word]);

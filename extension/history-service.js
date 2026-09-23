@@ -76,6 +76,15 @@ export function createReadingHistory({storage,session,source,paused,writable=()=
       if(config.personalization&&Date.now()>=nextAnalysisCheck){nextAnalysisCheck=Date.now()+300000;void engine.analyze().catch(()=>{});}
       return {recorded:true};
     });},
+    async finish(message,sender){return report(()=>serial(async()=>{
+      const page=await allowed(sender);if(!page)return false;
+      const all=await sessions(),row=all[page.tabId];
+      if(!row||row.epoch!==config.epoch||row.sourceHash!==page.sourceHash||row.documentId!==(sender.documentId||null)||row.finished)return false;
+      const event={id:crypto.randomUUID(),type:'finish',at:Date.now(),sessionId:row.id,domain:DOMAINS.has(message?.domain)?message.domain:'general'};
+      const recorded=await store.append(event);
+      if(recorded){row.finished=true;await saveSessions(all);}
+      return recorded;
+    }));},
     async prepareQuery(sender,requestId,request,result){return report(()=>serial(async()=>{
       const page=await allowed(sender),definition=result?.translation??result?.hint;if(!page||!result?.details?.sentenceTranslation&&!Array.isArray(result?.items)&&!((request.kind==='word'||request.kind==='phrase')&&typeof definition==='string'&&definition.trim()))return false;
       const all=await sessions(),row=await pageSession(sender,page,all);let sentence=bounded(request.context||request.text||request.items?.map(v=>v.text).join(''),4000);

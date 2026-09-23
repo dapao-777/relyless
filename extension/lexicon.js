@@ -89,6 +89,12 @@ function morphologyCandidates(word, derivations = true) {
   return candidates;
 }
 
+export function lemma(term) {
+  const surface = String(term || '').toLowerCase().trim();
+  if (!surface) return '';
+  return morphologyCandidates(surface)[0] || surface;
+}
+
 function frequency(word) {
   const exact = ENGLISH_FREQUENCY_RANK.get(word);
   let best = exact ? {rank:exact,lemma:word} : undefined;

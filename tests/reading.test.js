@@ -1,5 +1,5 @@
 import {test,expect} from 'bun:test';
-import {encounter,interact,migrateSupportWord,normalizeSenseLabel,readingEvidence,supportState} from '../extension/reading.js';
+import {encounter,familyStage,interact,migrateSupportWord,normalizeSenseLabel,readingEvidence,supportState} from '../extension/reading.js';
 
 const DAY = 86_400_000;
 const START = 10 * DAY;
@@ -44,6 +44,40 @@ test('help records the previous cross-sense help time for the history line', () 
   expect(interact(quieter, 'less', START + 7 * DAY, 'page-d', SENSE_KEY).prevHelpAt).toBe(START + 5 * DAY);
 });
 
+test('two peeks demote a matured sense back to hint while one peek only counts', () => {
+  const mature = fresh({senses:[{
+    key:SENSE_KEY,label:'hard to notice',opportunityDays:5,lastOpportunityAt:START,
+    lastHelpAt:0,quietUntil:0,quietCycles:1,quietOpportunityDays:2,
+    hintPreference:null,peekCount:0,assistedPageKey:'',
+  }]});
+  expect(supportState(mature,SENSE_KEY,START+DAY).stage).toBe('mark');
+  const once = interact(mature,'peek',START+DAY,'page-a',SENSE_KEY);
+  expect(once.senses[0].peekCount).toBe(1);
+  expect(once.senses[0].opportunityDays).toBe(5);
+  expect(once.helpCount).toBe(0);
+  expect(supportState(once,SENSE_KEY,START+DAY).stage).toBe('mark');
+  const twice = interact(once,'peek',START+DAY,'page-a',SENSE_KEY);
+  expect(twice.senses[0].peekCount).toBe(0);
+  expect(twice.senses[0].opportunityDays).toBe(0);
+  expect(supportState(twice,SENSE_KEY,START+DAY).stage).toBe('hint');
+  expect(() => interact(twice,'peek',START+DAY,'page-a','unknown-sense')).toThrow(RangeError);
+  expect(() => interact(twice,'bogus',START+DAY,'page-a',SENSE_KEY)).toThrow(RangeError);
+});
+
+test('familyStage caps kin inheritance at mark and never inherits quiet', () => {
+  const sense = stage => ({
+    key:'k-'+stage,label:stage,opportunityDays:stage === 'hint' ? 0 : 5,
+    lastOpportunityAt:START,lastHelpAt:0,
+    quietUntil:stage === 'quiet' ? START + 10 * DAY : 0,
+    quietCycles:0,quietOpportunityDays:0,hintPreference:null,peekCount:0,assistedPageKey:'',
+  });
+  const kin = stages => ({...fresh(),senses:stages.map(sense)});
+  expect(familyStage(kin(['hint']),START)).toBe('hint');
+  expect(familyStage(kin(['hint','mark']),START)).toBe('mark');
+  expect(familyStage(kin(['quiet']),START)).toBe('mark');
+  expect(familyStage(null,START)).toBe('hint');
+});
+
 test('legacy migration preserves identity and explicit less while dropping inferred history', () => {
   const legacy = {
     id:'finance:liability',term:'liability',domain:'finance',kind:'phrase',revision:7,
@@ -73,7 +107,7 @@ test('schema 4 migration normalizes bounded senses without changing their keys',
   expect(migrated.senses[0]).toEqual({
     key:'key-0',label:'meaning 0',opportunityDays:0,lastOpportunityAt:START,
     lastHelpAt:0,quietUntil:0,quietCycles:2,quietOpportunityDays:0,
-    hintPreference:'less',assistedPageKey:'page',definition:{hint:'',translation:''},
+    hintPreference:'less',peekCount:0,assistedPageKey:'page',definition:{hint:'',translation:''},
   });
   expect(new Set(migrated.senses.map(sense => sense.key)).size).toBe(8);
   expect(migrateSupportWord(migrated,5)).toEqual(migrated);
