@@ -15,8 +15,10 @@ test('every api provider appears exactly once in the catalog', () => {
 
 test('the catalog lists one entry per supported subscription channel', () => {
   const subscriptions = CATALOG_TEMPLATES.filter(item => item.category === 'subscription');
-  expect(subscriptions.map(item => item.id).sort()).toEqual([...SUBSCRIPTION_KINDS].sort());
+  // 本机模型（Gemini Nano）与订阅通道同组，但不是连接器订阅。
+  expect(subscriptions.map(item => item.id).sort()).toEqual(['local', ...SUBSCRIPTION_KINDS].sort());
   for (const kind of SUBSCRIPTION_KINDS) expect(isSubscriptionKind(kind)).toBe(true);
+  expect(isSubscriptionKind('local')).toBe(false);
   expect(subscriptions.find(item => item.id === 'grok').icon).toBe('xai');
   expect(subscriptions.find(item => item.id === 'antigravity').icon).toBe('google');
 });

@@ -585,3 +585,73 @@ test('native support partitions a bad gloss and the shared scheduler corrects on
   }finally{await fixture.close();}
 });
 
+
+function conversationReply(request, reply, answer='追问答复。') {
+  const threadId = request.params.threadId, turnId = 'turn-' + request.id;
+  reply({id: request.id, result: {turn: {id: turnId}}});
+  reply({method: 'item/completed', params: {threadId, turnId, item: {type: 'agentMessage', text: JSON.stringify({answer})}}});
+  reply({method: 'turn/completed', params: {threadId, turn: {id: turnId, status: 'completed'}}});
+}
+
+test('conversation turns reuse one retained thread per conversation', async () => {
+  const fixture = await session((request, reply) => conversationReply(request, reply));
+  try {
+    const first = await fixture.client.conversationTurn({conversationId: 'face-0001', question: '什么意思？', setup: {text: 'unless', context: 'Retry unless expired.', domain: 'tech', kind: 'word', level: 'hint'}});
+    const second = await fixture.client.conversationTurn({conversationId: 'face-0001', question: '还有别的用法吗？'});
+    expect(first).toEqual({answer: '追问答复。'});
+    expect(second).toEqual({answer: '追问答复。'});
+    const threads = fixture.sent.filter(message => message.method === 'thread/start');
+    const turns = fixture.sent.filter(message => message.method === 'turn/start');
+    expect(threads).toHaveLength(1);
+    expect(turns).toHaveLength(2);
+    const threadId = threads[0].result === undefined ? turns[0].params.threadId : null;
+    expect(turns[0].params.threadId).toBe(turns[1].params.threadId);
+    // 首轮携带完整上下文，次轮只发问题。
+    const firstInput = JSON.parse(turns[0].params.input[0].text);
+    const secondInput = JSON.parse(turns[1].params.input[0].text);
+    expect(firstInput).toMatchObject({text: 'unless', question: '什么意思？'});
+    expect(secondInput).toEqual({question: '还有别的用法吗？'});
+    // 成功轮次不退订 thread。
+    expect(fixture.sent.some(message => message.method === 'thread/unsubscribe')).toBe(false);
+    expect(fixture.client.status().features).toContain('conversation');
+  } finally { await fixture.close(); }
+});
+
+test('conversation threads expire after the TTL and resubscribe', async () => {
+  const fixture = await session((request, reply) => conversationReply(request, reply));
+  try {
+    await fixture.client.conversationTurn({conversationId: 'face-0002', question: '第一轮'});
+    const entry = fixture.client.convThreads.get('face-0002');
+    entry.at = Date.now() - 31 * 60 * 1000;
+    await fixture.client.conversationTurn({conversationId: 'face-0002', question: '第二轮'});
+    expect(fixture.sent.filter(message => message.method === 'thread/start')).toHaveLength(2);
+    expect(fixture.sent.some(message => message.method === 'thread/unsubscribe' && message.params.threadId === entry.threadId)).toBe(true);
+  } finally { await fixture.close(); }
+});
+
+test('conversation threads evict the oldest entry beyond the limit', async () => {
+  const fixture = await session((request, reply) => conversationReply(request, reply));
+  try {
+    for (let i = 0; i < 51; i++) await fixture.client.conversationTurn({conversationId: 'feed-' + String(i).padStart(8, '0'), question: '问题'});
+    expect(fixture.client.convThreads.size).toBe(50);
+    expect(fixture.client.convThreads.has('feed-00000000')).toBe(false);
+    expect(fixture.sent.some(message => message.method === 'thread/unsubscribe')).toBe(true);
+  } finally { await fixture.close(); }
+});
+
+test('a failed conversation turn drops its thread and retries fresh', async () => {
+  let fail = true;
+  const fixture = await session((request, reply) => {
+    const threadId = request.params.threadId, turnId = 'turn-' + request.id;
+    if (fail) { reply({id: request.id, result: {turn: {id: turnId}}}); reply({method: 'turn/completed', params: {threadId, turn: {id: turnId, status: 'failed', error: {message: 'boom'}}}}); return; }
+    conversationReply(request, reply);
+  });
+  try {
+    await expect(fixture.client.conversationTurn({conversationId: 'face-0003', question: '会失败'})).rejects.toThrow();
+    expect(fixture.client.convThreads.has('face-0003')).toBe(false);
+    fail = false;
+    await fixture.client.conversationTurn({conversationId: 'face-0003', question: '再来一次'});
+    const threads = fixture.sent.filter(message => message.method === 'thread/start');
+    expect(threads).toHaveLength(2);
+  } finally { await fixture.close(); }
+});

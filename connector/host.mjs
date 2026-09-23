@@ -171,6 +171,14 @@ export async function runHost({ argv = process.argv.slice(2), input = process.st
         onProgress: progress => write({ event: "translationProgress", id: request.id, data: progress }),
       }); break;
       case "historyModel": data = await client.historyModel(request.payload, { traceId: request.traceId }); break;
+      case "conversationTurn": {
+        if (typeof client.conversationTurn !== "function") throw new Error("当前连接器不支持多轮追问，请更新连接器。");
+        data = await client.conversationTurn(request.payload, {
+          traceId: request.traceId,
+          onProgress: progress => write({ event: "conversationProgress", id: request.id, data: progress }),
+        });
+        break;
+      }
       case "diagnostics": {
         if (request.payload.action === "append") {
           await diagnostics.appendMany(request.payload.events, { broadcast: false });
