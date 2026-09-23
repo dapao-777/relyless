@@ -18,7 +18,7 @@
 
   const state = {
     enabled: false, automaticReady: false, manual: false, paused: false, videoAllowed: false,
-    settings: {assistanceMode: 'ambient', rememberSupport: true, helpLanguage: 'zh', domain: 'auto'},
+    settings: {assistanceMode: 'ambient', rememberSupport: true, helpLanguage: 'zh', domain: 'auto', hintDisplay: 'direct'},
     providerConfigured: false, domain: 'general', domainResolved: false, generation: 0, contentGeneration: 0,
     viewportGeneration: 0, page: location.href, root: null, blocks: [], records: [], processed: new Set(),
     assisted: new Set(), seen: new Set(), card: null, assistRequestId: '', selectionTool: null,

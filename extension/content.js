@@ -443,6 +443,7 @@
       let style=document.getElementById('shisui-content-style');if(!style){style=document.createElement('style');style.id='shisui-content-style';style.setAttribute(OWN,'style');document.documentElement.append(style);}const readingStyle=globalThis.ShisuiReadingStyle.normalize(state.settings.readingStyle),selectors={mark,hint,block,annotation};
       const pending=mark+'[data-shisui-support-stage="pending"]'; style.textContent=globalThis.ShisuiDesign.cssFor(mark+','+hint+','+block+','+passage+','+annotation+','+action)+mark+'{cursor:text}'+hint+'{user-select:none;cursor:text}'+globalThis.ShisuiReadingStyle.css(readingStyle,selectors)+globalThis.ShisuiReadingStyle.css(readingStyle,{...selectors,block:passage})+pending+'{background:none!important;color:inherit!important;border:0!important;border-radius:3px!important;box-shadow:0 0 0 1px color-mix(in srgb,currentColor 55%,transparent)!important;text-decoration:none!important}';
       style.textContent+=block+' button{font:inherit;font-size:.85em;line-height:1.4;min-height:32px;margin:0 .25em;padding:.2em .6em;border:1px solid currentColor;border-radius:4px;background:transparent;color:inherit;cursor:pointer}'+block+' button:focus-visible{outline:2px solid currentColor;outline-offset:3px}';
+      style.textContent+=hint+'.veiled{filter:blur(4px)!important;opacity:.75!important;cursor:pointer;transition:filter .15s ease,opacity .15s ease}'+annotation+':hover '+hint+'.veiled,'+hint+'.veiled:focus-visible,'+hint+'.veiled[data-revealed]{filter:none!important;opacity:1!important}'+hint+'.veiled:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}@media(prefers-reduced-motion:reduce){'+hint+'.veiled{transition:none}}';
       const known='['+OWN+'="known-action"]';style.textContent+=annotation+'{position:relative}'+known+'{position:absolute;left:100%;top:50%;z-index:2;transform:translate(0,-50%);opacity:0;pointer-events:none;transition:opacity .12s ease;min-height:26px;box-sizing:border-box;padding:2px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);box-shadow:var(--shadow-low);color:var(--accent);font:var(--weight-medium) var(--type-support)/var(--leading-support) var(--sans);white-space:nowrap;cursor:pointer}'+known+'::before{content:"";position:absolute;inset:-6px -2px -6px -12px}'+annotation+'[data-shisui-known-visible]>'+known+','+annotation+':focus-within>'+known+','+known+':focus{opacity:1;pointer-events:auto}'+known+':hover{background:var(--accent-soft)}'+known+':focus-visible{opacity:1;pointer-events:auto;outline:var(--focus-ring);outline-offset:var(--focus-offset)}'+known+':disabled{color:var(--on-action-disabled);background:var(--action-disabled);cursor:default}';
     }
   function removeKnownWordAnnotations(wordIds){
@@ -500,6 +501,13 @@
     wrapper.addEventListener('pointerenter',show);wrapper.addEventListener('pointerleave',scheduleHide);if(wrapper.matches(':hover'))show();
     wrapper.append(button);record.knownAction=button;
   }
+  function configureHint(hint,text){
+    if(hint.textContent!==text)delete hint.dataset.revealed;
+    hint.textContent=text;
+    const veiled=state.settings.hintDisplay==='veil';hint.classList.toggle('veiled',veiled);
+    if(veiled){hint.removeAttribute('aria-hidden');hint.setAttribute('role','button');hint.tabIndex=0;hint.setAttribute('aria-label',hint.dataset.revealed!==undefined?text:'显示词注');hint.title=hint.dataset.revealed!==undefined?text:'按回车显示词注';}
+    else{hint.setAttribute('aria-hidden','true');hint.removeAttribute('role');hint.removeAttribute('aria-label');hint.removeAttribute('tabindex');hint.title=text;delete hint.dataset.revealed;}
+  }
   function layoutRecordHints(block){
     const items=[];
     for(const record of state.records)if(record.wrapper?.isConnected&&record.hint&&(!block||record.block===block))items.push(record);
@@ -508,11 +516,13 @@
   function attachRecordHint(record){
       const text=annotationText(record);
       if(!text||!record.marks.length)return;
-      if(record.hint){record.hint.textContent=text;record.hint.title=text;record.wrapper.dataset.shisuiAnnotation=text;layoutRecordHints(record.block);return;}
+      if(record.hint){configureHint(record.hint,text);record.wrapper.dataset.shisuiAnnotation=text;layoutRecordHints(record.block);return;}
       const hint=document.createElement('span'),wrapper=document.createElement('span'),last=record.marks.at(-1),active=state.card?.target;
       const ownsTarget=active&&(active.requestedRecord===record||active.support===record.target);
-      wrapper.setAttribute(OWN,'annotation');hint.className=HINT_CLASS;hint.setAttribute(OWN,'hint');hint.setAttribute('aria-hidden','true');hint.__shisuiRecord=record;hint.textContent=text;
-      wrapper.dataset.shisuiAnnotation=text;hint.title=text;
+      wrapper.setAttribute(OWN,'annotation');hint.className=HINT_CLASS;hint.setAttribute(OWN,'hint');hint.__shisuiRecord=record;configureHint(hint,text);
+      const reveal=event=>{if(!hint.classList.contains('veiled'))return;event.preventDefault();event.stopPropagation();hint.dataset.revealed='';hint.setAttribute('aria-label',hint.textContent);hint.title=hint.textContent;};
+      hint.addEventListener('click',reveal);hint.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' ')reveal(event);});
+      wrapper.dataset.shisuiAnnotation=text;
       last.before(wrapper);wrapper.append(last,hint);record.hint=hint;record.wrapper=wrapper; if(!record.manual) attachKnownAction(record);
       record.range.setStart(record.marks[0].firstChild,0);record.range.setEnd(last.firstChild,last.firstChild.length);
       if(ownsTarget)active.anchor=record.range.cloneRange();
@@ -852,7 +862,7 @@
       :host{color:var(--ink);font:var(--type-body)/var(--leading-body) var(--sans)}
       .card{padding:var(--space-4);border:1px solid var(--accent-line);border-top:3px solid var(--accent);border-radius:var(--radius-panel);background:var(--surface);box-shadow:var(--shadow-high);max-height:calc(100vh - 48px);overflow:auto;box-sizing:border-box}
       .source{font-weight:var(--weight-medium);overflow-wrap:anywhere;margin:0 0 var(--space-3);white-space:pre-wrap}.source:not(.passage){font-size:var(--type-word-head);line-height:var(--leading-title)}.answer{white-space:pre-wrap;margin:0 0 var(--space-3);overflow-wrap:anywhere;padding:var(--space-3);border:1px solid var(--teal-line);border-left:3px solid var(--teal);border-radius:var(--radius-control);background:var(--teal-soft)}.answer:empty,.explanation:empty{display:none}.explanation{margin:0 0 var(--space-4)}.explanation dt{font-size:var(--type-support);font-weight:var(--weight-medium);color:var(--muted);margin:0 0 var(--space-1)}.explanation dt:not(:first-child){border-top:1px solid var(--line);padding-top:var(--space-3)}.explanation dd{margin:0;padding:0 0 var(--space-3);white-space:pre-wrap;overflow-wrap:anywhere}.explanation dd:last-child{padding-bottom:0}
-      button,summary{font:var(--weight-medium) var(--type-control)/var(--leading-control) var(--sans);cursor:pointer}button{min-height:36px;border:1px solid var(--accent-line);border-radius:var(--radius-pill);padding:var(--space-2) var(--space-4);background:var(--accent-soft);color:var(--accent);margin:0 var(--space-2) var(--space-2) 0}button:where(:enabled):hover{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-hover)}button:where(:enabled):active{background:var(--action-hover);border-color:var(--action-hover);color:var(--on-action)}button:focus-visible,summary:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}button:disabled{border-color:var(--line);background:var(--action-disabled);color:var(--on-action-disabled);cursor:default}.minor{color:var(--muted);font-size:var(--type-support);margin:var(--space-2) 0 0}.minor:empty{display:none}.error{color:var(--danger)}details{border-top:1px solid var(--line);margin-top:var(--space-2);padding-top:var(--space-3)}summary{color:var(--muted);margin-bottom:var(--space-2)}
+      button,summary{font:var(--weight-medium) var(--type-control)/var(--leading-control) var(--sans);cursor:pointer}button{min-height:36px;border:1px solid var(--accent-line);border-radius:var(--radius-pill);padding:var(--space-2) var(--space-4);background:var(--accent-soft);color:var(--accent);margin:0 var(--space-2) var(--space-2) 0}button:where(:enabled):hover{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-hover)}button:where(:enabled):active{background:var(--action-hover);border-color:var(--action-hover);color:var(--on-action)}button:focus-visible,summary:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}button:disabled{border-color:var(--line);background:var(--action-disabled);color:var(--on-action-disabled);cursor:default}.minor{color:var(--muted);font-size:var(--type-support);margin:var(--space-2) 0 0}.minor:empty{display:none}.minor-action{min-height:0;padding:0;border:0;background:none;color:var(--accent);font:inherit;font-size:inherit;text-decoration:underline;text-underline-offset:2px;margin:0;cursor:pointer}.minor-action:hover{color:var(--accent-hover)}.minor-action:disabled{color:var(--on-action-disabled);background:none;cursor:default}.error{color:var(--danger)}details{border-top:1px solid var(--line);margin-top:var(--space-2);padding-top:var(--space-3)}summary{color:var(--muted);margin-bottom:var(--space-2)}
       .source-heading{padding:var(--space-3);border-radius:var(--radius-control);background:var(--accent-soft);display:flex;align-items:flex-start;gap:var(--space-2);margin-bottom:var(--space-3)}.source-heading .source{color:var(--accent);flex:1;min-width:0;margin:0}.listen{flex-shrink:0;margin:0;min-height:28px;padding:var(--space-1) var(--space-2)}.sentence{margin:0 0 var(--space-4)}.sentence .explanation{margin:var(--space-3) 0 0}.sentence-label{display:flex;align-items:center;justify-content:space-between;gap:var(--space-2)}
       .definition-value{color:var(--green);background:var(--green-soft);border:1px solid var(--green-line);border-radius:var(--radius-control);padding:2px 6px;font-weight:var(--weight-medium);-webkit-box-decoration-break:clone;box-decoration-break:clone}.inline-term{font-family:var(--mono);font-size:.95em;color:var(--accent);background:var(--accent-soft);border:1px solid var(--accent-line);border-radius:4px;padding:0 .25em;-webkit-box-decoration-break:clone;box-decoration-break:clone}.meaning-key{color:var(--green);font-weight:var(--weight-medium)}
 
@@ -894,15 +904,33 @@
         const support=await request('INTERACT',{wordId:view.support.wordId,senseKey:view.support.senseKey,revision:view.support.revision,action:'less'});
         if(state.card!==view)return;
         state.records=state.records.filter(record=>{if(identity(record.target)!==identity(view.support))return true;unwrapRecord(record);return false;});
-        view.support=support.support || support;view.answer.textContent='这个用法将保持安静；随时可以再次求助。';
+        view.support=support.support || support;renderSupportMeta(view);view.answer.textContent='这个用法将保持安静；随时可以再次求助。';
       }catch(error){if(state.card===view){view.answer.textContent=error.message;view.less.disabled=false;}}
     });view.less.disabled=true;
+    view.meta=document.createElement('p');view.meta.className='minor';card.append(view.meta);
+    const termRow=document.createElement('p');termRow.className='minor term-suggest';termRow.hidden=true;
+    const termLabel=document.createElement('span');termLabel.textContent='这个词反复出现 · ';
+    const termAction=document.createElement('button');termAction.type='button';termAction.className='minor-action';termAction.textContent='固定译法';
+    termAction.addEventListener('click',async()=>{const suggestion=view.termSuggestion;if(!suggestion)return;termAction.disabled=true;try{await chrome.storage.local.set({pendingTerm:suggestion});await request('OPEN_OPTIONS');termLabel.textContent='已打开术语设置 · ';termAction.remove();view.termRow.hidden=false;}catch{termAction.disabled=false;}});
+    termRow.append(termLabel,termAction);card.append(termRow);view.termRow=termRow;
     view.note=document.createElement('p');view.note.className='minor';card.append(view.note);
     view.speechNotice=document.createElement('p');view.speechNotice.className='minor';view.speechNotice.setAttribute('role','status');card.append(view.speechNotice);
     view.repair=cardButton(card,'连接或修复服务',()=>void request('OPEN_OPTIONS'));view.repair.hidden=true;
     (document.fullscreenElement || document.documentElement).append(host);positionCard(view);
     if(error){view.rescue.hidden=true;more.hidden=true;view.wrong.disabled=true;}
+    renderSupportMeta(view);
     return view;
+  }
+  function relativeAgo(timestamp){
+    const diff=Date.now()-timestamp;if(!(diff>0)||diff<90000)return'刚刚';
+    const minutes=Math.floor(diff/60000);if(minutes<60)return minutes+' 分钟前';
+    const hours=Math.floor(minutes/60);if(hours<24)return hours+' 小时前';
+    const days=Math.floor(hours/24);if(days<30)return days+' 天前';
+    const months=Math.floor(days/30);return months<12?months+' 个月前':Math.floor(months/12)+' 年前';
+  }
+  function renderSupportMeta(view){
+    const history=view.support?.history||view.target?.history||view.target?.support?.history||null;
+    view.meta.textContent=history&&history.helps>1?'第 '+history.helps+' 次求助'+(history.lastAt?' · 上次在 '+relativeAgo(history.lastAt):''):'';
   }
   function explanationText(parent,text,word,definition=''){
     parent.replaceChildren();
@@ -1048,7 +1076,7 @@
       else if(!record?.hint?.isConnected){reportResult(result,'cancelled');return;}
       reportResult(result,'ok');
       if(detail==='brief'&&confirmed&&result.source==='prepared'&&!result.support)void request('HISTORY_COMMIT',{requestId}).catch(()=>{});
-      if(detail==='brief'&&confirmed&&(result.source==='provider'||result.source==='prepared'&&result.support)){if(!current())return;const adopted=await request('ASSIST_COMMIT',{requestId});if(!current())return;view.support=adopted.support||result.support||null;view.target.support=view.support;if(cardCurrent())view.less.disabled=!view.support||!state.settings.rememberSupport;if(view.support)state.assisted.add(identity(view.support));}
+      if(detail==='brief'&&confirmed&&(result.source==='provider'||result.source==='prepared'&&result.support)){if(!current())return;const adopted=await request('ASSIST_COMMIT',{requestId});if(!current())return;view.support=adopted.support||result.support||null;view.target.support=view.support;if(cardCurrent())view.less.disabled=!view.support||!state.settings.rememberSupport;if(view.support)state.assisted.add(identity(view.support));view.termSuggestion=adopted.termSuggestion||null;if(view.termRow)view.termRow.hidden=!view.termSuggestion;renderSupportMeta(view);}
       if(stored){stored.support=view.support||stored.support;record.target.manualSupport=stored.support;}
       if(record&&view.support){Object.assign(record.target,view.support);syncRecordPresentation(record);}
       if(cardCurrent()&&view.knownWordId())view.known.hidden=false;

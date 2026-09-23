@@ -24,6 +24,7 @@ const optionsSentenceLineInputs=[...document.querySelectorAll('input[name="sente
 const optionsSentenceDensityResult=document.querySelector('#sentence-density-result');
 const optionsLookupKeyCopies=[...document.querySelectorAll('[data-lookup-key]')];
 const optionsLookupDisplayInputs=[...document.querySelectorAll('input[name="lookup-display"]')];
+const optionsHintDisplayInputs=[...document.querySelectorAll('input[name="hint-display"]')];
 const optionsPassageOpenInputs=[...document.querySelectorAll('input[name="passage-open"]')];
 const optionsSentenceAllSites=document.querySelector('#sentence-groups-all-sites');
 const optionsSentencePreview=document.querySelector('#sentence-structure-preview');
@@ -313,6 +314,7 @@ function optionsRenderAll(){
   optionsEls.readingDomain.value=optionsState.settings.domain||'auto';
   optionsRenderLookupKey();
   for(const input of optionsLookupDisplayInputs)input.checked=input.value===(optionsState.settings.lookupDisplay||'card');
+  for(const input of optionsHintDisplayInputs)input.checked=input.value===(optionsState.settings.hintDisplay||'direct');
   optionsEls.helpLanguage.value=optionsState.settings.helpLanguage||'zh';
   optionsEls.requestConcurrency.value=String(optionsState.settings.requestConcurrency||2);
   const mode=document.querySelector('input[name="assistance-mode"][value="'+(optionsState.settings.assistanceMode||'ambient')+'"]');
@@ -533,6 +535,7 @@ optionsSentenceLineInputs.forEach(input=>input.addEventListener('change',()=>voi
 optionsSentenceAllSites.addEventListener('change',async()=>{const enabled=optionsSentenceAllSites.checked;optionsSentenceAllSites.disabled=true;try{if(enabled&&!await chrome.permissions.request({origins:ALL_HOSTS}))throw new Error('未授予全部网站权限，原设置保持不变。');await optionsPatchAutomation({sentenceGroupsAllSites:enabled},enabled?'所有网站阅读解构已开启':'所有网站阅读解构已关闭');}catch(error){optionsShowError(error);optionsRenderSentenceAllSites();void optionsRefreshStructurePreview();}finally{optionsSentenceAllSites.disabled=false;}});
 document.querySelectorAll('input[name="assistance-mode"]').forEach(input=>input.addEventListener('change',()=>void optionsSavePatch({assistanceMode:input.value},input.value==='on-demand'?'已切换为仅在需要时':'已恢复阅读时辅助')));
 optionsLookupDisplayInputs.forEach(input=>input.addEventListener('change',()=>void optionsSavePatch({lookupDisplay:input.value},'查词显示方式已保存')));
+optionsHintDisplayInputs.forEach(input=>input.addEventListener('change',()=>void optionsSavePatch({hintDisplay:input.value},'行内提示显示已保存')));
 optionsEls.rememberSupport.addEventListener('change',()=>void optionsSavePatch({rememberSupport:optionsEls.rememberSupport.checked},optionsEls.rememberSupport.checked?'已开启本机支持记忆':'已关闭本机支持记忆'));
 optionsEls.automationAllSites.addEventListener('change',async()=>{const enabled=optionsEls.automationAllSites.checked;try{if(enabled&&!await chrome.permissions.request({origins:['http://*/*','https://*/*']}))throw new Error('未授予全部网站权限，原设置保持不变。');await optionsPatchAutomation({allSites:enabled},enabled?'全部网站自动辅助已开启':'全部网站自动辅助已关闭');}catch(error){optionsShowError(error);optionsRenderAutomation();}});
 optionsEls.automationVideoSites.addEventListener('change',async()=>{const enabled=optionsEls.automationVideoSites.checked;try{if(enabled&&!await chrome.permissions.request({origins:['https://www.youtube.com/*','https://m.youtube.com/*']}))throw new Error('未授予视频网站权限，原设置保持不变。');await optionsPatchAutomation({videoSites:enabled},enabled?'视频入口已开启':'视频入口已关闭');}catch(error){optionsShowError(error);optionsRenderAutomation();}});
@@ -547,7 +550,7 @@ optionsEls.detectionJevModel.addEventListener('change',()=>void optionsSaveDetec
 optionsEls.detectionJevUrl.addEventListener('change',()=>void optionsSaveDetection());
 optionsEls.detectionJevKey.addEventListener('change',()=>void optionsSaveDetection());
 optionsEls.clearDetectionJevKey.addEventListener('click',async()=>{const current=optionsDetectionSettings();if(!current.jevApiKey||!confirm('确定清除已保存的 Jev API Key 吗？'))return;const before=structuredClone(optionsState.settings);if(await optionsSavePatch({domainDetection:{...current,jevApiKey:''}},'Jev 密钥已清除'))await optionsRemoveUnusedPermissions(before,optionsState.settings);});
-optionsEls.runDomainTest.addEventListener('click',async()=>{const text=optionsEls.domainTestText.value.trim();if(!text){setResult(optionsEls.domainTestResult,'请输入正文样本。',true);return;}optionsEls.runDomainTest.disabled=true;try{const result=await request('DOMAIN_TEST',{text});const details=[`领域：${optionsDomainName(result.domain)}`,`来源：${optionsSourceLabels[result.source]||result.source}`];if(result.warning)details.push(result.warning);setResult(optionsEls.domainTestResult,details.join(' · '));}catch(error){setResult(optionsEls.domainTestResult,errorText(error),true);}finally{optionsEls.runDomainTest.disabled=false;}});
+optionsEls.runDomainTest.addEventListener('click',async()=>{const text=optionsEls.domainTestText.value.trim();if(!text){setResult(optionsEls.domainTestResult,'请输入正文样本。',true);return;}optionsEls.runDomainTest.disabled=true;try{const result=await request('DOMAIN_TEST',{text});const details=[`领域：${optionsDomainName(result.domain)}`,`来源：${optionsSourceLabels[result.source]||result.source}`];if(result.confident===false&&result.suggested&&Object.hasOwn(DOMAINS,result.suggested))details.push(`本机识别不确定；可在网站规则中手动选择${optionsDomainName(result.suggested)}`);if(result.warning)details.push(result.warning);setResult(optionsEls.domainTestResult,details.join(' · '));}catch(error){setResult(optionsEls.domainTestResult,errorText(error),true);}finally{optionsEls.runDomainTest.disabled=false;}});
 optionsEls.domainRuleForm.addEventListener('submit',async event=>{event.preventDefault();const host=optionsEls.ruleHost.value.trim().toLowerCase(),pathPrefix=optionsEls.rulePath.value.trim();const hostPattern=/^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*(:\d{1,5})?$/;if(!host||!hostPattern.test(host)||!pathPrefix.startsWith('/')){setResult(optionsEls.domainRuleResult,'请填写正确的主机名（不含协议和路径，可含端口）和以 / 开头的路径。',true);return;}const rules=optionsState.settings.domainRules||[];const rule={host,pathPrefix,domain:optionsEls.ruleDomain.value,includeSubdomains:optionsEls.ruleSubdomains.checked};if(await optionsSavePatch({domainRules:[...rules,rule]},'站点规则已添加'))event.target.reset();});
 optionsEls.termForm.addEventListener('submit',async event=>{event.preventDefault();const term=optionsEls.termSource.value.trim(),translation=optionsEls.termTranslation.value.trim();if(!term||!translation)return;const terms=optionsState.settings.customTerms||[];if(await optionsSavePatch({customTerms:[...terms,{term,translation,domain:optionsEls.termDomain.value}]},'术语已添加'))event.target.reset();});
 document.querySelectorAll('input[name="provider-kind"]').forEach(input=>input.addEventListener('change',()=>void optionsSavePatch({providerKind:input.value},input.value==='api'?'已切换至 API':'已切换至 ChatGPT 订阅')));
@@ -617,7 +620,17 @@ globalThis.optionsStartDraftProvider = providerId => {
   setResult(optionsEls.providerResult, '请填写此服务的 API Key；保存后生效。');
 };
 
+async function optionsConsumePendingTerm(value){
+  if(!value||typeof value.term!=='string'||!value.term.trim())return;
+  optionsEls.termSource.value=value.term.trim();
+  optionsEls.termTranslation.value=typeof value.translation==='string'?value.translation:'';
+  if([...optionsEls.termDomain.options].some(option=>option.value===value.domain))optionsEls.termDomain.value=value.domain;
+  location.hash='terms';optionsNavigate();
+  await chrome.storage.local.remove('pendingTerm');
+}
+chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local'&&changes.pendingTerm?.newValue)void optionsConsumePendingTerm(changes.pendingTerm.newValue);});
+
 document.querySelectorAll('input[name="usage-days"]').forEach(input=>input.addEventListener('change',()=>{optionsUsageDays=Number(input.value);void optionsRefreshUsage();}));
 optionsEls.usageClear.addEventListener('click',async()=>{if(!confirm('清空模型用量统计？只删除用量计数，不影响服务配置与阅读数据。'))return;try{await request('USAGE_CLEAR');setResult(optionsEls.usageResult,'用量统计已清空');await optionsRefreshUsage();}catch(error){setResult(optionsEls.usageResult,errorText(error),true);}});
-async function optionsInit(){optionsFillDomains(optionsEls.readingDomain,true);optionsFillDomains(optionsEls.ruleDomain,false);optionsFillDomains(optionsEls.termDomain,false);optionsEls.installCommand.textContent=`node connector/install.mjs --extension-id ${chrome.runtime.id}`;optionsNavigate();try{const densityData=await chrome.storage.local.get(['sentenceGroupsDensity','sentenceGroupsLineStyle']);optionsSentenceDensity=['coarse','medium','fine'].includes(densityData.sentenceGroupsDensity)?densityData.sentenceGroupsDensity:'medium';optionsSentenceLineStyle=['solid','dashed','dotted','wavy'].includes(densityData.sentenceGroupsLineStyle)?densityData.sentenceGroupsLineStyle:'solid';await optionsSyncState();if(!['diagnostics','history','personalization'].includes(optionsCurrentSection))await optionsRefreshSubscription();}catch(error){optionsShowError(error);}}
+async function optionsInit(){optionsFillDomains(optionsEls.readingDomain,true);optionsFillDomains(optionsEls.ruleDomain,false);optionsFillDomains(optionsEls.termDomain,false);optionsEls.installCommand.textContent=`node connector/install.mjs --extension-id ${chrome.runtime.id}`;optionsNavigate();try{const densityData=await chrome.storage.local.get(['sentenceGroupsDensity','sentenceGroupsLineStyle']);optionsSentenceDensity=['coarse','medium','fine'].includes(densityData.sentenceGroupsDensity)?densityData.sentenceGroupsDensity:'medium';optionsSentenceLineStyle=['solid','dashed','dotted','wavy'].includes(densityData.sentenceGroupsLineStyle)?densityData.sentenceGroupsLineStyle:'solid';await optionsSyncState();if(!['diagnostics','history','personalization'].includes(optionsCurrentSection))await optionsRefreshSubscription();const pending=(await chrome.storage.local.get('pendingTerm')).pendingTerm;if(pending)await optionsConsumePendingTerm(pending);}catch(error){optionsShowError(error);}}
 void optionsInit();

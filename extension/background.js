@@ -158,7 +158,7 @@ function publicState(state,trusted) {
   const providerConfigured = configured(state.settings),source=state.settings;
   const settings = trusted ? source : {
     assistanceMode:source.assistanceMode,rememberSupport:source.rememberSupport,
-    helpLanguage:source.helpLanguage,lookupKey:source.lookupKey,lookupDisplay:source.lookupDisplay,
+    helpLanguage:source.helpLanguage,lookupKey:source.lookupKey,lookupDisplay:source.lookupDisplay,hintDisplay:source.hintDisplay,
     readingStyle:globalThis.ShisuiReadingStyle.normalize(source.readingStyle),domain:source.domain,
     video:{fontSize:source.video.fontSize,theme:source.video.theme},
     readingHistory:readingHistory.publicConfig(),
@@ -174,6 +174,7 @@ function validatePatch(patch,currentSettings) {
   if (patch.automation !== undefined || patch.video !== undefined) throw new Error('请使用对应的自动开启或视频设置接口。');
   if (patch.assistanceMode !== undefined) { if (!['ambient','on-demand'].includes(patch.assistanceMode)) throw new Error('无效辅助模式。'); result.assistanceMode=patch.assistanceMode; }
   if (patch.lookupDisplay !== undefined) { if (!['card','annotation'].includes(patch.lookupDisplay)) throw new Error('无效查词展示方式。'); result.lookupDisplay=patch.lookupDisplay; }
+  if (patch.hintDisplay !== undefined) { if (!['direct','veil'].includes(patch.hintDisplay)) throw new Error('无效行内提示显示方式。'); result.hintDisplay=patch.hintDisplay; }
   if (patch.helpLanguage !== undefined) { if (!['zh','en'].includes(patch.helpLanguage)) throw new Error('无效的帮助语言。'); result.helpLanguage=patch.helpLanguage; }
   if (patch.lookupKey !== undefined) { if (typeof patch.lookupKey !== 'string' || !/^[A-Z]$/.test(patch.lookupKey)) throw new Error('查词键必须是大写 A-Z 单字符。'); result.lookupKey=patch.lookupKey; }
   if (patch.passageAction !== undefined) { const a=patch.passageAction; if (!a || typeof a !== 'object' || Array.isArray(a) || Object.keys(a).some(key=>!['open','delay'].includes(key))) throw new Error('无效的划词动作设置。'); const current=currentSettings?.passageAction||{}; result.passageAction={open:a.open===undefined?current.open:a.open==='hover'?'hover':'click',delay:a.delay===undefined?current.delay:Number.isSafeInteger(a.delay)&&a.delay>=0&&a.delay<=3000?a.delay:current.delay}; }
@@ -225,8 +226,8 @@ function mutate(operation,notify=true,includeWords=true){
   });
   writes=work.catch(()=>{});return work;
 }
-function publicSupport(word,senseKey,state){const effective=readingHistory.effective(word,senseKey);return {wordId:word.id,senseKey,stage:effective.origin==='manual'||canRemember(state)?effective.stage:'hint',locked:effective.locked,revision:word.revision};}
-function freshWord(term,scope,kind){return {id:wordId(term,scope),term,domain:scope,kind,revision:0,helpCount:0,requestedAt:0,knownAt:0,lastSeen:0,hintPreference:null,senses:[]};}
+function publicSupport(word,senseKey,state){const effective=readingHistory.effective(word,senseKey);return {wordId:word.id,senseKey,stage:effective.origin==='manual'||canRemember(state)?effective.stage:'hint',locked:effective.locked,revision:word.revision,history:{helps:Math.max(0,Math.floor(word.helpCount)||0),lastAt:Math.max(0,Math.floor(word.prevHelpAt)||0)}};}
+function freshWord(term,scope,kind){return {id:wordId(term,scope),term,domain:scope,kind,revision:0,helpCount:0,requestedAt:0,prevHelpAt:0,knownAt:0,lastSeen:0,hintPreference:null,senses:[]};}
 function analysisSettings(state){return {...state.settings,annotationPolicy:readingHistory.policy()?.annotation};}
 function withoutKnownTerms(result,words){return {...result,terms:(result.terms||[]).filter(term=>!isKnownTerm(term.term||term.text||term.occurrences?.[0]?.text,words))};}
 function suggestedStage(word,senseKey,state){if(word)return publicSupport(word,senseKey,state);const depth=readingHistory.policy()?.annotation?.depth;return {wordId:null,senseKey,stage:['hint','mark'].includes(depth)?depth:'hint',locked:false,revision:0};}
@@ -253,30 +254,6 @@ async function tabPage(tabId) {
   try { url = new URL(tab.url); } catch { throw new Error('请在普通网页点击插件后重试。'); }
   if (!['http:','https:'].includes(url.protocol)) throw new Error('此页面不支持阅读辅助。');
   return {url,key:url.origin + url.pathname};
-}
-async function pageDomain(tabId,key) {
-  const storageKey = 'pageDomain:' + tabId;
-  const stored = (await chrome.storage.session.get(storageKey))[storageKey];
-  return stored?.page === key && Object.hasOwn(DOMAINS,stored.domain) ? stored.domain : 'auto';
-}
-async function setPageDomain(message) {
-  const selected = domain(message.domain);
-  const page = await tabPage(message.tabId);
-  if (message.rememberSite && selected === 'auto') throw new Error('请先选择具体领域，再记住此网站。');
-  if (message.rememberSite) {
-    await mutate(state => {
-      const host = page.url.hostname.toLowerCase().replace(/\.$/,'');
-      const rules = state.settings.domainRules.filter(rule => !(rule.host === host && rule.pathPrefix === '/' && !rule.includeSubdomains));
-      state.settings.domainRules = normalizeDomainRules([...rules,{host,pathPrefix:'/',includeSubdomains:false,domain:selected}]);
-      invalidateClassification();
-    });
-  }
-  const storageKey = 'pageDomain:' + message.tabId;
-  if (selected === 'auto') await chrome.storage.session.remove(storageKey);
-  else await chrome.storage.session.set({[storageKey]:{page:page.key,domain:selected}});
-  await clearProviderState();
-  await chrome.tabs.sendMessage(message.tabId,{type:'SS_REFRESH'}).catch(() => {});
-  return {domain:selected};
 }
 function sampleForDomain(source) {
   if (source.length <= 6000) return source;
@@ -331,8 +308,7 @@ async function resolvePageDomain(message,sender) {
   const page = await tabPage(sender.tab.id);
   const {settings}=await load(false);
   if(settings.assistanceMode==='on-demand'&&message.explicit!==true)throw new Error('仅在明确求助时识别当前上下文领域。');
-  const manual = await pageDomain(sender.tab.id,page.key);
-  const rule = resolveRuleDomain(page.url,settings,manual);
+  const rule = resolveRuleDomain(page.url,settings);
   if (rule) return rule;
   const source = sampleForDomain(text(message.text || '','页面正文',settings.assistanceMode==='on-demand'?2000:40000,false));
   const title = text(message.title || '','标题',500,false);
@@ -349,7 +325,7 @@ async function resolvePageDomain(message,sender) {
     await sharedGuard();
     const currentSource=await readingSource(sender),current=await tabPage(sender.tab.id),latest=await load();
     if(!currentSource.active||await tabPaused(sender.tab.id)||(latest.settings.assistanceMode==='on-demand'&&message.explicit!==true))throw staleWork();
-    if(currentSource.sourceHash!==await hashValue(page.key)||current.key!==page.key||await pageDomain(sender.tab.id,page.key)!==manual)throw new Error('页面或手动领域已变化，请重试。');
+    if(currentSource.sourceHash!==await hashValue(page.key)||current.key!==page.key)throw new Error('页面已变化，请重试。');
   };
   let flight=domainInFlight.get(flightKey);
   if(!flight){
@@ -1079,13 +1055,13 @@ const operation=previous.catch(()=>{}).then(async()=>{
 }).catch(()=>{});return operation; }
 async function assistCommit(message,sender){
   const requestId=text(message.requestId,'请求编号',128),source=await readingSource(sender),key=pendingKey(source.tabId),pending=await sessionMap(key,5*60000,128),entry=pending[requestId],flightId=source.tabId+':'+requestId;
-  if(!entry||entry.status!=='complete')throw new Error(entry?.status==='failed'?entry.error:'帮助结果已过期，请重新求助。');if(entry.sourceHash!==source.sourceHash)throw new Error('页面已变化，请重新求助。');if(entry.committed)return {support:entry.commitSupport||null};if(commitFlights.has(flightId))return commitFlights.get(flightId);
+  if(!entry||entry.status!=='complete')throw new Error(entry?.status==='failed'?entry.error:'帮助结果已过期，请重新求助。');if(entry.sourceHash!==source.sourceHash)throw new Error('页面已变化，请重新求助。');if(entry.committed)return {support:entry.commitSupport||null,termSuggestion:entry.commitTermSuggestion||null};if(commitFlights.has(flightId))return commitFlights.get(flightId);
   const operation=mutate(async current=>{
     const [currentSource,currentPending]=await Promise.all([readingSource(sender),sessionMap(key,5*60000,128)]),latest=currentPending[requestId];
-    if(!latest||latest.status!=='complete'||latest.requestHash!==entry.requestHash||latest.sourceHash!==currentSource.sourceHash||latest.generation!==current.supportDataGeneration)throw new Error('帮助结果已过期，请重新求助。');if(latest.committed)return {support:latest.commitSupport||null};let support=null;
-    if(!currentSource.incognito&&latest.committable&&latest.support&&canRemember(current)){const info=latest.support;let word=current.words.find(v=>v.id===info.wordId);if(!word)word=freshWord(info.canonicalTerm,info.domain,info.kind);if(!word.senses.some(s=>s.key===info.senseKey)){if(word.senses.length>=8)return {support:null};word={...word,senses:[...word.senses,{key:info.senseKey,label:info.label,opportunityDays:0,lastOpportunityAt:0,lastHelpAt:0,quietUntil:0,quietCycles:0,quietOpportunityDays:0,hintPreference:null,assistedPageKey:'',definition:{hint:'',translation:''}}]};}const si=word.senses.findIndex(v=>v.key===info.senseKey),definition={hint:latest.result?.hint||word.senses[si].definition?.hint||'',translation:latest.result?.translation||word.senses[si].definition?.translation||''};word={...word,requestedAt:Date.now(),senses:word.senses.map((v,i)=>i===si?{...v,definition}:v)};word=interact(word,'help',Date.now(),currentSource.pageKey,info.senseKey);if(!await saveRecord(current,word))return {support:null};void noteReviewOpportunity(info.wordId,info.senseKey,{lapse:true});support=publicSupport(word,info.senseKey,current);}
-    const verified=(await sessionMap(key,5*60000,128))[requestId];if(!verified||verified.requestHash!==entry.requestHash||verified.generation!==current.supportDataGeneration)throw new Error('帮助结果已过期，请重新求助。');return {support};
-  },false).then(async result=>{const current=await sessionMap(key,5*60000,128),latest=current[requestId];if(latest?.requestHash===entry.requestHash){latest.committed=true;latest.commitSupport=result.support;latest.at=Date.now();current[requestId]=latest;await chrome.storage.session.set({[key]:current});}await readingHistory.commit(sender,requestId);return result;}).finally(()=>commitFlights.delete(flightId));commitFlights.set(flightId,operation);return operation;
+    if(!latest||latest.status!=='complete'||latest.requestHash!==entry.requestHash||latest.sourceHash!==currentSource.sourceHash||latest.generation!==current.supportDataGeneration)throw new Error('帮助结果已过期，请重新求助。');if(latest.committed)return {support:latest.commitSupport||null,termSuggestion:latest.commitTermSuggestion||null};let support=null,termSuggestion=null;
+    if(!currentSource.incognito&&latest.committable&&latest.support&&canRemember(current)){const info=latest.support;let word=current.words.find(v=>v.id===info.wordId);if(!word)word=freshWord(info.canonicalTerm,info.domain,info.kind);if(!word.senses.some(s=>s.key===info.senseKey)){if(word.senses.length>=8)return {support:null};word={...word,senses:[...word.senses,{key:info.senseKey,label:info.label,opportunityDays:0,lastOpportunityAt:0,lastHelpAt:0,quietUntil:0,quietCycles:0,quietOpportunityDays:0,hintPreference:null,assistedPageKey:'',definition:{hint:'',translation:''}}]};}const si=word.senses.findIndex(v=>v.key===info.senseKey),definition={hint:latest.result?.hint||word.senses[si].definition?.hint||'',translation:latest.result?.translation||word.senses[si].definition?.translation||''};word={...word,requestedAt:Date.now(),senses:word.senses.map((v,i)=>i===si?{...v,definition}:v)};word=interact(word,'help',Date.now(),currentSource.pageKey,info.senseKey);if(!await saveRecord(current,word))return {support:null};void noteReviewOpportunity(info.wordId,info.senseKey,{lapse:true});support=publicSupport(word,info.senseKey,current);const domains=new Set(current.words.filter(record=>record.term===word.term).map(record=>record.domain));if(domains.size>=2||word.helpCount>=3)termSuggestion={term:word.term,domain:word.domain,translation:word.senses[si]?.definition?.translation||latest.result?.translation||''};}
+    const verified=(await sessionMap(key,5*60000,128))[requestId];if(!verified||verified.requestHash!==entry.requestHash||verified.generation!==current.supportDataGeneration)throw new Error('帮助结果已过期，请重新求助。');return {support,termSuggestion};
+  },false).then(async result=>{const current=await sessionMap(key,5*60000,128),latest=current[requestId];if(latest?.requestHash===entry.requestHash){latest.committed=true;latest.commitSupport=result.support;latest.commitTermSuggestion=result.termSuggestion||null;latest.at=Date.now();current[requestId]=latest;await chrome.storage.session.set({[key]:current});}await readingHistory.commit(sender,requestId);return result;}).finally(()=>commitFlights.delete(flightId));commitFlights.set(flightId,operation);return operation;
 }
 async function encounterOffered(message,sender){if(!Array.isArray(message.words)||message.words.length>50)throw new Error('无效的阅读信号。');const source=await readingSource(sender),state=await load();if(source.incognito||!source.active||await tabPaused(source.tabId)||state.settings.assistanceMode!=='ambient'||!canRemember(state))return {words:[]};const offers=await sessionMap(offeredKey(source.tabId),30*60000,256);return mutate(async current=>{const result=[];for(const signal of message.words){if(!signal||typeof signal.id!=='string'||typeof signal.senseKey!=='string'||!Number.isInteger(signal.revision)||typeof signal.hintShown!=='boolean')throw new Error('无效的阅读信号。');const offer=offers[signal.id+':'+signal.senseKey];if(!offer||offer.sourceHash!==source.sourceHash||offer.revision!==signal.revision)continue;const word=current.words.find(v=>v.id===signal.id&&v.domain===offer.domain&&v.term===offer.canonicalTerm&&v.revision===signal.revision);if(!word||!word.senses.some(s=>s.key===signal.senseKey))continue;const updated=encounter(word,source.pageKey,Date.now(),{senseKey:signal.senseKey,hintShown:signal.hintShown});if(await saveRecord(current,updated))result.push(publicSupport(updated,signal.senseKey,current));}return {words:result};},false);}
 async function interactOffered(message,sender){if(message.action!=='less'||typeof message.wordId!=='string'||typeof message.senseKey!=='string'||!Number.isInteger(message.revision))throw new Error('无效的提示操作。');const source=await readingSource(sender);if(source.incognito)throw new Error('无痕窗口不保存词汇记录。');return mutate(async state=>{if(!canRemember(state))throw new Error('本机支持记录已关闭。');const word=state.words.find(v=>v.id===message.wordId);if(!word||word.id!==wordId(word.term,word.domain)||word.revision!==message.revision||!word.senses.some(s=>s.key===message.senseKey))throw new Error('这条支持记录已更新，请重新操作。');const updated=interact(word,'less',Date.now(),source.pageKey,message.senseKey);if(!await saveRecord(state,updated))throw new Error(dataProblem);return {support:publicSupport(updated,message.senseKey,state)};},false);}
@@ -1326,8 +1302,6 @@ async function handle(message,sender) {
     case 'SUBSCRIPTION_LOGOUT':return logoutSubscription(isSubscriptionKind(message.kind)?message.kind:nativeKind((await load(false)).settings));
     case 'MODELS_LIST':return{models:await listSubscriptionModels(message.refresh===true,isSubscriptionKind(message.kind)?message.kind:nativeKind((await load(false)).settings))};
     case 'API_MODELS_LIST':{const optionsUrl=chrome.runtime.getURL('ui/options.html');if(sender.url!==optionsUrl&&!sender.url?.startsWith(optionsUrl+'?')&&!sender.url?.startsWith(optionsUrl+'#'))throw new Error('仅设置页可以读取 API 模型列表。');return apiModelsList(message.service);}
-    case 'PAGE_DOMAIN_GET':{const page=await tabPage(message.tabId);return{domain:await pageDomain(message.tabId,page.key)};}
-    case 'PAGE_DOMAIN_SET':return setPageDomain(message);
     case 'RESOLVE_DOMAIN':return resolvePageDomain(message,sender);
     case 'DOMAIN_TEST':{const {settings}=await load(false);return classifyText(settings,sampleForDomain(text(message.text,'测试正文',40000)),text(message.title||'','标题',500,false),{force:true});}
     case 'STATE_PATCH':{

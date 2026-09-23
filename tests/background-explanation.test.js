@@ -174,11 +174,13 @@ test('sentence hierarchy is authorized, cached, presentation-independent, and dr
 
 test('invalid reading settings leave the last accepted configuration intact',async()=>{
   const readingStyle={original:{style:'border',color:'#b7791f',size:115},annotation:{style:'plain',color:'auto',size:80},translation:{style:'background',color:'#2255aa',size:130}};
-  await send({type:'STATE_PATCH',patch:{lookupKey:'Q',lookupDisplay:'annotation',readingStyle}},extensionSender);
+  await send({type:'STATE_PATCH',patch:{lookupKey:'Q',lookupDisplay:'annotation',hintDisplay:'veil',readingStyle}},extensionSender);
   await expect(send({type:'STATE_PATCH',patch:{lookupKey:'Shift'}},extensionSender)).rejects.toThrow();
   await expect(send({type:'STATE_PATCH',patch:{lookupDisplay:'popup'}},extensionSender)).rejects.toThrow();
+  await expect(send({type:'STATE_PATCH',patch:{hintDisplay:'blur'}},extensionSender)).rejects.toThrow();
   await expect(send({type:'STATE_PATCH',patch:{lookupKey:'R',readingStyle:{...readingStyle,translation:{...readingStyle.translation,size:101}}}},extensionSender)).rejects.toThrow();
-  expect((await send({type:'STATE_GET'},extensionSender)).settings).toMatchObject({lookupKey:'Q',lookupDisplay:'annotation',readingStyle});
+  expect((await send({type:'STATE_GET'},extensionSender)).settings).toMatchObject({lookupKey:'Q',lookupDisplay:'annotation',hintDisplay:'veil',readingStyle});
+  expect((await send({type:'STATE_GET'})).settings.hintDisplay).toBe('veil');
 });
 test('current document identity tolerates URL state changes but rejects replaced documents',async()=>{
   const originalUrl=tab.url,originalDocumentId=currentDocumentId;
@@ -226,8 +228,12 @@ test('assist is idempotent, persists only after adopted commit, and records one 
   expect(stored.words[0].senses).toHaveLength(1);
   expect(JSON.stringify(stored.words[0])).not.toContain('expired');
   expect(JSON.stringify(stored.words[0])).not.toContain('reading.example');
-  const cachedCalls=providerCalls;await send({...command,requestId:'req-two'});expect(providerCalls).toBe(cachedCalls);await send({type:'ASSIST_COMMIT',requestId:'req-two'});expect(stored.words[0].helpCount).toBe(2);
-  await send({...command,requestId:'req-three',bypassCache:true});expect(providerCalls).toBe(cachedCalls+1);await send({type:'ASSIST_COMMIT',requestId:'req-three'});expect(stored.words[0].helpCount).toBe(3);
+  expect(commit.support).toMatchObject({history:{helps:1,lastAt:0}});
+  const cachedCalls=providerCalls;await send({...command,requestId:'req-two'});expect(providerCalls).toBe(cachedCalls);const second=await send({type:'ASSIST_COMMIT',requestId:'req-two'});expect(stored.words[0].helpCount).toBe(2);
+  expect(second.support.history).toMatchObject({helps:2});expect(second.support.history.lastAt).toBeGreaterThan(0);expect(second.termSuggestion??null).toBeNull();
+  await send({...command,requestId:'req-three',bypassCache:true});expect(providerCalls).toBe(cachedCalls+1);const third=await send({type:'ASSIST_COMMIT',requestId:'req-three'});expect(stored.words[0].helpCount).toBe(3);
+  expect(third.termSuggestion).toMatchObject({term:'unless',domain:'tech'});expect(JSON.stringify(third.termSuggestion)).not.toContain('reading.example');
+  expect((await send({type:'ASSIST_COMMIT',requestId:'req-three'})).termSuggestion).toMatchObject({term:'unless'});
   await expect(send({...command,bypassCache:true})).rejects.toThrow('同一请求编号');await expect(send({...command,context:'Different unless context.'})).rejects.toThrow('同一请求编号');
 });
 test('identical concurrent assists share one provider inference while the latest request wins',async()=>{
