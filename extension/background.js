@@ -49,7 +49,7 @@ function writeReadingSession(values,generation){
   const work=readingSessionWrites.then(async()=>{if(cleanupPending||generation!==providerGeneration)throw staleWork();await chrome.storage.session.set(values);});
   readingSessionWrites=work.catch(()=>{});return work;
 }
-const DATA_MUTATIONS=new Set([...HISTORY_MUTATIONS].filter(type=>type!=='PERSONALIZATION_ANALYZE').concat(['STATE_PATCH','AUTOMATION_PATCH','VIDEO_SETTINGS_PATCH','ASSIST_COMMIT','ENCOUNTER','INTERACT','READING_ACTIVITY','ON_DEMAND_SUGGESTION']));
+const DATA_MUTATIONS=new Set([...HISTORY_MUTATIONS].filter(type=>type!=='PERSONALIZATION_ANALYZE').concat(['STATE_PATCH','AUTOMATION_PATCH','VIDEO_SETTINGS_PATCH','ASSIST_COMMIT','ENCOUNTER','INTERACT']));
 function assertDataAvailable(){if(cleanupPending)throw Object.assign(new Error('本机数据正在清理或清理尚未完成，请重试清理。'),{code:'NOT_READY'});}
 const ready = (async () => {
   await chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});
@@ -57,11 +57,11 @@ const ready = (async () => {
   cleanupPending=Boolean(data[CLEANUP_KEY]);
   futureSchema = data.wordSchemaVersion > 5 || data.productSchemaVersion > 1;
   if (futureSchema) { dataProblem = '不支持的数据版本，请更新扩展'; return; }
-  if (data.wordSchemaVersion === 5 && data.productSchemaVersion === 1) { try { await chrome.storage.local.set({settings:normalizeSettings(data.settings),words:(data.words||[]).map(word=>({...word,knownAt:normalizeKnownAt(word.knownAt)}))});schemaReady = true;void chrome.storage.local.remove(['glossCache','supportCache']).catch(()=>{}); } catch { dataProblem = '本机数据迁移未完成，可导出或清理；当前仅提供无记忆帮助。'; } return; }
+  if (data.wordSchemaVersion === 5 && data.productSchemaVersion === 1) { try { await chrome.storage.local.set({settings:normalizeSettings(data.settings),words:(data.words||[]).map(word=>({...word,knownAt:normalizeKnownAt(word.knownAt),senses:Array.isArray(word.senses)?word.senses.map(({peekCount:ignored,...sense})=>sense):word.senses}))});await chrome.storage.local.remove(['glossCache','supportCache','supportUsage','onDemandSuggestionShownAt']);schemaReady = true; } catch { dataProblem = '本机数据迁移未完成，可导出或清理；当前仅提供无记忆帮助。'; } return; }
   const words = (data.words || []).map(word => migrateSupportWord(word,data.wordSchemaVersion || 1)).filter(Boolean);
-  const update = {wordSchemaVersion:5,productSchemaVersion:1,words,settings:normalizeSettings(data.settings),supportDataGeneration:Number.isInteger(data.supportDataGeneration) ? data.supportDataGeneration : 0,supportUsage:Array.isArray(data.supportUsage) ? data.supportUsage : [],onDemandSuggestionShownAt:Number.isFinite(data.onDemandSuggestionShownAt) ? data.onDemandSuggestionShownAt : 0};
+  const update = {wordSchemaVersion:5,productSchemaVersion:1,words,settings:normalizeSettings(data.settings),supportDataGeneration:Number.isInteger(data.supportDataGeneration) ? data.supportDataGeneration : 0};
   if (!Object.hasOwn(data,'legacyReadingArchive')) update.legacyReadingArchive = structuredClone(data.words || []);
-  try { await chrome.storage.local.set(update); schemaReady = true; void chrome.storage.local.remove(['glossCache','supportCache']).catch(()=>{}); }
+  try { await chrome.storage.local.set(update); await chrome.storage.local.remove(['glossCache','supportCache','supportUsage','onDemandSuggestionShownAt']); schemaReady = true; }
   catch { dataProblem = '本机数据迁移未完成，可导出或清理；当前仅提供无记忆帮助。'; }
 })();
 async function passiveReadingState(){await dataReady;assertDataAvailable();const data=await chrome.storage.local.get(['settings','words']);return {settings:normalizeSettings(data.settings),words:schemaReady?data.words||[]:[]};}
@@ -142,7 +142,7 @@ onSubscriptionStatus(subscription => handleSubscriptionStatus('grok',subscriptio
 onSubscriptionStatus(subscription => handleSubscriptionStatus('antigravity',subscription),'antigravity');
 async function load(includeWords=true) {
   await dataReady;await readingHistory.ready;assertDataAvailable();
-  const keys=['settings','subscriptionLinked','grokSubscriptionLinked','antigravitySubscriptionLinked','supportDataGeneration','supportUsage','onDemandSuggestionShownAt'];
+  const keys=['settings','subscriptionLinked','grokSubscriptionLinked','antigravitySubscriptionLinked','supportDataGeneration'];
   if(includeWords)keys.push('words');
   const data = await chrome.storage.local.get(keys);
   const settings = normalizeSettings(data.settings);
@@ -151,7 +151,7 @@ async function load(includeWords=true) {
   if ((settings.providerKind === 'chatgpt' || settings.domainDetection.mode === 'chatgpt') && data.subscriptionLinked) await ensureSubscription('chatgpt');
   if ((settings.providerKind === 'grok' || settings.domainDetection.mode === 'grok') && data.grokSubscriptionLinked) await ensureSubscription('grok');
   if ((settings.providerKind === 'antigravity' || settings.domainDetection.mode === 'antigravity') && data.antigravitySubscriptionLinked) await ensureSubscription('antigravity');
-  return {settings,words:includeWords&&schemaReady ? data.words || [] : [],supportDataGeneration:data.supportDataGeneration || 0,supportUsage:Array.isArray(data.supportUsage) ? data.supportUsage : [],onDemandSuggestionShownAt:Number.isFinite(data.onDemandSuggestionShownAt)?data.onDemandSuggestionShownAt:0};
+  return {settings,words:includeWords&&schemaReady ? data.words || [] : [],supportDataGeneration:data.supportDataGeneration || 0};
 }
 function canRemember(state) { return schemaReady && !futureSchema && !cleanupPending && state.settings.rememberSupport; }
 function publicState(state,trusted) {
@@ -563,7 +563,7 @@ async function supportBatch(message,sender){
   const validated=normalizeSupportResult({items:tasks.map(item=>({id:item.id,...decisions.get(item.id)}))},tasks,article),validDecisions=new Map(validated.items.map(({id,...value})=>[id,value]));
   await refreshRequestedDefinitions(tasks,validDecisions,latest,generation,source);latest=await load();
   const output=[],offers=[];
-  for(const item of enriched){const owned=tasks.filter(task=>owners.get(task.id)===item.id),decision=owned.map(task=>validDecisions.get(task.id)).find(value=>value?.target)||validDecisions.get(owned[0]?.id)||{target:null,meaning:{en:null,zh:null},sentenceTranslation:null},details={meaning:decision.meaning,sentenceTranslation:decision.sentenceTranslation,coverage:article.coverage};const remembered=!source.incognito&&canRemember(latest)?latest.words:[];if(decision.target===null||isKnownTerm(decision.target.text,remembered)){output.push({id:item.id,target:null,...details});continue;}const canonical=resolveCanonicalTerm(decision.target.text,item.domain,remembered),id=wordId(canonical,item.domain),word=remembered.find(value=>value.id===id),label=normalizeSenseLabel(decision.target.sense),known=word?.senses?.find(value=>value.label===label),resolvedKey=known?{key:known.key}:await resolveSenseKey(word,label,item.sentence),senseKey=resolvedKey.key,support=suggestedStage(word,senseKey,latest),target={...decision.target,...support,wordId:id,personal:Boolean(word)};output.push({id:item.id,target,...details});offers.push({...target,canonicalTerm:canonical,domain:item.domain,kind:target.text.trim().includes(' ')?'phrase':'word'});}
+  for(const item of enriched){const owned=tasks.filter(task=>owners.get(task.id)===item.id),decision=owned.map(task=>validDecisions.get(task.id)).find(value=>value?.target)||validDecisions.get(owned[0]?.id)||{target:null,meaning:{en:null,zh:null},sentenceTranslation:null},details={meaning:decision.meaning,sentenceTranslation:decision.sentenceTranslation,coverage:article.coverage};const remembered=!source.incognito&&canRemember(latest)?latest.words:[];if(decision.target===null||isKnownTerm(decision.target.text,remembered)){output.push({id:item.id,target:null,...details});continue;}const canonical=resolveCanonicalTerm(decision.target.text,item.domain,remembered),id=wordId(canonical,item.domain),word=remembered.find(value=>value.id===id),label=normalizeSenseLabel(decision.target.sense),known=word?.senses?.find(value=>value.label===label),resolvedKey=known?{key:known.key}:await resolveSenseKey(word,label,item.sentence),senseKey=resolvedKey.key;const support=suggestedStage(word,senseKey,latest);const target={...decision.target,...support,wordId:id,personal:Boolean(word)};output.push({id:item.id,target,...details});offers.push({...target,canonicalTerm:canonical,domain:item.domain,kind:target.text.trim().includes(' ')?'phrase':'word'});}
   if(offers.length)await registerOffers(source,offers,generation,supportGeneration);return readingHistory.offer(sender,enriched,{items:output});
 }
 const SENTENCE_GROUPS_DENSITY_KEY='sentenceGroupsDensity';
@@ -600,13 +600,14 @@ async function sentenceGroupsBatch(message,sender){
   const source=await readingSource(sender);if(!source.active||await tabPaused(source.tabId))throw new Error('网页当前未活动，暂停阅读解构。');
   const modeKey=sentenceModeKey(source.tabId),mode=(await chrome.storage.session.get(modeKey))[modeKey];if(!mode?.enabled||mode.page!==source.sourceHash)throw new Error('当前页面未启用阅读解构模式。');
   let state=await load();
+  if(state.settings.assistanceMode==='on-demand'&&message.explicit!==true)throw new Error('仅在需要时不自动解构正文；请先选择句子并主动请求。');
   const items=normalizeSentenceGroupItems(message.items),generation=providerGeneration,modeGeneration=mode.generation;
   // 解构默认不判卷（频次高）；开启后按策略先选路，缓存键随之切换到实际服务。
   {const route=await chooseRoute('sentenceGroups',summarizeRequest('sentenceGroups',{text:items.map(item=>item.sentence).join('\n').slice(0,900)}),{settings:state.settings,guard:async()=>{},incognito:source.incognito});
    if(route.kind==='api'&&route.service)state={...state,settings:{...state.settings,providerKind:'api',activeApiServiceId:route.service.id}};
    else if(route.kind==='subscription')state={...state,settings:{...state.settings,providerKind:'chatgpt'}};}
   const service=state.settings.providerKind==='api'?activeApiProvider(state.settings):state.settings.subscriptionModel;
-  const guard=async()=>{const [latest,current,currentMode]=await Promise.all([load(),readingSource(sender),chrome.storage.session.get(modeKey).then(value=>value[modeKey])]);if(generation!==providerGeneration||state.supportDataGeneration!==latest.supportDataGeneration||current.sourceHash!==source.sourceHash||!current.active||await tabPaused(source.tabId)||!currentMode?.enabled||currentMode.page!==source.sourceHash||currentMode.generation!==modeGeneration)throw staleWork();};
+  const guard=async()=>{const [latest,current,currentMode]=await Promise.all([load(),readingSource(sender),chrome.storage.session.get(modeKey).then(value=>value[modeKey])]);if(latest.settings.assistanceMode==='on-demand'&&message.explicit!==true||generation!==providerGeneration||state.supportDataGeneration!==latest.supportDataGeneration||current.sourceHash!==source.sourceHash||!current.active||await tabPaused(source.tabId)||!currentMode?.enabled||currentMode.page!==source.sourceHash||currentMode.generation!==modeGeneration)throw staleWork();};
   if(!configured(state.settings))throw new Error('请先连接服务；原文保持不变。');if(state.settings.providerKind==='api')await requireApiPermission(service);
   await sentenceGroupCacheReady;
   const serviceKey=await hashValue(JSON.stringify([state.settings.providerKind,service])),keys=await Promise.all(items.map(item=>hashValue(JSON.stringify([SENTENCE_GROUPS_POLICY_VERSION,serviceKey,item.sentence])))),groupsByKey=new Map(),newItems=[],claimed=new Set(),now=Date.now();
@@ -642,7 +643,7 @@ function personalTargets(item,state,article) {
   return targets;
 }
 async function preparedSupport(message,sender){await lexiconReady();const source=await readingSource(sender),state=await load(),items=normalizeSupportItems(message.items),article=normalizePreparationContext(message.article);if(!source.active||await tabPaused(source.tabId))throw new Error('网页当前未活动。');let output=items.map(item=>({id:item.id,targets:!source.incognito&&canRemember(state)?personalTargets(item,state,article):[]}));const offers=[];for(let i=0;i<items.length;i++)for(const target of output[i].targets)if(target.senseKey)offers.push({...target,canonicalTerm:state.words.find(v=>v.id===target.wordId)?.term,domain:items[i].domain,kind:target.text.trim().includes(' ')?'phrase':'word'});if(offers.length)await registerOffers(source,offers,providerGeneration,state.supportDataGeneration);const latest=await load();output=output.map(item=>({...item,targets:item.targets.filter(target=>source.incognito||!isKnownTerm(target.text,latest.words))}));return readingHistory.offer(sender,items,{items:output});}
-async function recordPreparedIntent(command,source,snapshot){await lexiconReady();if(source.incognito)return null;return mutate(async state=>{if(state.supportDataGeneration!==snapshot.supportDataGeneration)return null;await recordUsage(state,'help',source,command.requestId);if(!canRemember(state)||command.kind==='passage')return null;const canonical=resolveCanonicalTerm(command.text,command.domain,state.words),id=wordId(canonical,command.domain);let word=state.words.find(v=>v.id===id)||freshWord(canonical,command.domain,command.kind);word={...word,requestedAt:Date.now(),lastSeen:Date.now(),revision:(word.revision||0)+1};return await saveRecord(state,word)?word:null;},false).catch(()=>null);}
+async function recordPreparedIntent(command,source,snapshot){await lexiconReady();if(source.incognito)return null;return mutate(async state=>{if(state.supportDataGeneration!==snapshot.supportDataGeneration)return null;if(!canRemember(state)||command.kind==='passage')return null;const canonical=resolveCanonicalTerm(command.text,command.domain,state.words),id=wordId(canonical,command.domain);let word=state.words.find(v=>v.id===id)||freshWord(canonical,command.domain,command.kind);word={...word,requestedAt:Date.now(),lastSeen:Date.now(),revision:(word.revision||0)+1};return await saveRecord(state,word)?word:null;},false).catch(()=>null);}
 async function preparedAssist(message,sender){
   await lexiconReady();
   const source=await readingSource(sender),snapshot=await load(),generation=providerGeneration,article=normalizePreparationContext(message.article);
@@ -776,7 +777,6 @@ async function emergencyEnd(message,sender,trusted){
     await chrome.storage.session.remove(key);void pruneBackgroundQueue();return {ended:true};});
 }
 function cancelSuppression(word,senseKey,pageKey){const index=word.senses.findIndex(s=>s.key===senseKey);if(index<0)return word;const senses=word.senses.map((s,i)=>i===index?{...s,opportunityDays:0,lastHelpAt:Date.now(),quietUntil:0,quietCycles:0,quietOpportunityDays:0,hintPreference:null,assistedPageKey:pageKey}:s);return {...word,hintPreference:null,senses,revision:(word.revision||0)+1,lastSeen:Date.now()};}
-async function recordUsage(state,event,source,requestId){if(source.incognito||!canRemember(state))return;const cutoffDate=new Date();cutoffDate.setUTCHours(0,0,0,0);cutoffDate.setUTCDate(cutoffDate.getUTCDate()-27);const cutoff=cutoffDate.toISOString().slice(0,10),usage=state.supportUsage.filter(row=>typeof row.day==='string'&&row.day>=cutoff),day=source.day;let row=usage.find(v=>v.day===day);if(!row){row={day,eligiblePages:0,helpRequests:0,hintsShown:0,errors:0,pageKeys:[]};usage.push(row);}if(event==='eligible'){if(!row.pageKeys.includes(source.sourceHash)&&row.pageKeys.length<50){row.pageKeys=[...row.pageKeys,source.sourceHash];row.eligiblePages++;}}else if(event==='hint')row.hintsShown++;else if(event==='error')row.errors++;else if(event==='help')row.helpRequests++;state.supportUsage=usage.slice(-28);}
 const assistQueues=new Map(),assistResultFlights=new Map(),commitFlights=new Map();
 // 追问会话：本机 30 天问答仓库。服务Worker 里 indexedDB 可用；隐私窗口与不可用环境都不落盘。
 const conversationStore=typeof indexedDB!=='undefined'?createConversationStore():null;
@@ -1028,7 +1028,7 @@ const operation=previous.catch(()=>{}).then(async()=>{
   const pending=await sessionMap(key,5*60000,128);let entry=pending[command.requestId];
   if(entry){if(entry.requestHash!==requestHash)throw new Error('同一请求编号不能用于不同内容。');if(entry.status==='complete')return entry.result;if(entry.status==='failed')throw new Error(entry.error);if(entry.status==='running')throw new Error('请求已中断，请重新求助');}
   entry={requestHash,sourceHash:source.sourceHash,generation:state.supportDataGeneration,status:'running',at:Date.now(),committable:false};for(const id of Object.keys(pending))if(id!==command.requestId&&!pending[id].committed)delete pending[id];pending[command.requestId]=entry;await writeReadingSession({[key]:Object.fromEntries(Object.entries(pending).slice(-128))},providerVersion);
-  if(recordIntent&&command.detail==='brief'&&!source.incognito)await mutate(async current=>{await recordUsage(current,'help',source,command.requestId);if(canRemember(current)&&command.wordId&&command.senseKey){const canonical=resolveCanonicalTerm(command.text,command.domain,current.words),word=current.words.find(v=>v.id===command.wordId&&v.id===wordId(canonical,command.domain)&&v.domain===command.domain&&v.term===canonical);if(word){const updated=cancelSuppression(word,command.senseKey,source.pageKey);await saveRecord(current,updated);}}},false).catch(()=>{});
+  if(recordIntent&&command.detail==='brief'&&!source.incognito)await mutate(async current=>{if(canRemember(current)&&command.wordId&&command.senseKey){const canonical=resolveCanonicalTerm(command.text,command.domain,current.words),word=current.words.find(v=>v.id===command.wordId&&v.id===wordId(canonical,command.domain)&&v.domain===command.domain&&v.term===canonical);if(word){const updated=cancelSuppression(word,command.senseKey,source.pageKey);await saveRecord(current,updated);}}},false).catch(()=>{});
   try{
     let result,support=null,sourceName='provider';
     if(!configured(state.settings)){const reference=command.level==='rescue'&&command.kind!=='passage'?localReferenceFor(command.text,command.domain,state.settings):null;if(!reference)throw new Error('请先连接服务。');result={level:'rescue',translation:reference.translation};sourceName='local-reference';}
@@ -1102,7 +1102,7 @@ async function assistCommit(message,sender){
   },false).then(async result=>{const current=await sessionMap(key,5*60000,128),latest=current[requestId];if(latest?.requestHash===entry.requestHash){latest.committed=true;latest.commitSupport=result.support;latest.commitTermSuggestion=result.termSuggestion||null;latest.at=Date.now();current[requestId]=latest;await chrome.storage.session.set({[key]:current});}await readingHistory.commit(sender,requestId);return result;}).finally(()=>commitFlights.delete(flightId));commitFlights.set(flightId,operation);return operation;
 }
 async function encounterOffered(message,sender){if(!Array.isArray(message.words)||message.words.length>50)throw new Error('无效的阅读信号。');const source=await readingSource(sender),state=await load();if(source.incognito||!source.active||await tabPaused(source.tabId)||state.settings.assistanceMode!=='ambient'||!canRemember(state))return {words:[]};const offers=await sessionMap(offeredKey(source.tabId),30*60000,256);return mutate(async current=>{const result=[];for(const signal of message.words){if(!signal||typeof signal.id!=='string'||typeof signal.senseKey!=='string'||!Number.isInteger(signal.revision)||typeof signal.hintShown!=='boolean')throw new Error('无效的阅读信号。');const offer=offers[signal.id+':'+signal.senseKey];if(!offer||offer.sourceHash!==source.sourceHash||offer.revision!==signal.revision)continue;const word=current.words.find(v=>v.id===signal.id&&v.domain===offer.domain&&v.term===offer.canonicalTerm&&v.revision===signal.revision);if(!word||!word.senses.some(s=>s.key===signal.senseKey))continue;const updated=encounter(word,source.pageKey,Date.now(),{senseKey:signal.senseKey,hintShown:signal.hintShown});if(await saveRecord(current,updated))result.push(publicSupport(updated,signal.senseKey,current));}return {words:result};},false);}
-async function interactOffered(message,sender){if(message.action!=='less'||typeof message.wordId!=='string'||typeof message.senseKey!=='string'||!Number.isInteger(message.revision))throw new Error('无效的提示操作。');const source=await readingSource(sender);if(source.incognito)throw new Error('无痕窗口不保存词汇记录。');return mutate(async state=>{if(!canRemember(state))throw new Error('本机支持记录已关闭。');const word=state.words.find(v=>v.id===message.wordId);if(!word||word.id!==wordId(word.term,word.domain)||word.revision!==message.revision||!word.senses.some(s=>s.key===message.senseKey))throw new Error('这条支持记录已更新，请重新操作。');const updated=interact(word,'less',Date.now(),source.pageKey,message.senseKey);if(!await saveRecord(state,updated))throw new Error(dataProblem);return {support:publicSupport(updated,message.senseKey,state)};},false);}
+async function interactOffered(message,sender){if(!['less'].includes(message.action)||typeof message.wordId!=='string'||typeof message.senseKey!=='string'||!Number.isInteger(message.revision))throw new Error('无效的提示操作。');const source=await readingSource(sender);if(source.incognito)throw new Error('无痕窗口不保存词汇记录。');return mutate(async state=>{if(!canRemember(state))throw new Error('本机支持记录已关闭。');const word=state.words.find(v=>v.id===message.wordId);if(!word||word.id!==wordId(word.term,word.domain)||word.revision!==message.revision||!word.senses.some(s=>s.key===message.senseKey))throw new Error('这条支持记录已更新，请重新操作。');const updated=interact(word,message.action,Date.now(),source.pageKey,message.senseKey);if(!await saveRecord(state,updated))throw new Error(dataProblem);return {support:publicSupport(updated,message.senseKey,state)};},false);}
 async function clearSupportSessions(){const all=await chrome.storage.session.get(null),keys=Object.keys(all).filter(k=>k.startsWith('offeredSupport:')||k.startsWith('pendingAssists:')||k.startsWith('assistResultCache:'));if(keys.length)await chrome.storage.session.remove(keys);assistQueues.clear();assistResultFlights.clear();commitFlights.clear();}
 async function clearReadingData(scope,recovering=false){
   if(futureSchema)throw new Error('不支持的数据版本，请更新扩展');
@@ -1121,9 +1121,9 @@ async function clearReadingData(scope,recovering=false){
     await readingHistory.clear({notify:false});
     const current=await chrome.storage.local.get('supportDataGeneration');
     const update={supportDataGeneration:(Number(current.supportDataGeneration)||0)+1};
-    if(target==='memory')Object.assign(update,{words:[],supportUsage:[],onDemandSuggestionShownAt:0});
+    if(target==='memory')Object.assign(update,{words:[]});
     await chrome.storage.local.set(update);
-    if(target==='memory'){await chrome.storage.local.remove(['legacyReadingArchive','glossCache','supportCache']);await clearModelUsage();}
+    if(target==='memory'){await chrome.storage.local.remove(['legacyReadingArchive','glossCache','supportCache','supportUsage','onDemandSuggestionShownAt']);await clearModelUsage();}
     await Promise.allSettled([domainCacheWrites,sentenceGroupCacheWrites,emergencyWrites,readingSessionWrites]);
     await clearSupportSessions();
     const all=await chrome.storage.session.get(null);
@@ -1136,9 +1136,7 @@ async function clearReadingData(scope,recovering=false){
   catch(error){dataProblem='清理尚未完成，已暂停数据访问，请重试清理。';throw error;}
   finally{cleanupFlight=null;}
 }
-async function readingExport(){await ready;const data=await chrome.storage.local.get(['wordSchemaVersion','productSchemaVersion','words','legacyReadingArchive','supportUsage','onDemandSuggestionShownAt']);return {schemaVersion:data.wordSchemaVersion,productSchemaVersion:data.productSchemaVersion,records:data.words||[],legacyRecords:data.legacyReadingArchive||[],supportUsage:data.supportUsage||[],onDemandSuggestionShownAt:data.onDemandSuggestionShownAt||0};}
-async function readingActivity(message,sender){if(!['eligible','hint','error'].includes(message.event))throw new Error('无效的阅读活动。');const source=await readingSource(sender);if(source.incognito||!source.active||await tabPaused(source.tabId))return {recorded:false};return mutate(async state=>{if(state.settings.assistanceMode!=='ambient'||!configured(state.settings)||!canRemember(state))return {recorded:false};await recordUsage(state,message.event,source);return {recorded:true};},false,false);}
-async function onDemandSuggestion(sender){if(sender.tab?.incognito)return {show:false};return mutate(state=>{const cutoffDate=new Date();cutoffDate.setUTCHours(0,0,0,0);cutoffDate.setUTCDate(cutoffDate.getUTCDate()-27);const cutoff=cutoffDate.toISOString().slice(0,10),rows=state.supportUsage.filter(row=>typeof row.day==='string'&&row.day>=cutoff),days=rows.filter(row=>row.eligiblePages>0).length,blocked=rows.some(row=>row.helpRequests||row.hintsShown||row.errors);if(state.onDemandSuggestionShownAt||days<14||blocked)return {show:false};state.onDemandSuggestionShownAt=Date.now();return {show:true};},false,false);}
+async function readingExport(){await ready;const data=await chrome.storage.local.get(['wordSchemaVersion','productSchemaVersion','words','legacyReadingArchive']);return {schemaVersion:data.wordSchemaVersion,productSchemaVersion:data.productSchemaVersion,records:data.words||[],legacyRecords:data.legacyReadingArchive||[]};}
 
 const tabPauseKey = tabId => 'automationPaused:' + tabId;
 
@@ -1296,7 +1294,7 @@ async function handle(message,sender) {
   if(sender.id!==chrome.runtime.id)throw new Error('不受信任的请求。');
   await dataReady;if(!['MEMORY_CLEAR','HISTORY_CLEAR'].includes(message.type))assertDataAvailable();if(futureSchema&&HISTORY_MUTATIONS.has(message.type))throw new Error('不支持的数据版本，请更新扩展');
   const trusted=Boolean(sender.url?.startsWith(chrome.runtime.getURL('')));
-  const contentAllowed=['HISTORY_BEGIN','HISTORY_TICK','HISTORY_COMMIT','HISTORY_ANNOTATION','DIAGNOSTICS_RENDER','STATE_GET','RESOLVE_DOMAIN','ANALYZE','SUPPORT_BATCH','SENTENCE_GROUPS_GET','SENTENCE_GROUPS_SET','SENTENCE_GROUPS_BATCH','ASSIST','ASSIST_PREVIEW','ASSIST_COMMIT','ENCOUNTER','INTERACT','READING_ACTIVITY','YOUTUBE_CAPTIONS_BRIDGE','OPEN_OPTIONS','AUTO_BOOTSTRAP_CHECK','PAGE_ACTIVITY_SET','VIDEO_SETTINGS_PATCH','PREPARED_SUPPORT','PREPARED_ASSIST','PASSAGE_TRANSLATE', 'EMERGENCY_TRANSLATE', 'EMERGENCY_CANCEL_REQUEST', 'EMERGENCY_END','LANGUAGE_PROFILE','CONVERSATION_ASK','CONVERSATION_STOP','CONVERSATION_HISTORY','CONVERSATION_DELETE','REVIEW_DUE','REVIEW_FEEDBACK','ROUTING_STATS']
+  const contentAllowed=['HISTORY_BEGIN','HISTORY_TICK','HISTORY_COMMIT','HISTORY_ANNOTATION','DIAGNOSTICS_RENDER','STATE_GET','RESOLVE_DOMAIN','ANALYZE','SUPPORT_BATCH','SENTENCE_GROUPS_GET','SENTENCE_GROUPS_SET','SENTENCE_GROUPS_BATCH','ASSIST','ASSIST_PREVIEW','ASSIST_COMMIT','ENCOUNTER','INTERACT','YOUTUBE_CAPTIONS_BRIDGE','OPEN_OPTIONS','AUTO_BOOTSTRAP_CHECK','PAGE_ACTIVITY_SET','VIDEO_SETTINGS_PATCH','PREPARED_SUPPORT','PREPARED_ASSIST','PASSAGE_TRANSLATE', 'EMERGENCY_TRANSLATE', 'EMERGENCY_CANCEL_REQUEST', 'EMERGENCY_END','LANGUAGE_PROFILE','CONVERSATION_ASK','CONVERSATION_STOP','CONVERSATION_HISTORY','CONVERSATION_DELETE','REVIEW_DUE','REVIEW_FEEDBACK','ROUTING_STATS']
   if(!trusted&&!contentAllowed.includes(message.type)&&message.type!=='WORD_PREFERENCE_SET')throw new Error('此操作不能从网页执行。');
   switch(message.type){
     case 'HISTORY_GET':return readingHistory.snapshot({days:message.days,search:message.search,domain:message.domain,type:message.eventType||'',cursor:message.cursor,limit:Number.isSafeInteger(message.limit)&&message.limit>0?message.limit:300});
@@ -1380,9 +1378,7 @@ async function handle(message,sender) {
     }
     case 'ENCOUNTER':return encounterOffered(message,sender);
     case 'INTERACT':return interactOffered(message,sender);
-    case 'READING_ACTIVITY':return readingActivity(message,sender);
     case 'READING_DATA_EXPORT':return readingExport();
-    case 'ON_DEMAND_SUGGESTION':return onDemandSuggestion(sender);
     case 'MEMORY_CLEAR':return clearReadingData('memory');
     case 'OPEN_OPTIONS':await chrome.runtime.openOptionsPage();return{};
     default:throw new Error('未知请求。');

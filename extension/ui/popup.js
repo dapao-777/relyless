@@ -1,6 +1,6 @@
 import {request, errorText, upsertSiteEntry} from '../shared.js';
 
-const popupEls={status:document.querySelector('#page-status'),hostname:document.querySelector('#site-hostname'),siteAuto:document.querySelector('#site-auto'),siteAutoNote:document.querySelector('#site-auto-note'),siteAutoError:document.querySelector('#site-auto-error'),toggle:document.querySelector('#toggle-page'),toggleLabel:document.querySelector('#toggle-label'),pageNote:document.querySelector('#page-note'),actionError:document.querySelector('#action-error'),sentenceGroups:document.querySelector('#sentence-groups'),sentenceGroupsNote:document.querySelector('#sentence-groups-note'),sentenceGroupsError:document.querySelector('#sentence-groups-error'),options:document.querySelector('#open-options'),serviceWarning:document.querySelector('#service-warning'),serviceWarningCopy:document.querySelector('#service-warning-copy'),repairService:document.querySelector('#repair-service'),suggestion:document.querySelector('#on-demand-suggestion'),chooseOnDemand:document.querySelector('#choose-on-demand')};
+const popupEls={status:document.querySelector('#page-status'),hostname:document.querySelector('#site-hostname'),siteAuto:document.querySelector('#site-auto'),siteAutoNote:document.querySelector('#site-auto-note'),siteAutoError:document.querySelector('#site-auto-error'),toggle:document.querySelector('#toggle-page'),toggleLabel:document.querySelector('#toggle-label'),pageNote:document.querySelector('#page-note'),actionError:document.querySelector('#action-error'),sentenceGroups:document.querySelector('#sentence-groups'),sentenceGroupsNote:document.querySelector('#sentence-groups-note'),sentenceGroupsError:document.querySelector('#sentence-groups-error'),options:document.querySelector('#open-options'),serviceWarning:document.querySelector('#service-warning'),serviceWarningCopy:document.querySelector('#service-warning-copy'),repairService:document.querySelector('#repair-service')};
 const popupUnsupported=document.querySelector('#unsupported-page');
 const popupPageControls=document.querySelector('#page-controls');
 for(const name of ['panel','open','confirm','start','cancel','progress','progress-copy','counts','actions','stop','resume','retry','clear','result','status']){
@@ -121,7 +121,6 @@ async function popupToggleSentenceGroups(){
   }catch(error){try{await popupGetSentenceGroups();}catch{}popupSentenceGroups.error='无法更新阅读解构：'+errorText(error);}
   finally{popupBusy=false;popupRender();}
 }
-async function popupChooseOnDemand(){popupEls.chooseOnDemand.disabled=true;try{popupState=await request('STATE_PATCH',{patch:{assistanceMode:'on-demand'}});popupEls.suggestion.hidden=true;if(popupSupported()){const result=await chrome.tabs.sendMessage(popupTab.id,{type:'SS_REFRESH'}).catch(()=>null);if(result?.ok)popupEnabled=Boolean(result.data.enabled);}popupRender();}catch(error){popupShowError(popupEls.actionError,error);popupEls.chooseOnDemand.disabled=false;}}
 function popupFocusEmergency(){const button=!popupEls.emergencyConfirm.hidden?popupEls.emergencyStart:popupEmergency.active?popupEls.emergencyStop:!popupEls.emergencyResume.hidden?popupEls.emergencyResume:popupEmergency.phase==='off'?popupEls.emergencyOpen:popupEls.emergencyClear;if(!button.disabled)button.focus();}
 function popupEmergencyPrompt(show,{resume=false,focus=true}={}){
   popupEmergencyResume=Boolean(show&&resume&&!popupEmergency.active&&popupEmergency.total>0&&['stopped','error'].includes(popupEmergency.phase));
@@ -175,10 +174,6 @@ async function popupInit(){
     popupRender();
     const intent=await request('POPUP_INTENT_TAKE',{tabId:popupTab.id,url:popupTab.url}).catch(()=>({focus:false}));
     if(intent?.focus){if(popupEmergency.phase!=='off')popupEls.emergencyPanel.focus();else popupEmergencyPrompt(true);}
-    if(popupState.settings.assistanceMode==='ambient'){
-      const suggestion=await request('ON_DEMAND_SUGGESTION');
-      popupEls.suggestion.hidden=!suggestion.show;
-    }
   }catch(error){if(popupSupported())popupShowError(popupEls.actionError,error);popupRender();}
 }
 async function popupWatchPage(){
@@ -186,7 +181,7 @@ async function popupWatchPage(){
   catch{/* 轮询为尽力而为，失败下一秒重试，不写入界面 */}
   finally{setTimeout(()=>void popupWatchPage(),1000);}
 }
-popupEls.toggle.addEventListener('click',()=>void popupTogglePage());popupEls.siteAuto.addEventListener('change',()=>void popupToggleSite());popupEls.sentenceGroups.addEventListener('change',()=>void popupToggleSentenceGroups());popupEls.options.addEventListener('click',()=>popupOpenOptions());popupEls.repairService.addEventListener('click',()=>popupOpenOptions('service'));popupEls.chooseOnDemand.addEventListener('click',()=>void popupChooseOnDemand());popupEls.emergencyOpen.addEventListener('click',()=>popupEmergencyPrompt(true));popupEls.emergencyCancel.addEventListener('click',()=>popupEmergencyPrompt(false));popupEls.emergencyStart.addEventListener('click',()=>void popupEmergencyStart());popupEls.emergencyStop.addEventListener('click',()=>void popupEmergencyAction('SS_EMERGENCY_STOP'));popupEls.emergencyResume.addEventListener('click',()=>popupEmergencyPrompt(true,{resume:true}));popupEls.emergencyRetry.addEventListener('click',()=>void popupEmergencyAction('SS_EMERGENCY_RETRY'));popupEls.emergencyClear.addEventListener('click',()=>void popupEmergencyAction('SS_EMERGENCY_END'));
+popupEls.toggle.addEventListener('click',()=>void popupTogglePage());popupEls.siteAuto.addEventListener('change',()=>void popupToggleSite());popupEls.sentenceGroups.addEventListener('change',()=>void popupToggleSentenceGroups());popupEls.options.addEventListener('click',()=>popupOpenOptions());popupEls.repairService.addEventListener('click',()=>popupOpenOptions('service'));popupEls.emergencyOpen.addEventListener('click',()=>popupEmergencyPrompt(true));popupEls.emergencyCancel.addEventListener('click',()=>popupEmergencyPrompt(false));popupEls.emergencyStart.addEventListener('click',()=>void popupEmergencyStart());popupEls.emergencyStop.addEventListener('click',()=>void popupEmergencyAction('SS_EMERGENCY_STOP'));popupEls.emergencyResume.addEventListener('click',()=>popupEmergencyPrompt(true,{resume:true}));popupEls.emergencyRetry.addEventListener('click',()=>void popupEmergencyAction('SS_EMERGENCY_RETRY'));popupEls.emergencyClear.addEventListener('click',()=>void popupEmergencyAction('SS_EMERGENCY_END'));
 popupEls.emergencyConfirm.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();popupEmergencyPrompt(false);}});
 chrome.storage.onChanged.addListener((changes,area)=>{if(area!=='local'||!changes.settings)return;void Promise.all([request('STATE_GET'),request('AUTOMATION_GET',{tabId:popupTab?.id}).catch(()=>null)]).then(([state,automation])=>{popupState=state;if(automation)popupAutomation=automation;popupRender();}).catch(()=>{});});
 void popupInit().then(()=>setTimeout(()=>void popupWatchPage(),1000));

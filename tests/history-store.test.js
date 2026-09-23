@@ -235,6 +235,13 @@ test('compacts to exact daily unions across archived and retained overlap withou
   store.close();
 });
 
+test('passive completion events cannot enter reading history', async () => {
+  const store = storeFor();
+  expect(await store.append({id:'f1',type:'finish',at:BASE,sessionId:'s',domain:'general'})).toBe(false);
+  expect((await store.snapshot()).events).toEqual([]);
+  store.close();
+});
+
 test('atomically upgrades v1 data with compound event indexes and compact archive', async () => {
   const name = `history-v1-${++sequence}`;
   await new Promise((resolve,reject) => {

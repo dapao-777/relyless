@@ -101,6 +101,7 @@ function sanitize(input) {
     return event;
   }
 
+
   const term = optional(input.term,200);
   const kind = KINDS.has(input.kind) ? input.kind : null;
   const source = SOURCES.has(input.source) ? input.source : null;

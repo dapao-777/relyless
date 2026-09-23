@@ -107,9 +107,9 @@ legend { padding: 0; margin-bottom: var(--space-3); font-size: var(--type-contro
 .emergency-panel:focus-visible { outline: var(--focus-ring); outline-offset: -2px; }
 .site-auto-panel .switch input:checked:not(:disabled) + span { background: var(--violet); }
 .site-auto-panel p { margin-top: var(--space-1); }
-.popup-shell .notice, .suggestion-panel { margin: var(--space-2) var(--space-4); padding: var(--space-3); background: var(--surface-subtle); border: 0; border-radius: var(--radius-control); font-size: var(--type-support); }
-.popup-shell .notice p, .suggestion-panel p { color: var(--muted); margin: var(--space-1) 0 var(--space-2); overflow-wrap: anywhere; }
-.popup-shell .notice button, .suggestion-panel button { padding: var(--space-1) var(--space-3); min-height: 32px; }
+.popup-shell .notice { margin: var(--space-2) var(--space-4); padding: var(--space-3); background: var(--surface-subtle); border: 0; border-radius: var(--radius-control); font-size: var(--type-support); }
+.popup-shell .notice p { color: var(--muted); margin: var(--space-1) 0 var(--space-2); overflow-wrap: anywhere; }
+.popup-shell .notice button { padding: var(--space-1) var(--space-3); min-height: 32px; }
 .unsupported-page { display: grid; gap: var(--space-3); padding: var(--space-6) var(--space-4) var(--space-8); }
 .unsupported-page h2 { font-size: var(--type-section-title); }
 .unsupported-page p { color: var(--muted); font-size: var(--type-support); line-height: var(--leading-support); }

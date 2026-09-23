@@ -44,6 +44,8 @@ test('help records the previous cross-sense help time for the history line', () 
   expect(interact(quieter, 'less', START + 7 * DAY, 'page-d', SENSE_KEY).prevHelpAt).toBe(START + 5 * DAY);
 });
 
+
+
 test('legacy migration preserves identity and explicit less while dropping inferred history', () => {
   const legacy = {
     id:'finance:liability',term:'liability',domain:'finance',kind:'phrase',revision:7,

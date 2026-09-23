@@ -23,8 +23,9 @@
     viewportGeneration: 0, page: location.href, root: null, blocks: [], records: [], processed: new Set(),
     assisted: new Set(), seen: new Set(), card: null, assistRequestId: '', selectionTool: null,
     passageRequests: new Set(), knownWords: new Set(), knownBlocks: new Map(), observer: null, intersections: null,
-    scrollTimer: 0, rebuildTimer: 0, opportunityTimer: 0, usageTimer: 0, eligibleMs: 0, lastTick: 0,
-    events: new Set(), failed: false, windowKey: '', policyKey: '', refreshing: 0, article: null, emergency: null,
+    scrollTimer: 0, rebuildTimer: 0, opportunityTimer: 0,
+    startedAt: Date.now(),
+    failed: false, windowKey: '', policyKey: '', refreshing: 0, article: null, emergency: null,
     siteRule: null, siteRuleChecked: false,
   };
 

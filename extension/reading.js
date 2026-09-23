@@ -186,6 +186,7 @@ export function supportState(word, senseKey, now = Date.now()) {
   return {stage:integerNonNegative(sense.opportunityDays) < HINT_OPPORTUNITY_DAYS ? 'hint' : 'mark'};
 }
 
+
 function requireSense(word, senseKey) {
   if (!word || typeof word !== 'object') throw new TypeError('A support word is required');
   const index = Array.isArray(word.senses) ? word.senses.findIndex(sense => sense?.key === senseKey) : -1;
@@ -257,9 +258,9 @@ export function interact(word, action, now = Date.now(), pageKey = '', senseKey)
     ? (word.senses || []).reduce((latest,entry) => Math.max(latest,timestamp(entry?.lastHelpAt)),0)
     : timestamp(word.prevHelpAt);
 
-  const sense = action === 'less'
-    ? {...stored,hintPreference:'less',quietUntil:0}
-    : {...stored,opportunityDays:0,lastOpportunityAt:0,lastHelpAt:current,quietUntil:0,
+  let sense;
+  if (action === 'less') sense = {...stored,hintPreference:'less',quietUntil:0};
+  else sense = {...stored,opportunityDays:0,lastOpportunityAt:0,lastHelpAt:current,quietUntil:0,
       quietCycles:0,quietOpportunityDays:0,hintPreference:null,
       assistedPageKey:typeof pageKey === 'string' ? pageKey : ''};
   const next = replaceSense(word,index,sense,current);
