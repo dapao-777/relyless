@@ -3,7 +3,10 @@ import {normalizeSettings,wordId} from '../extension/shared.js';
 
 import {event,pick,remove,isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
 import {createConversationStore} from '../extension/conversation-store.js';
-import 'fake-indexeddb/auto';
+import {indexedDB,IDBKeyRange} from 'fake-indexeddb';
+
+globalThis.indexedDB=indexedDB;
+globalThis.IDBKeyRange=IDBKeyRange;
 
 function capabilityResponse(body){const format=body.response_format?.json_schema;if(format?.name!=='relyless_capability')return null;return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({probe:format.schema.properties.probe.enum[0]})}}]});}
 function withCapabilityProbe(handler){return async(url,options)=>capabilityResponse(JSON.parse(options.body))||handler(url,options);}
@@ -178,18 +181,6 @@ test('invalid reading settings leave the last accepted configuration intact',asy
   await expect(send({type:'STATE_PATCH',patch:{lookupKey:'R',readingStyle:{...readingStyle,translation:{...readingStyle.translation,size:101}}}},extensionSender)).rejects.toThrow();
   expect((await send({type:'STATE_GET'},extensionSender)).settings).toMatchObject({lookupKey:'Q',lookupDisplay:'annotation',hintDisplay:'veil',readingStyle});
   expect((await send({type:'STATE_GET'})).settings.hintDisplay).toBe('veil');
-});
-test('content pages can accept a suggested domain and optionally remember the site',async()=>{
-  const before=(await send({type:'STATE_GET'},extensionSender)).settings.domainRules.length;
-  expect(await send({type:'PAGE_DOMAIN_SET',domain:'medical',rememberSite:true})).toEqual({domain:'medical'});
-  const rules=(await send({type:'STATE_GET'},extensionSender)).settings.domainRules;
-  const rule=rules.at(-1);
-  expect(rules.length).toBe(before+1);
-  expect(rule).toMatchObject({host:'reading.example',pathPrefix:'/',domain:'medical',includeSubdomains:false});
-  await send({type:'STATE_PATCH',patch:{domainRules:rules.filter(item=>!(item.host==='reading.example'&&item.domain==='medical'))}},extensionSender);
-  await expect(send({type:'PAGE_DOMAIN_SET',domain:'bogus'})).rejects.toThrow();
-  const detached={id:'backend-fixture',url:'https://reading.example/article',frameId:0};
-  await expect(send({type:'PAGE_DOMAIN_SET',domain:'tech'},detached)).rejects.toThrow('目标页面');
 });
 test('sense keys merge semantically close labels through warm local embeddings',async()=>{
   const previousSend=chrome.runtime.sendMessage,previousOffscreen=chrome.offscreen,savedWords=stored.words;
@@ -389,7 +380,7 @@ test('compatible JSON API serves provider checks, assistance, support, and class
     return Response.json({choices:[{message:{role:'assistant',content:JSON.stringify(envelope?.properties?.result?{result,...(extraWrapper?{tool_calls:[]}:{})}:result)},finish_reason:'stop'}]});
   }});
   try{
-    globalThis.fetch=fetchBefore;
+    globalThis.fetch=Bun.fetch;
     await send({type:'STATE_PATCH',patch:{providerKind:'api',apiServices:[{id:'loopback',name:'Loopback',baseUrl:'http://127.0.0.1:'+server.port,model:'deepseek-flash',apiKey:'loopback-only-key'}],activeApiServiceId:'loopback'}},extensionSender);
     expect(await send({type:'API_MODELS_LIST',service:{...stored.settings.apiServices[0],model:''}},extensionSender)).toEqual({models:[{id:'deepseek-flash',name:'DeepSeek Flash'}]});
     const beforeWords=structuredClone(stored.words),beforeUsage=structuredClone(stored.supportUsage);

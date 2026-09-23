@@ -265,32 +265,6 @@ async function tabPage(tabId) {
   if (!['http:','https:'].includes(url.protocol)) throw new Error('此页面不支持阅读辅助。');
   return {url,key:url.origin + url.pathname};
 }
-async function pageDomain(tabId,key) {
-  const storageKey = 'pageDomain:' + tabId;
-  const stored = (await chrome.storage.session.get(storageKey))[storageKey];
-  return stored?.page === key && Object.hasOwn(DOMAINS,stored.domain) ? stored.domain : 'auto';
-}
-async function setPageDomain(message,sender) {
-  const selected = domain(message.domain);
-  const tabId = Number.isInteger(message.tabId) ? message.tabId : sender?.tab?.id;
-  if (!Number.isInteger(tabId)) throw new Error('缺少目标页面。');
-  const page = await tabPage(tabId);
-  if (message.rememberSite && selected === 'auto') throw new Error('请先选择具体领域，再记住此网站。');
-  if (message.rememberSite) {
-    await mutate(state => {
-      const host = page.url.hostname.toLowerCase().replace(/\.$/,'');
-      const rules = state.settings.domainRules.filter(rule => !(rule.host === host && rule.pathPrefix === '/' && !rule.includeSubdomains));
-      state.settings = {...state.settings,domainRules:normalizeDomainRules([...rules,{host,pathPrefix:'/',includeSubdomains:false,domain:selected}])};
-      invalidateClassification();
-    });
-  }
-  const storageKey = 'pageDomain:' + tabId;
-  if (selected === 'auto') await chrome.storage.session.remove(storageKey);
-  else await chrome.storage.session.set({[storageKey]:{page:page.key,domain:selected}});
-  await clearProviderState();
-  await chrome.tabs.sendMessage(tabId,{type:'SS_REFRESH'}).catch(() => {});
-  return {domain:selected};
-}
 function sampleForDomain(source) {
   if (source.length <= 6000) return source;
   const middle = Math.floor(source.length / 2);
@@ -344,8 +318,7 @@ async function resolvePageDomain(message,sender) {
   const page = await tabPage(sender.tab.id);
   const {settings}=await load(false);
   if(settings.assistanceMode==='on-demand'&&message.explicit!==true)throw new Error('仅在明确求助时识别当前上下文领域。');
-  const manual = await pageDomain(sender.tab.id,page.key);
-  const rule = resolveRuleDomain(page.url,settings,manual);
+  const rule = resolveRuleDomain(page.url,settings);
   if (rule) return rule;
   const source = sampleForDomain(text(message.text || '','页面正文',settings.assistanceMode==='on-demand'?2000:40000,false));
   const title = text(message.title || '','标题',500,false);
@@ -362,7 +335,7 @@ async function resolvePageDomain(message,sender) {
     await sharedGuard();
     const currentSource=await readingSource(sender),current=await tabPage(sender.tab.id),latest=await load();
     if(!currentSource.active||await tabPaused(sender.tab.id)||(latest.settings.assistanceMode==='on-demand'&&message.explicit!==true))throw staleWork();
-    if(currentSource.sourceHash!==await hashValue(page.key)||current.key!==page.key||await pageDomain(sender.tab.id,page.key)!==manual)throw new Error('页面或手动领域已变化，请重试。');
+    if(currentSource.sourceHash!==await hashValue(page.key)||current.key!==page.key)throw new Error('页面已变化，请重试。');
   };
   let flight=domainInFlight.get(flightKey);
   if(!flight){
@@ -1305,7 +1278,7 @@ async function handle(message,sender) {
   if(sender.id!==chrome.runtime.id)throw new Error('不受信任的请求。');
   await dataReady;if(!['MEMORY_CLEAR','HISTORY_CLEAR'].includes(message.type))assertDataAvailable();if(futureSchema&&HISTORY_MUTATIONS.has(message.type))throw new Error('不支持的数据版本，请更新扩展');
   const trusted=Boolean(sender.url?.startsWith(chrome.runtime.getURL('')));
-  const contentAllowed=['HISTORY_BEGIN','HISTORY_TICK','HISTORY_COMMIT','HISTORY_ANNOTATION','DIAGNOSTICS_RENDER','STATE_GET','RESOLVE_DOMAIN','ANALYZE','SUPPORT_BATCH','SENTENCE_GROUPS_GET','SENTENCE_GROUPS_SET','SENTENCE_GROUPS_BATCH','ASSIST','ASSIST_PREVIEW','ASSIST_COMMIT','ENCOUNTER','INTERACT','READING_ACTIVITY','YOUTUBE_CAPTIONS_BRIDGE','OPEN_OPTIONS','AUTO_BOOTSTRAP_CHECK','PAGE_ACTIVITY_SET','VIDEO_SETTINGS_PATCH','PAGE_DOMAIN_SET','PREPARED_SUPPORT','PREPARED_ASSIST','PASSAGE_TRANSLATE', 'EMERGENCY_TRANSLATE', 'EMERGENCY_CANCEL_REQUEST', 'EMERGENCY_END','LANGUAGE_PROFILE','CONVERSATION_ASK','CONVERSATION_STOP','CONVERSATION_HISTORY','CONVERSATION_DELETE','REVIEW_DUE','REVIEW_FEEDBACK','ROUTING_STATS']
+  const contentAllowed=['HISTORY_BEGIN','HISTORY_TICK','HISTORY_COMMIT','HISTORY_ANNOTATION','DIAGNOSTICS_RENDER','STATE_GET','RESOLVE_DOMAIN','ANALYZE','SUPPORT_BATCH','SENTENCE_GROUPS_GET','SENTENCE_GROUPS_SET','SENTENCE_GROUPS_BATCH','ASSIST','ASSIST_PREVIEW','ASSIST_COMMIT','ENCOUNTER','INTERACT','READING_ACTIVITY','YOUTUBE_CAPTIONS_BRIDGE','OPEN_OPTIONS','AUTO_BOOTSTRAP_CHECK','PAGE_ACTIVITY_SET','VIDEO_SETTINGS_PATCH','PREPARED_SUPPORT','PREPARED_ASSIST','PASSAGE_TRANSLATE', 'EMERGENCY_TRANSLATE', 'EMERGENCY_CANCEL_REQUEST', 'EMERGENCY_END','LANGUAGE_PROFILE','CONVERSATION_ASK','CONVERSATION_STOP','CONVERSATION_HISTORY','CONVERSATION_DELETE','REVIEW_DUE','REVIEW_FEEDBACK','ROUTING_STATS']
   if(!trusted&&!contentAllowed.includes(message.type)&&message.type!=='WORD_PREFERENCE_SET')throw new Error('此操作不能从网页执行。');
   switch(message.type){
     case 'HISTORY_GET':return readingHistory.snapshot({days:message.days,search:message.search,domain:message.domain,type:message.eventType||'',cursor:message.cursor,limit:Number.isSafeInteger(message.limit)&&message.limit>0?message.limit:300});
@@ -1349,8 +1322,6 @@ async function handle(message,sender) {
     case 'SUBSCRIPTION_LOGOUT':return logoutSubscription(isSubscriptionKind(message.kind)?message.kind:nativeKind((await load(false)).settings));
     case 'MODELS_LIST':return{models:await listSubscriptionModels(message.refresh===true,isSubscriptionKind(message.kind)?message.kind:nativeKind((await load(false)).settings))};
     case 'API_MODELS_LIST':{const optionsUrl=chrome.runtime.getURL('ui/options.html');if(sender.url!==optionsUrl&&!sender.url?.startsWith(optionsUrl+'?')&&!sender.url?.startsWith(optionsUrl+'#'))throw new Error('仅设置页可以读取 API 模型列表。');return apiModelsList(message.service);}
-    case 'PAGE_DOMAIN_GET':{const page=await tabPage(message.tabId);return{domain:await pageDomain(message.tabId,page.key)};}
-    case 'PAGE_DOMAIN_SET':return setPageDomain(message,sender);
     case 'RESOLVE_DOMAIN':return resolvePageDomain(message,sender);
     case 'DOMAIN_TEST':{const {settings}=await load(false);return classifyText(settings,sampleForDomain(text(message.text,'测试正文',40000)),text(message.title||'','标题',500,false),{force:true});}
     case 'STATE_PATCH':{

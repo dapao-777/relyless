@@ -162,7 +162,8 @@ class ServiceCatalogController {
 
       const section = document.createElement('div');
       section.className = 'directory-section';
-      const heading = document.createElement('h4');
+      const heading = document.createElement('div');
+      heading.className = 'directory-section-heading';
       const label = document.createElement('span');
       label.textContent = category.label;
       const size = document.createElement('small');
