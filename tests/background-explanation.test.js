@@ -1354,6 +1354,21 @@ test('Gemini Nano answers brief hints locally and records local usage',async()=>
     expect(localRow?.input).toBe(11);
   }finally{globalThis.chrome=previous;globalThis.fetch=previousFetch;}
 });
+test('incognito Nano help does not persist usage statistics',async()=>{
+  const previous=globalThis.chrome,previousFetch=globalThis.fetch;
+  const fixture=isolatedChrome({wordSchemaVersion:5,productSchemaVersion:1,words:[],supportDataGeneration:0,settings:{providerKind:'local',apiServices:[],activeApiServiceId:'',domainDetection:{mode:'local'},rememberSupport:false}},{id:'nano-incognito'});
+  fixture.api.offscreen={hasDocument:async()=>true};
+  fixture.api.runtime.sendMessage=async message=>message?.type==='NANO_ASSIST'?{ok:true,data:{text:JSON.stringify({level:'hint',hint:'a private hint',sense:'local sense'}),inputTokens:11}}:message?.type==='NANO_STATUS'?{ok:true,data:{availability:'available'}}:{ok:false,error:'unexpected local call'};
+  globalThis.chrome=fixture.api;globalThis.fetch=async()=>{throw new Error('remote provider must not be called');};
+  try{
+    await import('../extension/background.js?nano-incognito='+crypto.randomUUID());
+    const sender={url:'https://isolated.example/read',tab:{id:91,url:'https://isolated.example/read',active:true,incognito:true},frameId:0};
+    fixture.api.tabs.get=async()=>({...sender.tab});
+    expect((await isolatedSend(fixture,{type:'ASSIST',detail:'brief',requestId:'nano-private',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint'},sender)).hint).toBe('a private hint');
+    const view=await isolatedSend(fixture,{type:'USAGE_STATS',days:1});
+    expect(view.usage?.models?.some(model=>model.provider==='local')).toBe(false);
+  }finally{globalThis.chrome=previous;globalThis.fetch=previousFetch;}
+});
 
 test('Gemini Nano failures fall back to a configured api service',async()=>{
   const previous=globalThis.chrome,previousFetch=globalThis.fetch;

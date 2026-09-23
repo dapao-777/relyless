@@ -1200,11 +1200,11 @@ const operation=previous.catch(()=>{}).then(async()=>{
                   const nano=await nanoAssist({instructions:ASSISTANCE_INSTRUCTIONS,prompt:JSON.stringify(request),schema:assistanceSchema(request)});
                   const validated=normalizeAssistanceResult(JSON.parse(nano.text),request);
                   nanoAvailability='available';
-                  void recordModelUsage({provider:'local',service:'Gemini Nano（本机）',model:'gemini-nano',operation:'ASSIST',ok:true,usage:{input:nano.inputTokens,output:null},inputChars:JSON.stringify(request).length,outputChars:String(nano.text||'').length,outputText:String(nano.text||'')});
+                  if(!source.incognito)void recordModelUsage({provider:'local',service:'Gemini Nano（本机）',model:'gemini-nano',operation:'ASSIST',ok:true,usage:{input:nano.inputTokens,output:null},inputChars:JSON.stringify(request).length,outputChars:String(nano.text||'').length,outputText:String(nano.text||'')});
                   nanoUsed=true;
                   return validated;
                 }catch(error){
-                  void recordModelUsage({provider:'local',service:'Gemini Nano（本机）',model:'gemini-nano',operation:'ASSIST',ok:false,inputChars:JSON.stringify(request).length});
+                  if(!source.incognito)void recordModelUsage({provider:'local',service:'Gemini Nano（本机）',model:'gemini-nano',operation:'ASSIST',ok:false,inputChars:JSON.stringify(request).length});
                   await diagnostics.event(diagnostics.trace(message),'provider','error',{code:'LOCAL_FALLBACK',message:error?.message||'本机模型失败'}).catch(()=>{});
                   if(routed.providerKind==='local')throw error instanceof Error?error:new Error('本机模型调用失败。');
                 }
