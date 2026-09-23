@@ -1,6 +1,9 @@
 import {expect,test} from 'bun:test';
-import 'fake-indexeddb/auto';
+import {indexedDB,IDBKeyRange} from 'fake-indexeddb';
 import {isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
+
+globalThis.indexedDB=indexedDB;
+globalThis.IDBKeyRange=IDBKeyRange;
 
 test('a saved multi-key service can be disconnected without changing other services', async () => {
   const previousChrome = globalThis.chrome;

@@ -774,7 +774,7 @@
 </div>
 <div class="detail-heading">
 <div class="detail-title-row">
-<h4 id="catalog-hero-title">ChatGPT 订阅</h4>
+<h2 id="catalog-hero-title">ChatGPT 订阅</h2>
 <span class="catalog-active-badge" id="catalog-hero-active-badge" hidden="">当前默认</span>
 <button type="button" class="catalog-set-default-btn" id="catalog-hero-set-default" hidden="">设为默认使用</button>
 <a id="catalog-hero-website" class="service-website-link" href="#" target="_blank" rel="noopener noreferrer" hidden="">
@@ -1216,7 +1216,7 @@
     <span class="guide-eyebrow">RELYLESS · 阅读指南</span>
     <h3>词义卡住，看注释。长句绕住，看解构。</h3>
     <p><strong>注释</strong>帮你理解一个词在这里是什么意思；<strong>阅读解构</strong>帮你看清一句话里谁在做什么、哪些部分是补充。两者可以配合，也可以只开需要的一个。目标是接着读原文，而不是把页面换成中文。</p>
-    <p>第一次使用：先到 <a href="#service">模型服务</a> 连接 ChatGPT 订阅或 API 并测试连接，再打开英文文章，点击扩展图标，在弹窗中开启本页或打开「阅读解构」。需要的网站可在 <a href="#sites">网站规则</a> 设置自动开启。</p>
+    <p>第一次使用：先到 <a href="#service">模型服务</a> 连接订阅服务或 API 并测试连接。自备 API 可一行填写一个密钥并逐项检查；只用一个密钥也兼容。再打开普通 HTTP 或 HTTPS 英文文章，点击扩展图标，在弹窗中开启本页或打开「阅读解构」。浏览器内部页和扩展页无法开启阅读辅助，弹窗会显示使用说明入口。需要的网站可在 <a href="#sites">网站规则</a> 设置自动开启。</p>
   </article>
 
   <article class="paper-card guide-scene" aria-labelledby="guide-annotation-heading">
@@ -1230,7 +1230,7 @@
     <ol class="guide-list">
       <li><strong>主动查这个词：</strong>按住 <kbd data-lookup-key>D</kbd> 并单击原词。这是你当前设置的查词键；只悬停或普通单击不会求助，在输入框里打字也不会触发。</li>
       <li><strong>选适合自己的呈现：</strong>在 <a href="#assistance">阅读偏好</a> 选「解释卡片」，可以继续看语境；选「顶部释义」，意思直接放在原词上方，不弹卡片。解释语言可选中文或简明英文。</li>
-      <li><strong>一条释义还不够：</strong>使用解释卡片时，可点「用中文说明」，或展开「本句翻译」查看中文句译和详细语境。简释与详情分开获取，已有结果可复用；补充或重试可能产生新请求。</li>
+      <li><strong>一条释义还不够：</strong>使用解释卡片时，可点「用中文说明」，展开「本句翻译」查看中文句译和详细语境，或在追问框继续问当前表达为什么这样用。追问只带有限上下文和最近几轮问答；补充、追问或重试可能产生新请求。</li>
       <li><strong>复制干净原文：</strong>鼠标停在段落上按 <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd>，或选中段落后用右键菜单「复制选中段落的原文」。复制的是原始英文，提示、词注和译文都不会混进去。</li>
       <li><strong>不点浮条也能译段：</strong>选中英文段落后按 <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> 直接翻译；选中单词时译整段。快捷键可在浏览器扩展快捷键设置里改。</li>
     </ol>
@@ -1269,7 +1269,7 @@
     <div>
       <p>能读通时，不必逐个点开注释。RelyLess 的提示会逐步退后；这只是减少打扰，不是一次“已经掌握”的判定。</p>
       <dl class="guide-definitions">
-        <div><dt>一个词已经认识，不想再自动看到它</dt><dd>在词注旁或解释卡片里点「我已认识」。保存后，这个词已有的标记、自动词注、手动词注和解释卡片会撤下；其他词的注释与段落译文保持原位，不重译整页。它也影响跨领域的同词与可识别词形，不只针对当前用法。误点可在 8 秒内「撤销」，以后也可到 <a href="#personalization">提示偏好 → 已认识词</a> 恢复；仍能主动查词。</dd></div>
+        <div><dt>一个词已经认识，不想再自动看到它</dt><dd>在词注旁或解释卡片里点「我已认识」。保存后，这个词已有的标记、自动词注、手动词注和解释卡片会撤下；其他词的注释与段落译文保持原位，不重译整页。它也影响跨领域的同词与可识别词形，不只针对当前用法。误点可在 8 秒内「撤销」，以后也可到 <a href="#personalization">提示偏好 → 已认识词</a> 恢复；仍能主动查词。这个用法到期且再次出现在当前阅读区域时，页面右下角会出现「复习 N」，选择「认识了」或「还不熟」即可，本地复习本身不发送页面内容。</dd></div>
         <div><dt>只是当前这个意思不需要提示</dt><dd>在解释卡片的「更多」中选「少提示这个用法」，只让当前用法安静下来，不把这个词的所有意思都藏起来。这个选择不因久未遇见自动解除；再次求助或恢复自适应可让帮助回来。</dd></div>
         <div><dt>想完全由自己决定何时求助</dt><dd>在 <a href="#assistance">阅读偏好</a> 选「只在主动求助时」，停止自动词汇扫描、解释预备和遇见计数，保留按键查词、选段翻译。若还开着阅读解构，需要另外关闭；阅读记录也有独立授权。</dd></div>
       </dl>
@@ -1312,6 +1312,16 @@
         <li><strong>想让系统总结或调整提示：</strong>摘要与个性化需要独立授权，不随词档案开关开启。远程领域识别也需另选，默认在本地识别领域。</li>
       </ul>
       <p>先在 <a href="#sites">网站规则</a> 限定自动开启范围，单站点规则优先于「全部网站」，本页暂停时不自动运行。导出或清理已有数据，到 <a href="#privacy">数据与隐私</a>。</p>
+    </div>
+  </details>
+  <details class="paper-card settings-disclosure guide-chapter">
+    <summary>06 · 服务不稳定，或者想把重要请求交给更强模型</summary>
+    <div>
+      <ul class="guide-list">
+        <li><strong>多个 API Key：</strong>在 <a href="#service">模型服务</a> 的密钥框中一行填写一个密钥，最多 8 个。保存后按权重轮询；认证、配额、限流或临时故障会触发切换。使用「逐项检查密钥」可以单独验证每一行，不受当前冷却状态影响。</li>
+        <li><strong>模型路由：</strong>默认关闭。开启后，Jev 只判断你勾选的主动求助、选段或整页翻译、追问等高价值请求；普通自动词注不判卷，阅读解构默认也不判卷。升级目标不可用或判断失败时回落当前服务。</li>
+        <li><strong>先看清成本：</strong>判卷本身也会发起一次模型请求；升级后由目标服务处理正式请求。密钥、端点和升级服务都由你管理，统计区会显示判卷、升级、失败和缓存命中次数。</li>
+      </ul>
     </div>
   </details>
   <nav class="related-settings" aria-label="说明相关设置"><a href="#assistance">调整注释与查词</a><a href="#appearance">调整显示与解构</a><a href="#service">连接模型服务</a></nav>
