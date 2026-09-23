@@ -121,7 +121,7 @@ export function normalizeApiKeys(value, fallbackKey='') {
 export function normalizeApiService(row) {
   if (!row || typeof row!=='object' || Array.isArray(row)) throw new Error('无效的 API 服务。');
   const legacy=!Object.hasOwn(row,'providerId');
-  const allowed=new Set(legacy?['id','name','baseUrl','model','apiKey','apiKeys']:['id','name','providerId','baseUrl','model','apiKey','apiKeys','options']);
+  const allowed=new Set(legacy?['id','name','baseUrl','model','apiKey','apiKeys']:['id','name','providerId','baseUrl','model','apiKey','apiKeys','options','fallbackServiceId']);
   for (const key of Object.keys(row)) if (!allowed.has(key)) throw new Error('API 服务包含未知字段。');
   for (const key of ['id','name','baseUrl','model','apiKey']) if (typeof row[key]!=='string') throw new Error('无效的 API 服务。');
   const providerId=legacy?'openai-compatible':row.providerId;
@@ -130,7 +130,8 @@ export function normalizeApiService(row) {
   const configuredBase=row.baseUrl.trim() || apiProviderBaseUrl(providerId,options);
   if(row.apiKeys!==undefined && !Array.isArray(row.apiKeys)) throw new Error('无效的 API 密钥列表。');
   const apiKeys=normalizeApiKeys(row.apiKeys,row.apiKey);
-  return {id:row.id.trim(),name:row.name.trim(),providerId,baseUrl:normalizedBaseUrl(configuredBase),model:row.model.trim(),apiKey:apiKeys[0]||'',apiKeys,options};
+  const fallbackServiceId=typeof row.fallbackServiceId==='string'?row.fallbackServiceId.trim():'';
+  return {id:row.id.trim(),name:row.name.trim(),providerId,baseUrl:normalizedBaseUrl(configuredBase),model:row.model.trim(),apiKey:apiKeys[0]||'',apiKeys,options,...(fallbackServiceId?{fallbackServiceId}:{})};
 }
 
 export function apiServiceReady(service) {

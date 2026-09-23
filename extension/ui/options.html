@@ -938,6 +938,11 @@
 <input id="provider-url" type="url" required="" spellcheck="false">
 <small>仅 HTTPS；localhost 可使用 HTTP。更换域名不会带入旧密钥。</small>
 </label>
+<label class="field">
+<span>失败后切换到</span>
+<select id="provider-fallback"><option value="">不切换</option></select>
+<small>认证失败、限流或网络错误时改走备用服务；模型类错误不切换。仅支持其他 API 服务。</small>
+</label>
 </div>
 </details>
             <div class="provider-actions">
@@ -1052,6 +1057,11 @@
         <div id="usage-list" class="usage-list"></div>
         <p id="usage-empty" class="empty-state" hidden="">范围内暂无用量记录。</p>
         <p id="usage-total" class="field-help"></p>
+        <label class="field usage-budget">
+<span>月度 token 预算</span>
+<input id="usage-budget" type="number" min="0" step="1000" inputmode="numeric" placeholder="0">
+<small>整页翻译预计超出此额度时会先二次确认；0 = 不限制。token 数为累计近似值。</small>
+</label>
         <div class="data-actions"><button id="usage-clear" type="button">清空用量统计</button><span id="usage-result" class="inline-message" aria-live="polite"></span></div>
       </div>
       <details class="paper-card settings-disclosure">
@@ -1087,6 +1097,10 @@
       <div class="paper-card compact-settings-card form-stack">
         <div class="adaptive-setting"><div><b>记住求助词与支持偏好</b><p>在本机保存求助词、简短释义和支持偏好。关闭后不读取或更新，旧档案仍保留。</p></div><label class="switch"><input id="remember-support" type="checkbox"><span aria-hidden="true"></span><span class="sr-only">记住求助词与支持偏好</span></label></div>
         <div class="data-actions"><button id="export-data" type="button">导出词档案</button></div><span id="data-result" class="inline-message" aria-live="polite"></span>
+      </div>
+      <div class="paper-card compact-settings-card form-stack">
+        <div class="adaptive-setting"><div><b>跨会话保存帮助与译文缓存</b><p>默认只在本次浏览器会话保存。开启后，简短词义帮助和成功的选段、本页译文会在本机保留最多 30 天；词义最多 500 条、译文最多 1,500 条。缓存包含模型生成的文本，可能涉及敏感内容；无痕页面不会读写它。关闭会删除已有持久缓存。</p></div><label class="switch"><input id="persist-translation-cache" type="checkbox"><span aria-hidden="true"></span><span class="sr-only">跨会话保存帮助与译文缓存</span></label></div>
+        <div class="data-actions"><button id="clear-translation-cache" type="button">清空帮助与译文缓存</button><span id="translation-cache-result" class="inline-message" aria-live="polite"></span></div>
       </div>
       <div class="paper-card compact-settings-card history-data-actions"><div><b>阅读与提示数据</b><p class="field-help">查询记录、统计、摘要和个性化版本可单独导出或清理。关闭采集不会删除已有内容。</p></div><div class="data-actions"><button id="history-export" type="button">导出完整记录</button><span id="history-action-result" class="inline-message" aria-live="polite"></span></div></div>
       <details class="paper-card settings-disclosure"><summary>扩展权限与卸载</summary><div><p class="field-help">在 Chrome 扩展管理页检查权限、停用或卸载。清理数据不会更改账户连接和网站授权。</p><button id="open-extension-manager" type="button">打开扩展管理页</button></div></details>

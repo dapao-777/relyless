@@ -29,6 +29,7 @@ export function normalizeUsageRow(row) {
     requests: count(row.requests), errors: count(row.errors),
     input: count(row.input), output: count(row.output),
     estInput: count(row.estInput), estOutput: count(row.estOutput),
+    inputChars: count(row.inputChars), outputChars: count(row.outputChars),
     estKind: estKind(row.estKind),
   };
 }
@@ -54,6 +55,7 @@ export function usageEntryToRow(entry, day = usageDay()) {
     requests: 1, errors: entry.ok === false ? 1 : 0,
     input: reportedInput ?? 0, output: reportedOutput ?? 0,
     estInput, estOutput,
+    inputChars: count(entry.inputChars), outputChars: count(entry.outputChars),
     estKind: tokenized ? (charred ? 'mixed' : 'tokenizer') : 'chars',
   };
 }
@@ -66,11 +68,27 @@ export function mergeUsageEntry(rows, entry, { now = Date.now(), retentionDays =
     const key = usageRowKey(row), found = list.find(value => usageRowKey(value) === key);
     if (found) {
       if ((row.estInput || row.estOutput) && found.estKind !== row.estKind) found.estKind = 'mixed';
-      for (const field of ['requests', 'errors', 'input', 'output', 'estInput', 'estOutput']) found[field] += row[field];
+      for (const field of ['requests', 'errors', 'input', 'output', 'estInput', 'estOutput', 'inputChars', 'outputChars']) found[field] += row[field];
     } else list.push(row);
   }
   const cutoff = cutoffDay(now, retentionDays);
   return list.filter(value => typeof value?.day === 'string' && value.day >= cutoff).slice(-limit);
+}
+
+/** 近 days 天某服务·模型的 tokens/字符比率（含估算量），用于整页翻译预估；无历史返回 null。 */
+export function usageRatioFor(rows, {provider, service, model, days = 30, now = Date.now()} = {}) {
+  const list = (Array.isArray(rows) ? rows : []).map(normalizeUsageRow).filter(Boolean);
+  const limit = cutoffDay(now, Math.max(1, Math.min(Number(days) || 30, 3660)));
+  let tokens = 0, chars = 0;
+  for (const row of list) {
+    if (row.day < limit) continue;
+    if (provider && row.provider !== provider) continue;
+    if (service && row.service !== service) continue;
+    if (model && row.model !== model) continue;
+    tokens += row.input + row.output + row.estInput + row.estOutput;
+    chars += row.inputChars;
+  }
+  return chars > 0 ? {tokensPerChar: tokens / chars, samples: chars} : null;
 }
 
 /** 汇总展示：days=1 今日 / N 近 N 天 / 0 累计。返回按总 token 倒序的服务·模型分组。 */

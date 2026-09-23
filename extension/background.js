@@ -24,12 +24,13 @@ import {createConversationStore} from './conversation-store.js';
 import {collectConversationMemory} from './conversation-memory.js';
 import {normalizeReview,advanceReview,scheduleFirstReview,dueReviewEntries,reviewKey} from './srs.js';
 import {normalizeRouting,routingQuestions,summarizeRequest,routeCacheKey,decideRoute,pruneRouteCache,routingStatsView,ROUTING_LIMITS} from './routing.js';
-import {runWithApiKeyRotation,checkSingleApiKey} from './api-key-rotation.js';
+import {runWithApiKeyRotation,checkSingleApiKey,classifyFailure} from './api-key-rotation.js';
 import {diagnosticError} from './diagnostics.mjs';
 import {createReadingHistory} from './history-service.js';
 import {createSpeechHandler} from './speech.js';
 import {SENTENCE_GROUPS_POLICY_VERSION,SENTENCE_GROUPS_INSTRUCTIONS,SENTENCE_GROUPS_SCHEMA,normalizeSentenceGroupItems,prepareSentenceGroupItems,normalizeSentenceGroupsResult} from './sentence-groups.mjs';
-import {mergeUsageEntry,normalizeUsageRow,usageStatsView,USAGE_VERSION} from './usage-stats.js';
+import {mergeUsageEntry,normalizeUsageRow,usageDay,usageRatioFor,usageStatsView,USAGE_VERSION} from './usage-stats.js';
+import {GLOSS_CACHE_LIMIT,GLOSS_CACHE_VERSION,PERSISTENT_CACHE_TTL,PAGE_TRANSLATION_CACHE_LIMIT,TRANSLATION_CACHE_VERSION,normalizeGlossCache,normalizeTranslationCache,readCache,writeCache} from './persistent-cache.js';
 const connectSpeech=createSpeechHandler(chrome.tts);
 chrome.runtime.onConnect.addListener(port=>{
   if(port.name==='shisui-speech'&&port.sender?.id===chrome.runtime.id&&Number.isInteger(port.sender?.tab?.id)&&port.sender.frameId===0)connectSpeech(port);
@@ -54,6 +55,8 @@ function assertDataAvailable(){if(cleanupPending)throw Object.assign(new Error('
 const ready = (async () => {
   await chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});
   const data = await chrome.storage.local.get(null);
+  // Old releases wrote these without consent. Do not expose or retain them on upgrade.
+  if(!normalizeSettings(data.settings).persistTranslationCache)await chrome.storage.local.remove(['persistentGlossCache','persistentTranslationCache']);
   cleanupPending=Boolean(data[CLEANUP_KEY]);
   futureSchema = data.wordSchemaVersion > 5 || data.productSchemaVersion > 1;
   if (futureSchema) { dataProblem = '不支持的数据版本，请更新扩展'; return; }
@@ -81,6 +84,44 @@ const sentenceGroupCache = new Map();
 const sentenceGroupInFlight = new Map();
 const translationCache = new Map();
 const translationInFlight = new Map();
+// A browser-session cache is the default; local storage is used only with explicit consent.
+const GLOSS_CACHE_KEY='persistentGlossCache',PAGE_TRANSLATION_CACHE_KEY='persistentTranslationCache';
+const CACHE_KEYS=[GLOSS_CACHE_KEY,PAGE_TRANSLATION_CACHE_KEY];
+let glossCache=null,pageTranslationCache=null,cacheArea=null,cacheGeneration=0,persistentCacheWrites=Promise.resolve();
+function cacheStore(settings){return settings.persistTranslationCache?chrome.storage.local:chrome.storage.session;}
+async function loadResultCache(settings,key,normalize){
+  const store=cacheStore(settings),generation=cacheGeneration;
+  if(cacheArea!==store){glossCache=null;pageTranslationCache=null;cacheArea=store;}
+  const field=key===GLOSS_CACHE_KEY?'glossCache':'pageTranslationCache';
+  if(field==='glossCache'?glossCache:pageTranslationCache)return field==='glossCache'?glossCache:pageTranslationCache;
+  let raw;try{raw=(await store.get(key))[key];}catch{return {};}if(generation!==cacheGeneration)return {};const cache=normalize(raw);
+  if(field==='glossCache')glossCache=cache;else pageTranslationCache=cache;
+  if(raw && Object.keys(raw).length!==Object.keys(cache).length)void persistResultCache(settings,key,cache);
+  return cache;
+}
+const loadGlossCache=settings=>loadResultCache(settings,GLOSS_CACHE_KEY,normalizeGlossCache);
+const loadPageTranslationCache=settings=>loadResultCache(settings,PAGE_TRANSLATION_CACHE_KEY,normalizeTranslationCache);
+function persistResultCache(settings,key,cache){
+  const store=cacheStore(settings),generation=cacheGeneration;
+  const work=persistentCacheWrites.then(async()=>{
+    const current=normalizeSettings((await chrome.storage.local.get('settings')).settings);
+    if(generation!==cacheGeneration||cacheStore(current)!==store)return;
+    await store.set({[key]:cache});
+  });
+  persistentCacheWrites=work.catch(()=>{});return persistentCacheWrites;
+}
+const persistGlossCache=settings=>persistResultCache(settings,GLOSS_CACHE_KEY,glossCache||{});
+const persistPageTranslationCache=settings=>persistResultCache(settings,PAGE_TRANSLATION_CACHE_KEY,pageTranslationCache||{});
+async function clearResultCaches({local=true,session=true}={}){
+  cacheGeneration++;
+  await persistentCacheWrites;
+  glossCache=null;pageTranslationCache=null;cacheArea=null;translationCache.clear();
+  if(local)await chrome.storage.local.remove(CACHE_KEYS);
+  if(session)await chrome.storage.session.remove(CACHE_KEYS);
+}
+// 服务故障转移：刚失败过的服务冷却 5 分钟，期间直接走备用服务。
+const serviceCooldowns=new Map();
+const FAILOVER_COOLDOWN_MS=5*60000;
 const TRANSLATION_CACHE_TTL=5*60000,TRANSLATION_CACHE_LIMIT=256,SENTENCE_GROUP_CACHE_TTL=24*60*60000,SENTENCE_GROUP_CACHE_LIMIT=512;
 const sentenceModeGeneration = new Map();
 const sentenceModeKey=tabId=>'sentenceGroupsMode:'+tabId;
@@ -181,6 +222,8 @@ function validatePatch(patch,currentSettings) {
   if (patch.readingStyle !== undefined) result.readingStyle=globalThis.ShisuiReadingStyle.validate(patch.readingStyle);
   if (patch.rulePacks !== undefined) result.rulePacks=normalizeRulePacks(patch.rulePacks);
   if (patch.routing !== undefined) result.routing=normalizeRouting(patch.routing,currentSettings?.routing||DEFAULT_SETTINGS.routing);
+  if (patch.usageBudget !== undefined) { const b=patch.usageBudget; if (!b || typeof b !== 'object' || Array.isArray(b) || Object.keys(b).some(key=>key!=='monthlyTokens')) throw new Error('无效的用量预算设置。'); result.usageBudget={monthlyTokens:Number.isSafeInteger(b.monthlyTokens)&&b.monthlyTokens>=0&&b.monthlyTokens<=100000000?b.monthlyTokens:0}; }
+  if (patch.persistTranslationCache !== undefined) { if(typeof patch.persistTranslationCache!=='boolean')throw new Error('无效的译文缓存设置。');result.persistTranslationCache=patch.persistTranslationCache; }
   if (patch.requestConcurrency !== undefined) { if (!Number.isSafeInteger(patch.requestConcurrency) || patch.requestConcurrency < 1 || patch.requestConcurrency > 8) throw new Error('并发请求数需为 1–8 的整数。'); result.requestConcurrency=patch.requestConcurrency; }
   if (patch.rememberSupport !== undefined) { if (typeof patch.rememberSupport !== 'boolean') throw new Error('无效记忆设置。'); result.rememberSupport=patch.rememberSupport; }
   if (patch.domain !== undefined) result.domain=domain(patch.domain);
@@ -377,25 +420,45 @@ async function requireApiPermission(service) {
 async function apiRequest(provider,payload,instructions,schema,{onContent,trace,beforeRequest}={}) {
   const preferences=readingHistory.policy()?.translation;if(preferences&&[ASSISTANCE_INSTRUCTIONS,SUPPORT_INSTRUCTIONS,SUPPORT_CORRECTION_INSTRUCTIONS,EMERGENCY_INSTRUCTIONS,PAGE_TRANSLATION_INSTRUCTIONS].includes(instructions))payload={...payload,personalization:preferences};
   const service=normalizeApiService(provider);await requireApiPermission(service);
-  const timeoutMs=providerRequestTimeoutMs(service);
-  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),timeoutMs);
-  const generation=providerGeneration;
-  const checkRequest=async()=>{if(generation!==providerGeneration)throw staleWork();await beforeRequest?.();if(generation!==providerGeneration)throw staleWork();};
-  const inputChars=JSON.stringify(payload).length+String(instructions||'').length+JSON.stringify(schema||null).length;
-  let usageReport=null;
-  const onUsage=usage=>{if(usage)usageReport={input:usage.input==null?usageReport?.input??null:(usageReport?.input||0)+usage.input,output:usage.output==null?usageReport?.output??null:(usageReport?.output||0)+usage.output};};
-  try {
-    const output=await diagnostics.provider(trace,'api',service.model,new URL(service.baseUrl).origin,()=>runWithApiKeyRotation(service,snapshot=>performProviderRequest(snapshot,payload,instructions,schema,{signal:controller.signal,onContent,onUsage,beforeRequest:checkRequest}),{signal:controller.signal}));
-    if(instructions===ASSISTANCE_INSTRUCTIONS&&(!Object.hasOwn(output,'result')||Object.keys(output).length!==1))throw Object.assign(new Error('帮助服务返回的结果封装无效。'),{code:'OUTPUT_INVALID'});
-    providerError='';
-    if(!trace?.incognito)void recordModelUsage({provider:'api',service:service.name||service.model,model:service.model,operation:trace?.operation||'',ok:true,usage:usageReport,inputChars,outputChars:JSON.stringify(output).length,inputText:JSON.stringify(payload),outputText:JSON.stringify(output)});
-    return output;
-  } catch(error) {
-    if(!trace?.incognito)void recordModelUsage({provider:'api',service:service.name||service.model,model:service.model,operation:trace?.operation||'',ok:false,usage:usageReport,inputChars,inputText:JSON.stringify(payload)});
-    let reported=error;
-    if(controller.signal.aborted||error.name==='AbortError')reported=new Error(`请求超过 ${Math.round(timeoutMs/1000)} 秒，请稍后重试。${service.providerId==='stepfun'?'阶跃星辰推理较慢时，可把该服务的思考等级设为“低”。':''}`);else if(error instanceof TypeError)reported=new Error('无法连接服务，请检查网络、API 地址与服务跨域支持。');
-    providerError=reported.message||'服务连接失败。';throw reported;
-  } finally {clearTimeout(timeout);}
+  const settings=(await load(false)).settings;
+  const resolveFallback=async primary=>{
+    const id=primary.fallbackServiceId;if(!id)return null;
+    const row=(settings.apiServices||[]).find(value=>value?.id===id);
+    if(!row||row.id===primary.id||!apiServiceReady(row))return null;
+    try{const fallback=normalizeApiService(row);await requireApiPermission(fallback);return fallback;}catch{return null;}
+  };
+  const attempt=async current=>{
+    const timeoutMs=providerRequestTimeoutMs(current);
+    const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),timeoutMs);
+    const generation=providerGeneration;
+    const checkRequest=async()=>{if(generation!==providerGeneration)throw staleWork();await beforeRequest?.();if(generation!==providerGeneration)throw staleWork();};
+    const inputChars=JSON.stringify(payload).length+String(instructions||'').length+JSON.stringify(schema||null).length;
+    let usageReport=null;
+    const onUsage=usage=>{if(usage)usageReport={input:usage.input==null?usageReport?.input??null:(usageReport?.input||0)+usage.input,output:usage.output==null?usageReport?.output??null:(usageReport?.output||0)+usage.output};};
+    try {
+      const output=await diagnostics.provider(trace,'api',current.model,new URL(current.baseUrl).origin,()=>runWithApiKeyRotation(current,snapshot=>performProviderRequest(snapshot,payload,instructions,schema,{signal:controller.signal,onContent,onUsage,beforeRequest:checkRequest}),{signal:controller.signal}));
+      if(instructions===ASSISTANCE_INSTRUCTIONS&&(!Object.hasOwn(output,'result')||Object.keys(output).length!==1))throw Object.assign(new Error('帮助服务返回的结果封装无效。'),{code:'OUTPUT_INVALID'});
+      providerError='';
+      if(!trace?.incognito)void recordModelUsage({provider:'api',service:current.name||current.model,model:current.model,operation:trace?.operation||'',ok:true,usage:usageReport,inputChars,outputChars:JSON.stringify(output).length,inputText:JSON.stringify(payload),outputText:JSON.stringify(output)});
+      return output;
+    } catch(error) {
+      if(!trace?.incognito)void recordModelUsage({provider:'api',service:current.name||current.model,model:current.model,operation:trace?.operation||'',ok:false,usage:usageReport,inputChars,inputText:JSON.stringify(payload)});
+      let reported=error;
+      if(controller.signal.aborted||error.name==='AbortError')reported=new Error(`请求超过 ${Math.round(timeoutMs/1000)} 秒，请稍后重试。${current.providerId==='stepfun'?'阶跃星辰推理较慢时，可把该服务的思考等级设为“低”。':''}`);else if(error instanceof TypeError)reported=new Error('无法连接服务，请检查网络、API 地址与服务跨域支持。');
+      reported.failoverClass=classifyFailure(error);
+      providerError=reported.message||'服务连接失败。';throw reported;
+    } finally {clearTimeout(timeout);}
+  };
+  let active=service;
+  if(service.fallbackServiceId&&(serviceCooldowns.get(service.id)||0)>Date.now()){const cooled=await resolveFallback(service);if(cooled)active=cooled;}
+  try{return await attempt(active);}
+  catch(error){
+    if(active!==service||!service.fallbackServiceId||(error.failoverClass||classifyFailure(error))==='none')throw error;
+    const fallback=await resolveFallback(service);if(!fallback)throw error;
+    serviceCooldowns.set(service.id,Date.now()+FAILOVER_COOLDOWN_MS);
+    await diagnostics.event(trace,'provider','error',{code:'FAILOVER',durationMs:0}).catch(()=>{});
+    return await attempt(fallback);
+  }
 }
 async function apiModelsList(service) {
   const normalized=normalizeApiService(service);await requireApiPermission(normalized);
@@ -675,16 +738,31 @@ async function preparedAssist(message,sender){
   pending[command.requestId]={requestHash,sourceHash:source.sourceHash,generation:latest.supportDataGeneration,status:'complete',result:publicResult,support:internal,committable:true,at:Date.now()};
   await writeReadingSession({[key]:Object.fromEntries(Object.entries(pending).slice(-128))},generation);if(command.detail==='brief')await readingHistory.prepareQuery(sender,command.requestId,command,publicResult);return publicResult;
 }
+// 整页翻译预估：字符数 × 该服务·模型近 30 天 tokens/字符比率；无历史按 chars/4 回退。
+async function emergencyUsageEstimate(tabId,settings){
+  const probe=await chrome.tabs.sendMessage(tabId,{type:'SS_EMERGENCY_COUNT'},{frameId:0}).catch(()=>null);
+  const chars=Number.isSafeInteger(probe?.chars)?Math.min(probe.chars,2000000):0;
+  const api=provider=>provider==='api';
+  const active=api(settings.providerKind)?activeApiProvider(settings):null;
+  const service=api(settings.providerKind)?(active?.name||active?.model||''):'订阅服务',model=api(settings.providerKind)?(active?.model||''):(settings.subscriptionModel||'');
+  const rows=await loadModelUsage(),ratio=usageRatioFor(rows,{provider:api(settings.providerKind)?'api':settings.providerKind,service,model,days:30});
+  const estimate=Math.ceil(chars*(ratio?.tokensPerChar||0.25));
+  const month=usageDay().slice(0,7),monthlyUsed=rows.filter(row=>typeof row?.day==='string'&&row.day.startsWith(month)).reduce((sum,row)=>sum+(row.input||0)+(row.output||0)+(row.estInput||0)+(row.estOutput||0),0);
+  const budget=settings.usageBudget?.monthlyTokens||0;
+  return {chars,estimate,monthlyUsed,budget,budgetExceeded:budget>0&&monthlyUsed+estimate>budget};
+}
 async function emergencyBegin(message){
   if(!Number.isInteger(message.tabId)||typeof message.url!=='string')throw new Error('无效的紧急翻译请求。');
   const tab=await chrome.tabs.get(message.tabId);
   if(tab.url!==message.url)throw new Error('页面已变化，请重新确认。');
   if(injectedEmergencyPages.get(message.tabId)!==tab.url)throw new Error('请先准备当前页面再开始紧急翻译。');
   if(!['http:','https:'].includes(new URL(tab.url).protocol))throw new Error('此网页不支持紧急翻译。');
+  const estimate=await emergencyUsageEstimate(message.tabId,(await load(false)).settings);
+  if(estimate.budgetExceeded&&message.confirmed!==true)return {budgetExceeded:true,estimate:estimate.estimate,monthlyUsed:estimate.monthlyUsed,budget:estimate.budget};
   return changeEmergency(async()=>{const state=await load(),generation=providerGeneration,token=crypto.randomUUID()+crypto.randomUUID(),provider=await emergencyProvider(state.settings),current=await chrome.tabs.get(message.tabId);
     if(current.url!==message.url||generation!==providerGeneration)throw new Error('页面或服务已变化，请重新确认。');
     await chrome.storage.session.set({[emergencyKey(message.tabId)]:{token,url:message.url,generation:state.supportDataGeneration,provider,cancelledThrough:0}});
-    return {token};});
+    return {token,estimate:estimate.estimate};});
 }
 async function translateItems(items,settings,trace,{scope,onProgress,origin,sourceHash,incognito=false,guard=async()=>{}}) {
   if(!['page','passage'].includes(scope))throw new Error('无效的翻译范围。');
@@ -696,8 +774,10 @@ async function translateItems(items,settings,trace,{scope,onProgress,origin,sour
   const service=settings.providerKind==='api'?activeApiProvider(settings):settings.subscriptionModel;
   if(settings.providerKind==='api')await requireApiPermission(service);
   const instructions=scope==='page'?PAGE_TRANSLATION_INSTRUCTIONS:EMERGENCY_INSTRUCTIONS;
-  const personalization=readingHistory.policy()?.translation||null,generation=providerGeneration,keys=await Promise.all(items.map(item=>hashValue(JSON.stringify([scope,instructions,settings.providerKind,service,personalization,origin,scope==='page'?sourceHash:null,item.text,item.context||null])))),outcomes=new Map(),fresh=[],claimed=new Set(),now=Date.now();
-  for(let index=0;index<items.length;index++){const cached=translationCache.get(keys[index]);if(cached&&now-cached.at<TRANSLATION_CACHE_TTL)outcomes.set(keys[index],{translation:cached.translation});else if(!translationInFlight.has(keys[index])&&!claimed.has(keys[index])){claimed.add(keys[index]);fresh.push({item:items[index],key:keys[index]});}}
+  const personalization=readingHistory.policy()?.translation||null,generation=providerGeneration,keys=await Promise.all(items.map(item=>hashValue(JSON.stringify([scope,incognito,instructions,settings.providerKind,service,personalization,origin,scope==='page'?sourceHash:null,item.text,item.context||null])))),outcomes=new Map(),fresh=[],claimed=new Set(),now=Date.now();
+  // 持久层键只含内容哈希（无网址/文档标识）：重访、镜像、转载的同一段落跨页命中。无痕页不读写。
+  const persisted=!incognito?await loadPageTranslationCache(settings):null,pkeys=persisted?await Promise.all(items.map(item=>hashValue(JSON.stringify([TRANSLATION_CACHE_VERSION,scope,settings.providerKind,service,personalization,String(item.text||'').replace(/\s+/g,' ').trim(),item.context||null]))) ):null,keyToPkey=new Map();let cacheHits=0;
+  for(let index=0;index<items.length;index++){const cached=translationCache.get(keys[index]);if(cached&&now-cached.at<TRANSLATION_CACHE_TTL){outcomes.set(keys[index],{translation:cached.translation});continue;}const stored=pkeys?persisted[pkeys[index]]:null;if(stored&&now-stored.at<PERSISTENT_CACHE_TTL&&stored.at<=now){cacheHits++;outcomes.set(keys[index],{translation:stored.zh});translationCache.delete(keys[index]);translationCache.set(keys[index],{translation:stored.zh,at:now});pageTranslationCache=writeCache(pageTranslationCache,pkeys[index],{zh:stored.zh,at:now},{limit:PAGE_TRANSLATION_CACHE_LIMIT});void persistPageTranslationCache(settings);continue;}if(stored){delete pageTranslationCache[pkeys[index]];void persistPageTranslationCache(settings);}if(!translationInFlight.has(keys[index])&&!claimed.has(keys[index])){claimed.add(keys[index]);fresh.push({item:items[index],key:keys[index]});}if(pkeys)keyToPkey.set(keys[index],pkeys[index]);}
   if(fresh.length){
     const operation=withBackgroundSlot(async()=>{const sourceItems=fresh.map(value=>value.item),idToKey=new Map(fresh.map(value=>[value.item.id,value.key]));let raw;
       const progress=value=>{if(!onProgress||!value?.items)return;const byKey=new Map(value.items.map(item=>[idToKey.get(item.id),item.translation]));onProgress({items:items.flatMap((item,index)=>byKey.has(keys[index])?[{id:item.id,translation:byKey.get(keys[index])}]:[])});};
@@ -709,7 +789,7 @@ async function translateItems(items,settings,trace,{scope,onProgress,origin,sour
         await diagnostics.event(trace,'validation','ok');
         await requireLiveConsumer(backgroundGuards.get(operation));
         if(generation!==providerGeneration)throw staleWork();
-        const at=Date.now();for(const [key,outcome]of mapped)if(outcome.translation!==undefined){translationCache.delete(key);translationCache.set(key,{translation:outcome.translation,at});}
+        const at=Date.now();for(const [key,outcome]of mapped)if(outcome.translation!==undefined){translationCache.delete(key);translationCache.set(key,{translation:outcome.translation,at});const pkey=keyToPkey.get(key);if(pkey){pageTranslationCache=writeCache(pageTranslationCache||{},pkey,{zh:outcome.translation,at},{limit:PAGE_TRANSLATION_CACHE_LIMIT});void persistPageTranslationCache(settings);}}
         while(translationCache.size>TRANSLATION_CACHE_LIMIT)translationCache.delete(translationCache.keys().next().value);
         return mapped;
       }catch(error){await diagnostics.event(trace,'validation','error',diagnosticError(error));throw error;}},guard);
@@ -717,8 +797,8 @@ async function translateItems(items,settings,trace,{scope,onProgress,origin,sour
     void operation.finally(()=>{for(const entry of fresh)if(translationInFlight.get(entry.key)===operation)translationInFlight.delete(entry.key);}).catch(()=>{});
   }
   await Promise.all(keys.map(async key=>{if(outcomes.has(key))return;const operation=translationInFlight.get(key);if(!operation)throw new Error('翻译结果已过期，请重试。');backgroundGuards.get(operation).add(guard);const result=await operation;await guard();if(!result.has(key))throw new Error('翻译服务未返回完整结果。');outcomes.set(key,result.get(key));}));
-  if(scope==='passage')return normalizeEmergencyResult({items:items.map((item,index)=>({id:item.id,translation:outcomes.get(keys[index])?.translation}))},items);
-  return normalizePageTranslationResult({items:items.flatMap((item,index)=>outcomes.get(keys[index])?.translation!==undefined?[{id:item.id,translation:outcomes.get(keys[index]).translation}]:[]),errors:items.flatMap((item,index)=>outcomes.get(keys[index])?.error?[{id:item.id,code:outcomes.get(keys[index]).error}]:[])},items);
+  if(scope==='passage')return {...normalizeEmergencyResult({items:items.map((item,index)=>({id:item.id,translation:outcomes.get(keys[index])?.translation}))},items),...(cacheHits?{cacheHits}:{})};
+  return {...normalizePageTranslationResult({items:items.flatMap((item,index)=>outcomes.get(keys[index])?.translation!==undefined?[{id:item.id,translation:outcomes.get(keys[index]).translation}]:[]),errors:items.flatMap((item,index)=>outcomes.get(keys[index])?.error?[{id:item.id,code:outcomes.get(keys[index]).error}]:[])},items),...(cacheHits?{cacheHits}:{})};
 }
 async function emergencyTranslate(message,sender) {
   const source=await readingSource(sender),armed=await emergencySession(source.tabId);
@@ -1039,6 +1119,15 @@ const operation=previous.catch(()=>{}).then(async()=>{
       let raw=exact,fetched=false;
       if(!raw&&!command.bypassCache&&request.detail==='brief'){const fullKey=await hashValue(JSON.stringify([SUPPORT_POLICY_VERSION,requestPolicy,state.settings.providerKind,model,articleKey,{...request,detail:'full'}])),full=resultCache[fullKey];if(full?.sourceHash===source.sourceHash){const field=request.level==='rescue'?'translation':'hint';raw={level:request.level,[field]:full.result[field],...(request.kind==='passage'?{}:{sense:full.result.sense})};}}
       if(!raw&&!command.bypassCache&&request.kind!=='passage'){raw=preparedAssistanceDecision(request,source.sourceHash,serviceKey,requestPolicy,articleKey);if(raw)sourceName='prepared';}
+      const glossKey=async()=>await hashValue(JSON.stringify([GLOSS_CACHE_VERSION,request.level,request.kind,requestPolicy,state.settings.providerKind,model,command.text.trim().toLowerCase(),command.domain,await hashValue(String(command.context||'').replace(/\s+/g,' ').trim().slice(0,400))]));
+      const glossable=!command.bypassCache&&request.kind!=='passage'&&request.detail==='brief'&&!source.incognito&&!state.settings.routing?.enabled;
+      if(!raw&&glossable){
+        const cache=await loadGlossCache(state.settings),cacheKey=await glossKey(),hit=readCache(cache,cacheKey,{ttl:PERSISTENT_CACHE_TTL});
+        if(hit){
+          glossCache=hit.cache;raw={level:request.level,[request.level==='rescue'?'translation':'hint']:request.level==='rescue'?hit.entry.translation:hit.entry.hint,sense:hit.entry.sense||''};
+          sourceName='cache';void persistGlossCache(state.settings);
+        }else if(cache[cacheKey]){glossCache={...cache};delete glossCache[cacheKey];void persistGlossCache(state.settings);}
+      }
       if(!raw){
         fetched=true;
         const sharedFlightKey=[source.tabId,source.sourceHash,resultKey,providerVersion,state.supportDataGeneration].join(':');
@@ -1079,10 +1168,10 @@ const operation=previous.catch(()=>{}).then(async()=>{
         try{raw=await flight.promise;}finally{flight.listeners.delete(deliverProgress);}
       }
       if(requestPolicy!==JSON.stringify(readingHistory.policy())||providerVersion!==providerGeneration)throw new Error('服务设置已改变，请重新求助。');result=normalizeAssistanceResult(raw,request);const [latest,latestSource]=await Promise.all([load(),readingSource(sender)]);if(latestSource.url!==source.url)throw new Error('页面已变化，请重新求助。');if(latest.supportDataGeneration!==state.supportDataGeneration)throw new Error('本机支持设置已变化，请重新求助。');
-      if(fetched){const currentPending=await sessionMap(key,5*60000,128);if(currentPending[command.requestId]?.requestHash!==requestHash)throw new Error('帮助请求已被新的请求替代。');resultCache[resultKey]={result,sourceHash:source.sourceHash,at:Date.now()};await writeReadingSession({[resultCacheStorage]:Object.fromEntries(Object.entries(resultCache).slice(-128))},providerVersion);}
+      if(fetched){const currentPending=await sessionMap(key,5*60000,128);if(currentPending[command.requestId]?.requestHash!==requestHash)throw new Error('帮助请求已被新的请求替代。');resultCache[resultKey]={result,sourceHash:source.sourceHash,at:Date.now()};await writeReadingSession({[resultCacheStorage]:Object.fromEntries(Object.entries(resultCache).slice(-128))},providerVersion);if(glossable){glossCache=writeCache(glossCache||{},await glossKey(),{hint:result.hint||'',translation:result.translation||'',sense:result.sense||'',at:Date.now(),hits:0},{limit:GLOSS_CACHE_LIMIT});void persistGlossCache(state.settings);}}
       if(result.hint===null||result.translation===null)support=null;else if(command.kind!=='passage'){const canonical=resolveCanonicalTerm(command.text,command.domain,source.incognito?[]:latest.words),id=wordId(canonical,command.domain),label=normalizeSenseLabel(result.sense),known=(source.incognito?[]:latest.words).find(v=>v.id===id),sense=known?.senses?.find(v=>v.label===label),resolvedSense=sense?{key:sense.key}:await resolveSenseKey(known,label,command.context),senseKey=resolvedSense.key;support={wordId:id,senseKey,stage:'hint',revision:known?.revision||0,canonicalTerm:canonical,label,kind:command.kind,domain:command.domain,...(resolvedSense.embedding?{embedding:resolvedSense.embedding}:{})};}
     }
-    const publicResult={...result,source:sourceName,support:support?{wordId:support.wordId,senseKey:support.senseKey,stage:support.stage,revision:support.revision}:null,...(sourceName==='local-reference'?{referenceNotice:'本地参考义，未经本句语境判定'}:{})},current=await sessionMap(key,5*60000,128);if(current[command.requestId]?.requestHash!==requestHash)throw new Error('帮助请求已被新的请求替代。');current[command.requestId]={...entry,status:'complete',result:publicResult,support,committable:command.detail==='brief'&&(sourceName==='provider'||sourceName==='prepared')&&Boolean((result.hint??result.translation)!==null),at:Date.now()};await writeReadingSession({[key]:current},providerVersion);if(command.detail==='brief')await readingHistory.prepareQuery(sender,command.requestId,command,publicResult);return publicResult;
+    const publicResult={...result,source:sourceName,support:support?{wordId:support.wordId,senseKey:support.senseKey,stage:support.stage,revision:support.revision}:null,...(sourceName==='local-reference'?{referenceNotice:'本地参考义，未经本句语境判定'}:{}),...(sourceName==='cache'?{cacheNotice:'来自本机缓存'}:{})},current=await sessionMap(key,5*60000,128);if(current[command.requestId]?.requestHash!==requestHash)throw new Error('帮助请求已被新的请求替代。');current[command.requestId]={...entry,status:'complete',result:publicResult,support,committable:command.detail==='brief'&&(sourceName==='provider'||sourceName==='prepared'||sourceName==='cache')&&Boolean((result.hint??result.translation)!==null),at:Date.now()};await writeReadingSession({[key]:current},providerVersion);if(command.detail==='brief')await readingHistory.prepareQuery(sender,command.requestId,command,publicResult);return publicResult;
   }catch(error){const current=await sessionMap(key,5*60000,128);if(current[command.requestId]?.requestHash===requestHash){current[command.requestId]={...entry,status:'failed',error:error.message||'帮助请求失败。',at:Date.now()};await writeReadingSession({[key]:current},providerVersion);}throw error;}
 });assistQueues.set(flightId,operation);void operation.finally(()=>{
   if(assistQueues.get(flightId)===operation)assistQueues.delete(flightId);
@@ -1123,7 +1212,7 @@ async function clearReadingData(scope,recovering=false){
     const update={supportDataGeneration:(Number(current.supportDataGeneration)||0)+1};
     if(target==='memory')Object.assign(update,{words:[]});
     await chrome.storage.local.set(update);
-    if(target==='memory'){await chrome.storage.local.remove(['legacyReadingArchive','glossCache','supportCache','supportUsage','onDemandSuggestionShownAt']);await clearModelUsage();}
+    if(target==='memory'){await clearResultCaches();await chrome.storage.local.remove(['legacyReadingArchive','glossCache','supportCache','translationCache','supportUsage','onDemandSuggestionShownAt']);await clearModelUsage();}
     await Promise.allSettled([domainCacheWrites,sentenceGroupCacheWrites,emergencyWrites,readingSessionWrites]);
     await clearSupportSessions();
     const all=await chrome.storage.session.get(null);
@@ -1341,9 +1430,11 @@ async function handle(message,sender) {
     case 'RESOLVE_DOMAIN':return resolvePageDomain(message,sender);
     case 'DOMAIN_TEST':{const {settings}=await load(false);return classifyText(settings,sampleForDomain(text(message.text,'测试正文',40000)),text(message.title||'','标题',500,false),{force:true});}
     case 'STATE_PATCH':{
-      const before=await load(false),patch=validatePatch(message.patch,before.settings),rememberChanged=patch.rememberSupport!==undefined&&patch.rememberSupport!==before.settings.rememberSupport,nextSettings={...before.settings,...patch},beforeProvider=activeApiProvider(before.settings),afterProvider=activeApiProvider(nextSettings),providerChanged=patch.providerKind!==undefined&&patch.providerKind!==before.settings.providerKind||patch.subscriptionModel!==undefined&&patch.subscriptionModel!==before.settings.subscriptionModel||before.settings.activeApiServiceId!==nextSettings.activeApiServiceId||JSON.stringify(beforeProvider)!==JSON.stringify(afterProvider),classificationChanged=providerChanged||patch.domainDetection!==undefined||patch.domainRules!==undefined||patch.domain!==undefined,genericChanged=Object.keys(patch).some(key=>!['readingStyle','helpLanguage','apiServices','activeApiServiceId'].includes(key))||providerChanged;
-      const result=await mutate(state=>{state.settings={...state.settings,...patch};if(rememberChanged)state.supportDataGeneration++;if(providerChanged||patch.customTerms||patch.domainRules||patch.domain||patch.domainDetection)clearProviderState();if(classificationChanged)invalidateClassification();return publicState(state,true);},false,false);
+      const before=await load(false),patch=validatePatch(message.patch,before.settings),cacheConsentChanged=patch.persistTranslationCache!==undefined&&patch.persistTranslationCache!==before.settings.persistTranslationCache,rememberChanged=patch.rememberSupport!==undefined&&patch.rememberSupport!==before.settings.rememberSupport,nextSettings={...before.settings,...patch},beforeProvider=activeApiProvider(before.settings),afterProvider=activeApiProvider(nextSettings),providerChanged=patch.providerKind!==undefined&&patch.providerKind!==before.settings.providerKind||patch.subscriptionModel!==undefined&&patch.subscriptionModel!==before.settings.subscriptionModel||before.settings.activeApiServiceId!==nextSettings.activeApiServiceId||JSON.stringify(beforeProvider)!==JSON.stringify(afterProvider),classificationChanged=providerChanged||patch.domainDetection!==undefined||patch.domainRules!==undefined||patch.domain!==undefined,genericChanged=Object.keys(patch).some(key=>!['readingStyle','helpLanguage','apiServices','activeApiServiceId'].includes(key))||providerChanged;
+      const result=await mutate(state=>{state.settings={...state.settings,...patch};if(rememberChanged||cacheConsentChanged)state.supportDataGeneration++;if(cacheConsentChanged||providerChanged||patch.customTerms||patch.domainRules||patch.domain||patch.domainDetection)clearProviderState();if(classificationChanged)invalidateClassification();return publicState(state,true);},false,false);
+      if(cacheConsentChanged)await clearResultCaches();
       await pruneBackgroundQueue();
+      if(cacheConsentChanged)await clearSupportSessions();
       if(providerChanged||patch.domainRules||patch.domain||rememberChanged||patch.assistanceMode)await readingHistory.invalidate();
       if(rememberChanged||providerChanged)await clearSupportSessions();if(providerChanged)await reconcileAutomation();if(rememberChanged||providerChanged||patch.customTerms||patch.domainRules||patch.domain||patch.domainDetection)await clearEmergencySessions();if(genericChanged)await broadcast();
       if(patch.readingStyle!==undefined&&JSON.stringify(patch.readingStyle)!==JSON.stringify(before.settings.readingStyle))await broadcastReadingStyle(patch.readingStyle);
@@ -1367,6 +1458,7 @@ async function handle(message,sender) {
     case 'PREPARED_ASSIST':return preparedAssist(message,sender);
     case 'ASSIST_PREVIEW':return assistPreview(message,sender);
     case 'EMERGENCY_BEGIN':if(!trusted)throw new Error('仅扩展界面可确认紧急翻译。');return emergencyBegin(message);
+    case 'EMERGENCY_ESTIMATE':{if(!trusted)throw new Error('仅扩展界面可确认紧急翻译。');if(!Number.isInteger(message.tabId))throw new Error('无效的预估请求。');return emergencyUsageEstimate(message.tabId,(await load(false)).settings);}
     case 'PASSAGE_TRANSLATE':return passageTranslate(message,sender);
     case 'EMERGENCY_TRANSLATE':return emergencyTranslate(message,sender);
     case 'EMERGENCY_CANCEL_REQUEST':return emergencyCancelRequest(message,sender);
@@ -1380,6 +1472,7 @@ async function handle(message,sender) {
     case 'INTERACT':return interactOffered(message,sender);
     case 'READING_DATA_EXPORT':return readingExport();
     case 'MEMORY_CLEAR':return clearReadingData('memory');
+    case 'CACHE_CLEAR':clearProviderState();await clearResultCaches();await clearSupportSessions();return {cleared:true};
     case 'OPEN_OPTIONS':await chrome.runtime.openOptionsPage();return{};
     default:throw new Error('未知请求。');
   }

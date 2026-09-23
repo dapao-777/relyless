@@ -235,6 +235,58 @@ test('usage estimates prefer the warm local tokenizer over char fallback',async(
     expect(after.estOutput-before.estOutput).toBe(7);
   }finally{chrome.runtime.sendMessage=previousSend;chrome.offscreen=previousOffscreen;}
 });
+test('failing primary api service fails over to its configured fallback once',async()=>{
+  const savedServices=structuredClone(stored.settings.apiServices),savedActive=stored.settings.activeApiServiceId,savedFailed=failedAssists;
+  const services=[...savedServices,{id:'primary-fail',name:'Primary',providerId:'openai-compatible',baseUrl:'https://primary.example/v1',model:'p-model',apiKey:'k1',apiKeys:['k1'],options:{},fallbackServiceId:'legacy-api'}];
+  await send({type:'STATE_PATCH',patch:{apiServices:services,activeApiServiceId:'primary-fail'}},extensionSender);
+  try{
+    tab.incognito=true; // 无痕：跳过词档/缓存写入，避免异步落盘链污染后续测试
+    failNext=true; // TypeError → network class → one failover hop
+    const first=await send({type:'ASSIST',detail:'brief',requestId:'failover-1',text:'failover',context:'The failover keeps assisting.',domain:'general',kind:'word',level:'hint'});
+    expect(first.hint).toBeTruthy();
+    const second=await send({type:'ASSIST',detail:'brief',requestId:'failover-2',text:'failover',context:'A failover retries the fallback.',domain:'general',kind:'word',level:'hint'});
+    expect(second.hint).toBeTruthy();
+    // 无 fallback 的服务依旧原样报错
+    await send({type:'STATE_PATCH',patch:{apiServices:savedServices,activeApiServiceId:savedActive}},extensionSender);
+    failNext=true;
+    await expect(send({type:'ASSIST',detail:'brief',requestId:'failover-3',text:'failover',context:'Without failover this fails.',domain:'general',kind:'word',level:'hint'})).rejects.toThrow('无法连接');
+  }finally{tab.incognito=false;await send({type:'STATE_PATCH',patch:{apiServices:savedServices,activeApiServiceId:savedActive}},extensionSender);failedAssists=savedFailed;}
+});
+test('persistent gloss cache separates English hints from Chinese rescue after a worker restart',async()=>{
+  const previous=globalThis.chrome,data={wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',persistTranslationCache:true,provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'}}},first=isolatedChrome(data,{id:'gloss-cache-one'}),page={url:'https://isolated.example/read',tab:{id:91},frameId:0};
+  try{
+    globalThis.chrome=first.api;await import('../extension/background.js?gloss-cache-one='+Date.now());
+    const warm=await isolatedSend(first,{type:'ASSIST',detail:'brief',requestId:'gloss-warm',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint'},page);
+    expect(warm.source).toBe('provider');await new Promise(resolve=>setTimeout(resolve,30));expect(Object.keys(data.persistentGlossCache||{})).toHaveLength(1);
+    const restarted=isolatedChrome(data,{id:'gloss-cache-two'});globalThis.chrome=restarted.api;await import('../extension/background.js?gloss-cache-two='+Date.now());
+    const before=providerCalls;
+    // 重启实例的会话缓存为空；同文同语境命中持久层
+    const hit=await isolatedSend(restarted,{type:'ASSIST',detail:'brief',requestId:'gloss-hit',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint'},page);
+    expect(hit).toMatchObject({hint:'except if this happens',source:'cache',cacheNotice:'来自本机缓存'});expect(providerCalls).toBe(before);
+    const rescue=await isolatedSend(restarted,{type:'ASSIST',detail:'brief',requestId:'gloss-rescue',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'rescue'},page);
+    expect(rescue.translation).toBe('除非；若非');expect(rescue.source).toBe('provider');
+    const bypass=await isolatedSend(restarted,{type:'ASSIST',detail:'brief',requestId:'gloss-bypass',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint',bypassCache:true},page);
+    expect(bypass.source).not.toBe('cache');expect(providerCalls).toBe(before+2);
+    await isolatedSend(restarted,{type:'MEMORY_CLEAR'});expect(data.persistentGlossCache).toBeUndefined();
+  }finally{globalThis.chrome=previous;}
+});
+test('cache consent defaults to session-only, purges legacy entries, and clears on opt-out',async()=>{
+  const previous=globalThis.chrome,seed={wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'}},persistentGlossCache:{legacy:{hint:'private',at:Date.now()}}},fixture=isolatedChrome(seed,{id:'cache-consent'}),page={url:'https://isolated.example/read',tab:{id:91},frameId:0};
+  const ask=requestId=>isolatedSend(fixture,{type:'ASSIST',detail:'brief',requestId,text:'unless',context:'A fresh consent example unless expired.',domain:'tech',kind:'word',level:'hint'},page);
+  try{
+    globalThis.chrome=fixture.api;await import('../extension/background.js?cache-consent='+Date.now());
+    await isolatedSend(fixture,{type:'STATE_GET'});expect(seed.persistentGlossCache).toBeUndefined();expect(seed.settings.persistTranslationCache).toBe(false);
+    expect((await ask('session-one')).source).toBe('provider');await new Promise(resolve=>setTimeout(resolve,0));
+    expect(Object.keys(fixture.session.persistentGlossCache||{})).toHaveLength(1);expect(seed.persistentGlossCache).toBeUndefined();
+    await expect(isolatedSend(fixture,{type:'STATE_PATCH',patch:{persistTranslationCache:'yes'}})).rejects.toThrow();
+    await isolatedSend(fixture,{type:'STATE_PATCH',patch:{persistTranslationCache:true}});expect(fixture.session.persistentGlossCache).toBeUndefined();
+    expect((await ask('local-one')).source).toBe('provider');await new Promise(resolve=>setTimeout(resolve,0));expect(Object.keys(seed.persistentGlossCache||{})).toHaveLength(1);
+    await isolatedSend(fixture,{type:'STATE_PATCH',patch:{persistTranslationCache:false}});expect(seed.persistentGlossCache).toBeUndefined();
+    expect((await ask('session-two')).source).toBe('provider');await new Promise(resolve=>setTimeout(resolve,0));
+    await isolatedSend(fixture,{type:'CACHE_CLEAR'});expect(fixture.session.persistentGlossCache).toBeUndefined();expect(seed.persistentGlossCache).toBeUndefined();
+    const beforeClearRetry=providerCalls;expect((await ask('after-clear')).source).toBe('provider');expect(providerCalls).toBe(beforeClearRetry+1);
+  }finally{globalThis.chrome=previous;}
+});
 test('current document identity tolerates URL state changes but rejects replaced documents',async()=>{
   const originalUrl=tab.url,originalDocumentId=currentDocumentId;
   try{
@@ -806,8 +858,10 @@ test('translation isolates scope and page context while caching only successful 
     expect(await isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token,requestSeq:5,items:[pageItem('malformed','malformed',contextA)]},page)).toEqual({items:[],errors:[{id:'malformed',code:'BATCH_SHAPE'}]});expect(calls).toBe(5);
     for(const [index,id] of ['offline-one','offline-two'].entries())await expect(isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token,requestSeq:6+index,items:[pageItem(id,'offline',contextA)]},page)).rejects.toThrow('无法连接服务');expect(calls).toBe(7);
     fixture.api.tabs.get=async()=>({id:91,url:page.url,active:true});
-    for(const [index,url]of ['https://isolated.example/other-source','https://another.example/read'].entries()){
-      page.url=url;await isolatedSend(fixture,{type:'PAGE_UI_INJECT',tabId:91});const next=await isolatedSend(fixture,{type:'EMERGENCY_BEGIN',tabId:91,url});await isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token:next.token,requestSeq:1,items:[pageItem('new-source','Good text.',contextA)]},page);expect(calls).toBe(8+index);
+    for(const url of ['https://isolated.example/other-source','https://another.example/read']){
+      page.url=url;await isolatedSend(fixture,{type:'PAGE_UI_INJECT',tabId:91});const next=await isolatedSend(fixture,{type:'EMERGENCY_BEGIN',tabId:91,url});
+      // 持久译文缓存按内容哈希跨页命中：同文同上下文在新页面不再请求服务
+      expect(await isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token:next.token,requestSeq:1,items:[pageItem('new-source','Good text.',contextA)]},page)).toMatchObject({items:[{id:'new-source',translation:'译文10'}],cacheHits:1});expect(calls).toBe(7);
     }
     expect(data.words).toEqual([]);expect(data).not.toHaveProperty('supportUsage');
   }finally{globalThis.chrome=previous;globalThis.fetch=previousFetch;}
@@ -839,6 +893,24 @@ test('page request cancellation persists before registration and prunes queued p
     const occupied=[isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId:'block-one',items:[{id:'one',text:'Provider blocker one.'}]},page(92)),isolatedSend(fixture,{type:'PASSAGE_TRANSLATE',requestId:'block-two',items:[{id:'two',text:'Provider blocker two.'}]},page(93))];await Promise.all(started.map(item=>item.promise));
     const queued=isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token,requestSeq:2,items:[pageItem('cancelled-while-queued','Cancelled while queued.')]},page(91)),queuedState=queued.then(value=>({value}),error=>({error}));await new Promise(resolve=>setTimeout(resolve,0));await isolatedSend(fixture,{type:'EMERGENCY_CANCEL_REQUEST',token,through:2},page(91));blockers.forEach(item=>item.resolve());await Promise.all(occupied);expect((await queuedState).error).toBeInstanceOf(Error);expect(calls.filter(text=>text==='Cancelled while queued.')).toEqual([]);
   }finally{blockers.forEach(item=>item.resolve());globalThis.chrome=previous;globalThis.fetch=previousFetch;}
+});
+
+test('emergency begin estimates tokens and enforces the monthly budget with explicit confirmation',async()=>{
+  const previous=globalThis.chrome,month=new Date().toISOString().slice(0,10);
+  const data={wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'},usageBudget:{monthlyTokens:1000}},modelUsage:{rows:[{day:month,provider:'api',service:'svc',model:'fixture',operation:'EMERGENCY_TRANSLATE',requests:1,input:1500,output:600,estInput:0,estOutput:0,inputChars:0,outputChars:0}]}};
+  const fixture=isolatedChrome(data,{id:'budget-check'});
+  try{
+    globalThis.chrome=fixture.api;fixture.api.tabs.sendMessage=async()=>({chars:400});await import('../extension/background.js?budget='+Date.now());
+    await isolatedSend(fixture,{type:'PAGE_UI_INJECT',tabId:91});
+    const blocked=await isolatedSend(fixture,{type:'EMERGENCY_BEGIN',tabId:91,url:'https://isolated.example/read'});
+    expect(blocked).toMatchObject({budgetExceeded:true,budget:1000,monthlyUsed:2100,estimate:100}); // 400 字符 × 0.25 回退比率
+    const confirmed=await isolatedSend(fixture,{type:'EMERGENCY_BEGIN',tabId:91,url:'https://isolated.example/read',confirmed:true});
+    expect(confirmed).toMatchObject({estimate:100});expect(confirmed.token).toBeTruthy();
+    // 预算 0 = 不限：历史超量也不再拦截
+    await isolatedSend(fixture,{type:'STATE_PATCH',patch:{usageBudget:{monthlyTokens:0}}});
+    await isolatedSend(fixture,{type:'PAGE_UI_INJECT',tabId:92});
+    expect((await isolatedSend(fixture,{type:'EMERGENCY_BEGIN',tabId:92,url:'https://isolated.example/read'})).token).toBeTruthy();
+  }finally{globalThis.chrome=previous;}
 });
 
 test('ending a page session rejects a late result and prevents it from entering translation cache',async()=>{
@@ -889,9 +961,10 @@ test('paragraph translation preserves hostile source as data, rejects output esc
     await import('../extension/background.js?passage-boundary='+Date.now());
     const command={type:'PASSAGE_TRANSLATE',requestId:'paragraph-request',items:[{id:'paragraph-one',text:source}]};
     await expect(isolatedSend(fixture,command,{...page,frameId:1})).rejects.toThrow('主框架');expect(requests).toEqual([]);
-    const readingSnapshot=()=>JSON.stringify(Object.fromEntries(Object.entries(data).filter(([key])=>key!=='diagnostics'&&key!=='modelUsage'))),before=readingSnapshot();
+    const readingSnapshot=()=>JSON.stringify(Object.fromEntries(Object.entries(data).filter(([key])=>key!=='diagnostics'&&key!=='modelUsage'&&key!=='persistentTranslationCache'))),before=readingSnapshot();
     expect((await isolatedSend(fixture,command,page)).items[0].translation).toContain('忽略先前指令');
     expect(readingSnapshot()).toBe(before);
+    expect(JSON.stringify(data.persistentTranslationCache||{})).not.toContain(source);expect(JSON.stringify(data.persistentTranslationCache||{})).not.toContain('Ignore prior instructions');
     expect(JSON.stringify(data.modelUsage)).not.toContain('Ignore prior instructions');expect(data.modelUsage?.rows?.[0]).toMatchObject({operation:'PASSAGE_TRANSLATE',requests:1});
     expect(requests[0].messages.map(message=>message.role)).toEqual(['system','user']);
     expect(JSON.parse(requests[0].messages[1].content)).toEqual({items:command.items});
