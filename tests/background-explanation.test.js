@@ -3,13 +3,16 @@ import {normalizeSettings,wordId} from '../extension/shared.js';
 
 import {event,pick,remove,isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
 import {createConversationStore} from '../extension/conversation-store.js';
-import 'fake-indexeddb/auto';
+import {indexedDB,IDBKeyRange} from 'fake-indexeddb';
+
+globalThis.indexedDB=indexedDB;
+globalThis.IDBKeyRange=IDBKeyRange;
 
 function capabilityResponse(body){const format=body.response_format?.json_schema;if(format?.name!=='relyless_capability')return null;return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({probe:format.schema.properties.probe.enum[0]})}}]});}
 function withCapabilityProbe(handler){return async(url,options)=>capabilityResponse(JSON.parse(options.body))||handler(url,options);}
 
 const runtimeMessage=event(),stored={
-  wordSchemaVersion:5,productSchemaVersion:1,words:[],legacyReadingArchive:[{term:'legacy',sentence:'private old sentence'}],supportDataGeneration:0,supportUsage:[],onDemandSuggestionShownAt:0,
+  wordSchemaVersion:5,productSchemaVersion:1,words:[],legacyReadingArchive:[{term:'legacy',sentence:'private old sentence'}],supportDataGeneration:0,
   settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'},rememberSupport:true,assistanceMode:'ambient',lookupKey:'Shift'},
 };
 const session={},tab={id:7,url:'https://reading.example/article?private=yes#part',title:'Private title',active:true};
@@ -112,23 +115,21 @@ test('private pages cannot read or delete ordinary-window conversation history',
   }
 });
 test('incognito assistance does not read or persist ordinary-window word memory',async()=>{
-  const words=structuredClone(stored.words),usage=structuredClone(stored.supportUsage);
+  const words=structuredClone(stored.words);
   try{
     await send({type:'ASSIST',detail:'brief',requestId:'privacy-regular',text:'index',context:'The database query uses an index.',domain:'data',kind:'word',level:'hint'});
     await send({type:'ASSIST_COMMIT',requestId:'privacy-regular'});
     const preview={type:'ASSIST_PREVIEW',detail:'full',text:'index',context:'The database query uses an index.',domain:'data',kind:'word',level:'hint'};
     expect((await send(preview))?.source).toBe('saved-reference');
-    const beforeWords=structuredClone(stored.words),beforeUsage=structuredClone(stored.supportUsage);
+    const beforeWords=structuredClone(stored.words);
     tab.incognito=true;
     expect(await send(preview)).toBeNull();
     await send({type:'ASSIST',detail:'brief',requestId:'privacy-incognito',text:'novel',context:'A novel condition applies.',domain:'general',kind:'word',level:'hint'});
     expect((await send({type:'ASSIST_COMMIT',requestId:'privacy-incognito'})).support).toBeNull();
-    expect(await send({type:'READING_ACTIVITY',event:'eligible'})).toEqual({recorded:false});
     expect(await send({type:'REVIEW_FEEDBACK',wordId:'private',senseKey:'private',outcome:'know'})).toEqual({updated:false});
     await expect(send({type:'WORD_PREFERENCE_SET',wordId:stored.words[0].id,known:true})).rejects.toThrow('无痕');
     expect(stored.words).toEqual(beforeWords);
-    expect(stored.supportUsage).toEqual(beforeUsage);
-  }finally{tab.incognito=false;stored.words=words;stored.supportUsage=usage;}
+  }finally{tab.incognito=false;stored.words=words;}
 });
 test('API model discovery is settings-only and never invents a custom Responses catalog',async()=>{
   const service={id:'draft',name:'Draft',providerId:'open-responses',baseUrl:'https://models.example/v1/responses',model:'',apiKey:'draft-key',options:{}};
@@ -168,7 +169,21 @@ test('sentence hierarchy is authorized, cached, presentation-independent, and dr
   await send({type:'SENTENCE_GROUPS_LINE_STYLE_SET',lineStyle:'solid'},extensionSender);
   expect(await send({type:'SENTENCE_GROUPS_GET'})).toMatchObject({enabled:false,lineStyle:'solid'});expect(providerCalls).toBe(stoppedAt);
 });
-
+test('on-demand sentence hierarchy rejects background scans but serves deliberate selection',async()=>{
+  await send({type:'PAGE_UI_INJECT',tabId:7},extensionSender);
+  await send({type:'SENTENCE_GROUPS_SET',tabId:7,enabled:true},extensionSender);
+  await send({type:'STATE_PATCH',patch:{assistanceMode:'on-demand'}},extensionSender);
+  try{
+    const items=[{id:'selected',sentence:'After users select a sentence, its structure appears.'}],before=providerCalls;
+    await expect(send({type:'SENTENCE_GROUPS_BATCH',items})).rejects.toThrow('不自动解构');
+    expect(providerCalls).toBe(before);
+    expect((await send({type:'SENTENCE_GROUPS_BATCH',items,explicit:true})).items[0].groups[0]).toMatchObject({role:'clause',start:0,end:items[0].sentence.length});
+    expect(providerCalls).toBe(before+1);
+  }finally{
+    await send({type:'STATE_PATCH',patch:{assistanceMode:'ambient'}},extensionSender);
+    await send({type:'SENTENCE_GROUPS_SET',tabId:7,enabled:false},extensionSender);
+  }
+});
 test('invalid reading settings leave the last accepted configuration intact',async()=>{
   const readingStyle={original:{style:'border',color:'#b7791f',size:115},annotation:{style:'plain',color:'auto',size:80},translation:{style:'background',color:'#2255aa',size:130}};
   await send({type:'STATE_PATCH',patch:{lookupKey:'Q',lookupDisplay:'annotation',hintDisplay:'veil',readingStyle}},extensionSender);
@@ -178,18 +193,6 @@ test('invalid reading settings leave the last accepted configuration intact',asy
   await expect(send({type:'STATE_PATCH',patch:{lookupKey:'R',readingStyle:{...readingStyle,translation:{...readingStyle.translation,size:101}}}},extensionSender)).rejects.toThrow();
   expect((await send({type:'STATE_GET'},extensionSender)).settings).toMatchObject({lookupKey:'Q',lookupDisplay:'annotation',hintDisplay:'veil',readingStyle});
   expect((await send({type:'STATE_GET'})).settings.hintDisplay).toBe('veil');
-});
-test('content pages can accept a suggested domain and optionally remember the site',async()=>{
-  const before=(await send({type:'STATE_GET'},extensionSender)).settings.domainRules.length;
-  expect(await send({type:'PAGE_DOMAIN_SET',domain:'medical',rememberSite:true})).toEqual({domain:'medical'});
-  const rules=(await send({type:'STATE_GET'},extensionSender)).settings.domainRules;
-  const rule=rules.at(-1);
-  expect(rules.length).toBe(before+1);
-  expect(rule).toMatchObject({host:'reading.example',pathPrefix:'/',domain:'medical',includeSubdomains:false});
-  await send({type:'STATE_PATCH',patch:{domainRules:rules.filter(item=>!(item.host==='reading.example'&&item.domain==='medical'))}},extensionSender);
-  await expect(send({type:'PAGE_DOMAIN_SET',domain:'bogus'})).rejects.toThrow();
-  const detached={id:'backend-fixture',url:'https://reading.example/article',frameId:0};
-  await expect(send({type:'PAGE_DOMAIN_SET',domain:'tech'},detached)).rejects.toThrow('目标页面');
 });
 test('sense keys merge semantically close labels through warm local embeddings',async()=>{
   const previousSend=chrome.runtime.sendMessage,previousOffscreen=chrome.offscreen,savedWords=stored.words;
@@ -204,6 +207,20 @@ test('sense keys merge semantically close labels through warm local embeddings',
     expect(committed.support).toMatchObject({senseKey:'sense-existing'});
     expect(stored.words[0].senses).toHaveLength(1);
   }finally{chrome.runtime.sendMessage=previousSend;chrome.offscreen=previousOffscreen;await new Promise(resolve=>setTimeout(resolve,20));stored.words=savedWords;}
+});
+test('a legacy sense without embedding retains its key after a close label change when local model is warm',async()=>{
+  const previousSend=chrome.runtime.sendMessage,previousOffscreen=chrome.offscreen,savedWords=stored.words;
+  try{
+    stored.words=[{id:wordId('unless','tech'),term:'unless',domain:'tech',kind:'word',revision:1,helpCount:1,requestedAt:1,senses:[{key:'legacy-sense',label:'marks an exception',definition:{hint:'except if',translation:'除非'}}]}];
+    chrome.offscreen={hasDocument:async()=>true};
+    chrome.runtime.sendMessage=async message=>message?.type==='EMBED_LOCAL'?{ok:true,data:{vectors:[[1,0,0,0],[0.99,0.01,0,0]],dimensions:4}}:{ok:false,error:'unexpected local call'};
+    nextSense='introduces an exception';
+    const result=await send({type:'ASSIST',detail:'brief',requestId:'legacy-sense-backfill',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint',bypassCache:true});
+    expect(result.support.senseKey).toBe('legacy-sense');
+    await send({type:'ASSIST_COMMIT',requestId:'legacy-sense-backfill'});
+    expect(stored.words[0].senses).toHaveLength(1);
+    expect(stored.words[0].senses[0].key).toBe('legacy-sense');
+  }finally{nextSense=null;chrome.runtime.sendMessage=previousSend;chrome.offscreen=previousOffscreen;await new Promise(resolve=>setTimeout(resolve,20));stored.words=savedWords;}
 });
 test('usage estimates prefer the warm local tokenizer over char fallback',async()=>{
   const previousSend=chrome.runtime.sendMessage,previousOffscreen=chrome.offscreen;
@@ -345,9 +362,9 @@ test('identical concurrent assists share one provider inference while the latest
 
 test('failed and uncommitted assists do not create records; memory generation invalidates old commits',async()=>{
   await expect(send({type:'ASSIST',detail:'full',requestId:'broken-id',text:'broken',context:'It is broken here.',domain:'general',kind:'word',level:'hint'})).rejects.toThrow('无法连接服务');
-  expect((await send({type:'STATE_GET'},extensionSender)).providerError).toContain('无法连接服务');const usageAfterFailure=stored.supportUsage.reduce((sum,row)=>sum+row.helpRequests,0),callsAfterFailure=providerCalls;
+  expect((await send({type:'STATE_GET'},extensionSender)).providerError).toContain('无法连接服务');const callsAfterFailure=providerCalls;
   await expect(send({type:'ASSIST',detail:'full',requestId:'broken-id',text:'broken',context:'It is broken here.',domain:'general',kind:'word',level:'hint'})).rejects.toThrow('无法连接服务');
-  expect(providerCalls).toBe(callsAfterFailure);expect(stored.supportUsage.reduce((sum,row)=>sum+row.helpRequests,0)).toBe(usageAfterFailure);session['pendingAssists:7'].expired={status:'failed',error:'old',at:Date.now()-301000};await send({type:'ASSIST',detail:'full',requestId:'expiry-clean',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint'});expect((await send({type:'STATE_GET'},extensionSender)).providerError).toBe('');expect(session['pendingAssists:7'].expired).toBeUndefined();expect(failedAssists).toBe(1);
+  expect(providerCalls).toBe(callsAfterFailure);session['pendingAssists:7'].expired={status:'failed',error:'old',at:Date.now()-301000};await send({type:'ASSIST',detail:'full',requestId:'expiry-clean',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'hint'});expect((await send({type:'STATE_GET'},extensionSender)).providerError).toBe('');expect(session['pendingAssists:7'].expired).toBeUndefined();expect(failedAssists).toBe(1);
   const rescue=await send({type:'ASSIST',detail:'full',requestId:'rescue-id',text:'unless',context:'Retry unless expired.',domain:'tech',kind:'word',level:'rescue'});
   expect(rescue).toMatchObject({translation:'除非；若非',details:{meaning:{en:'introduces the exception where expiration stops retries',zh:'在本句中引出“令牌过期便不重试”的例外'},sentenceTranslation:'除非令牌已过期，否则会重试。'}});
   await send({type:'STATE_PATCH',patch:{rememberSupport:false}},extensionSender);
@@ -393,11 +410,11 @@ test('sense, record-count, and quota limits stop new records without evicting pr
 });
 
 test('analyze remains local and provider test has no reading side effects',async()=>{
-  const beforeCalls=providerCalls,beforeWords=structuredClone(stored.words),beforeUsage=structuredClone(stored.supportUsage),beforeSession=structuredClone(session);
+  const beforeCalls=providerCalls,beforeWords=structuredClone(stored.words),beforeSession=structuredClone(session);
   const analyzed=await send({type:'ANALYZE',text:'The request is retried unless the token has expired.',domain:'tech'});
   expect(analyzed.domain).toBe('tech');expect(analyzed.languageStats.tokens).toBeGreaterThan(0);expect(providerCalls).toBe(beforeCalls);
   expect(await send({type:'PROVIDER_TEST'},extensionSender)).toEqual({hint:'a structure for fast lookup'});
-  expect(providerCalls).toBe(beforeCalls+1);expect(stored.words).toEqual(beforeWords);expect(stored.supportUsage).toEqual(beforeUsage);expect(session).toEqual(beforeSession);
+  expect(providerCalls).toBe(beforeCalls+1);expect(stored.words).toEqual(beforeWords);expect(session).toEqual(beforeSession);
 });
 
 test('compatible JSON API serves provider checks, assistance, support, and classification',async()=>{
@@ -427,12 +444,12 @@ test('compatible JSON API serves provider checks, assistance, support, and class
     return Response.json({choices:[{message:{role:'assistant',content:JSON.stringify(envelope?.properties?.result?{result,...(extraWrapper?{tool_calls:[]}:{})}:result)},finish_reason:'stop'}]});
   }});
   try{
-    globalThis.fetch=fetchBefore;
+    globalThis.fetch=Bun.fetch;
     await send({type:'STATE_PATCH',patch:{providerKind:'api',apiServices:[{id:'loopback',name:'Loopback',baseUrl:'http://127.0.0.1:'+server.port,model:'deepseek-flash',apiKey:'loopback-only-key'}],activeApiServiceId:'loopback'}},extensionSender);
     expect(await send({type:'API_MODELS_LIST',service:{...stored.settings.apiServices[0],model:''}},extensionSender)).toEqual({models:[{id:'deepseek-flash',name:'DeepSeek Flash'}]});
-    const beforeWords=structuredClone(stored.words),beforeUsage=structuredClone(stored.supportUsage);
+    const beforeWords=structuredClone(stored.words);
     expect(await send({type:'PROVIDER_TEST'},extensionSender)).toEqual({hint:'a structure for finding database records'});
-    expect(stored.words).toEqual(beforeWords);expect(stored.supportUsage).toEqual(beforeUsage);
+    expect(stored.words).toEqual(beforeWords);
     const command={type:'ASSIST',detail:'full',requestId:'json-api-word',text:'index',context:'The query uses an index.',domain:'data',kind:'word',level:'rescue'};
     expect(await send(command)).toMatchObject({level:'rescue',translation:'数据库中帮助定位记录的索引。',details:{meaning:{en:'a lookup structure',zh:'一种查找结构'},sentenceTranslation:'该查询使用了一个索引。'}});
     const sentence='Retry unless the token has expired.';
@@ -451,19 +468,16 @@ test('compatible JSON API serves provider checks, assistance, support, and class
   }
 });
 
-test('usage aggregation enforces UTC window, blockers, foreground memory, and one-time suggestion',async()=>{
-  await send({type:'STATE_PATCH',patch:{rememberSupport:false}},extensionSender);const before=structuredClone(stored.supportUsage);expect((await send({type:'READING_ACTIVITY',event:'eligible'})).recorded).toBe(false);expect(stored.supportUsage).toEqual(before);await send({type:'STATE_PATCH',patch:{rememberSupport:true}},extensionSender);
-  tab.active=false;expect((await send({type:'READING_ACTIVITY',event:'eligible'})).recorded).toBe(false);tab.active=true;await send({type:'PAGE_ACTIVITY_SET',enabled:false});expect((await send({type:'READING_ACTIVITY',event:'eligible'})).recorded).toBe(false);await send({type:'PAGE_ACTIVITY_SET',enabled:true});
-  const today=new Date();today.setUTCHours(0,0,0,0);stored.supportUsage=[{day:today.toISOString().slice(0,10),eligiblePages:50,helpRequests:0,hintsShown:0,errors:0,pageKeys:Array.from({length:50},(_,i)=>'full-'+i)}];await send({type:'READING_ACTIVITY',event:'eligible'});expect(stored.supportUsage[0].eligiblePages).toBe(50);expect(stored.supportUsage[0].pageKeys).toHaveLength(50);stored.supportUsage=Array.from({length:14},(_,index)=>{const date=new Date(today);date.setUTCDate(date.getUTCDate()-(index===0?27:index));return{day:date.toISOString().slice(0,10),eligiblePages:1,helpRequests:0,hintsShown:0,errors:0,pageKeys:['hash-'+index]};});stored.onDemandSuggestionShownAt=0;
-  for(const field of ['helpRequests','hintsShown','errors']){stored.supportUsage[0][field]=1;expect(await send({type:'ON_DEMAND_SUGGESTION'},extensionSender)).toEqual({show:false});stored.supportUsage[0][field]=0;}
-  const suggestions=await Promise.all([send({type:'ON_DEMAND_SUGGESTION'},extensionSender),send({type:'ON_DEMAND_SUGGESTION'},extensionSender)]);
-  expect(suggestions.filter(value=>value.show)).toHaveLength(1);
+test('passive reading telemetry is rejected and removed from the export',async()=>{
+  await expect(send({type:'READING_ACTIVITY',event:'eligible'})).rejects.toThrow('此操作不能从网页执行。');
+  await expect(send({type:'ON_DEMAND_SUGGESTION'},extensionSender)).rejects.toThrow('未知请求');
   const exported=await send({type:'READING_DATA_EXPORT'},extensionSender);
   expect(exported).toMatchObject({schemaVersion:5,productSchemaVersion:1});
   expect(exported.legacyRecords).toHaveLength(1);
+  expect(exported).not.toHaveProperty('supportUsage');
   expect(JSON.stringify(exported)).not.toContain('fixture-key');
   await send({type:'MEMORY_CLEAR'},extensionSender);
-  expect(stored.words).toEqual([]);expect(stored.supportUsage).toEqual([]);expect(stored.onDemandSuggestionShownAt).toBe(0);
+  expect(stored.words).toEqual([]);
   expect(stored.legacyReadingArchive).toBeUndefined();
 });
 
@@ -586,9 +600,8 @@ test('prepared help is offline, durable, article-bound, and records request inte
   expect(prepared.items[0].targets[0]).toMatchObject({personal:true,meaning:{en:'except on the condition that the token has not expired',zh:'在令牌未过期这一条件下表示例外'},sentenceTranslation:'除非令牌已过期，否则该请求会重试。',coverage:'full'});
   const other=await send({type:'PREPARED_SUPPORT',article:{key:'b'.repeat(64),text:articleText,coverage:'full'},items:[{id:'p2',sentence:articleText,domain:'tech',candidates:[]} ]});
   expect(other.items[0].targets[0]).toMatchObject({text:'unless',stage:'pending',senseKey:null,hint:'',translation:''});
-  const missingText='The model uses reasoning to compare possible answers.',missingArticle={key:'c'.repeat(64),text:missingText,coverage:'full'},helpBefore=stored.supportUsage.reduce((sum,row)=>sum+(row.helpRequests||0),0);
+  const missingText='The model uses reasoning to compare possible answers.',missingArticle={key:'c'.repeat(64),text:missingText,coverage:'full'};
   const missingBrief=await send({type:'PREPARED_ASSIST',detail:'brief',requestId:'missing-prepared-definition',text:'reasoning',context:missingText,domain:'tech',kind:'word',level:'hint',article:missingArticle});expect(missingBrief).toMatchObject({source:'provider'});expect(missingBrief).not.toHaveProperty('details');
-  expect(stored.supportUsage.reduce((sum,row)=>sum+(row.helpRequests||0),0)).toBe(helpBefore+1);
   const missing=await send({type:'PREPARED_SUPPORT',article:missingArticle,items:[{id:'missing-word',sentence:missingText,domain:'tech',candidates:[]}]});
   expect(missing.items[0].targets[0]).toMatchObject({text:'reasoning',stage:'pending',senseKey:null,hint:'',translation:''});
   const changedContext='The clause uses unless in another way.',changedArticle={key:'d'.repeat(64),text:changedContext,coverage:'full'};
@@ -850,7 +863,7 @@ test('translation isolates scope and page context while caching only successful 
       // 持久译文缓存按内容哈希跨页命中：同文同上下文在新页面不再请求服务
       expect(await isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token:next.token,requestSeq:1,items:[pageItem('new-source','Good text.',contextA)]},page)).toMatchObject({items:[{id:'new-source',translation:'译文10'}],cacheHits:1});expect(calls).toBe(7);
     }
-    expect(data.words).toEqual([]);expect(data.supportUsage||[]).toEqual([]);
+    expect(data.words).toEqual([]);expect(data).not.toHaveProperty('supportUsage');
   }finally{globalThis.chrome=previous;globalThis.fetch=previousFetch;}
 });
 
@@ -1176,12 +1189,13 @@ test('page state exposes reading controls but not private routing, models or glo
 });
 
 test('interrupted memory deletion resumes on worker restart before data access',async()=>{
-  const previous=globalThis.chrome,word={id:wordId('ephemeral','general'),term:'ephemeral',domain:'general',kind:'word',revision:1,helpCount:1,requestedAt:1,knownAt:1,senses:[]};
+  const previous=globalThis.chrome,word={id:wordId('ephemeral','general'),term:'ephemeral',domain:'general',kind:'word',revision:1,helpCount:1,requestedAt:1,knownAt:1,senses:[{key:'legacy-sense',label:'legacy',peekCount:2}]};
   const data={wordSchemaVersion:5,productSchemaVersion:1,words:[word],legacyReadingArchive:[{term:'old-private-term'}],supportUsage:[{day:'2026-09-13',helpRequests:1}],settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'retained-key'},helpLanguage:'en'}};
   const first=isolatedChrome(data,{id:'cleanup-restart'});
   try{
     globalThis.chrome=first.api;await import('../extension/background.js?cleanup-before='+Date.now());
     await isolatedSend(first,{type:'STATE_GET'});
+    expect(data).not.toHaveProperty('supportUsage');expect(data.words[0].senses[0]).not.toHaveProperty('peekCount');
     first.session['pendingAssists:91']={private:{at:Date.now(),result:{translation:'private cached text'}}};
     first.session['domainCache']={private:{text:'private article context'}};
     const removeLocal=first.api.storage.local.remove;
@@ -1191,7 +1205,7 @@ test('interrupted memory deletion resumes on worker restart before data access',
     const restarted=isolatedChrome(data,{id:'cleanup-restart'});Object.assign(restarted.session,structuredClone(first.session));
     globalThis.chrome=restarted.api;await import('../extension/background.js?cleanup-after='+Date.now());
     const exported=await isolatedSend(restarted,{type:'READING_DATA_EXPORT'}),state=await isolatedSend(restarted,{type:'STATE_GET'});
-    expect(exported.records).toEqual([]);expect(exported.legacyRecords).toEqual([]);expect(exported.supportUsage).toEqual([]);
+    expect(exported.records).toEqual([]);expect(exported.legacyRecords).toEqual([]);expect(data).not.toHaveProperty('supportUsage');
     expect(data.readingCleanup).toBeUndefined();expect(restarted.session['pendingAssists:91']).toBeUndefined();expect(restarted.session.domainCache).toBeUndefined();
     expect(state.settings).toMatchObject({helpLanguage:'en'});expect(state.settings.apiServices[0].apiKey).toBe('retained-key');
     expect((await isolatedSend(restarted,{type:'HISTORY_GET',days:0})).metrics.queries).toBe(0);
@@ -1261,6 +1275,27 @@ test('pausing automatic support during capability detection never sends the arti
 });
 
 
+test('request concurrency caps queued provider work and validates bounds',async()=>{
+  expect(normalizeSettings({}).requestConcurrency).toBe(2);
+  expect(normalizeSettings({requestConcurrency:6}).requestConcurrency).toBe(6);
+  expect(normalizeSettings({requestConcurrency:0}).requestConcurrency).toBe(2);
+  expect(normalizeSettings({requestConcurrency:9}).requestConcurrency).toBe(2);
+  await expect(send({type:'STATE_PATCH',patch:{requestConcurrency:0}},extensionSender)).rejects.toThrow();
+  await expect(send({type:'STATE_PATCH',patch:{requestConcurrency:9}},extensionSender)).rejects.toThrow();
+  await send({type:'STATE_PATCH',patch:{requestConcurrency:1}},extensionSender);
+  const before=providerCalls;let release;supportGate=new Promise(resolve=>{release=resolve;});
+  try{
+    const first=send({type:'SUPPORT_BATCH',items:[{id:'cap-one',sentence:'A unique unless condition applies.',domain:'tech',candidates:[{text:'unless'}]}]});
+    while(providerCalls===before)await new Promise(r=>setTimeout(r,0));
+    const second=send({type:'SUPPORT_BATCH',items:[{id:'cap-two',sentence:'Another unique unless condition applies.',domain:'tech',candidates:[{text:'unless'}]}]});
+    await new Promise(r=>setTimeout(r,40));
+    expect(providerCalls-before).toBe(1);
+    release();supportGate=null;
+    await Promise.allSettled([first,second]);
+    expect(providerCalls-before).toBe(2);
+  }finally{release();supportGate=null;await send({type:'STATE_PATCH',patch:{requestConcurrency:2}},extensionSender);}
+});
+
 test('domain detection accepts a jev mode with bounded fields', async () => {
   const fixture=isolatedChrome({wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'chatgpt',domainDetection:{mode:'local',subscriptionModel:'',apiModel:'',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevModel:'typesafe/jev-1.13.0',jevApiKey:'',jevBaseUrl:'https://router.requesty.ai/v1'}}},{id:'jev-settings'});
   globalThis.chrome=fixture.api;
@@ -1275,7 +1310,7 @@ test('domain detection accepts a jev mode with bounded fields', async () => {
 
 test('multi-key services fail over to the next key after an auth error', async () => {
   const fixture=isolatedChrome({
-    wordSchemaVersion:5,productSchemaVersion:1,words:[],supportDataGeneration:0,supportUsage:[],onDemandSuggestionShownAt:0,
+    wordSchemaVersion:5,productSchemaVersion:1,words:[],supportDataGeneration:0,
     settings:{providerKind:'api',apiServices:[{id:'multi',name:'Multi',providerId:'openai',baseUrl:'https://multi.example/v1',model:'m',apiKey:'bad-key',apiKeys:['bad-key','good-key']}],activeApiServiceId:'multi',domainDetection:{mode:'local',jevApiKey:'',jevModel:'typesafe/jev-1.13.0',jevBaseUrl:'https://router.requesty.ai/v1'},rememberSupport:false},
   },{id:'backend-fixture'});
   globalThis.chrome=fixture.api;

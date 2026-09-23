@@ -130,11 +130,10 @@ self.addEventListener('message', (event) => {
   const data = event.data || {};
   if (!['classify', 'embed', 'countTokens'].includes(data.type)) return;
   const { id } = data;
-  const work = data.type === 'classify' ? classify(data.text, data.title)
-    : data.type === 'embed' ? embedTexts(data.texts)
-    : countTokens(data.texts);
   inferenceChain = inferenceChain
-    .then(() => work)
+    .then(() => data.type === 'classify' ? classify(data.text, data.title)
+      : data.type === 'embed' ? embedTexts(data.texts)
+      : countTokens(data.texts))
     .then(
       (result) => self.postMessage({ id, ok: true, data: result }),
       (error) => self.postMessage({ id, ok: false, error: error?.message || String(error) }),

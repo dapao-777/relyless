@@ -50,7 +50,26 @@ test('removed automation modes and video translation display cannot re-enter the
   expect(()=>validateVideo({display:'original'},initial)).toThrow('未知');
   expect(()=>validateVideo({theme:'system'},initial)).toThrow('主题');
 });
-
+test('unsupported popup shows one empty state without page-scoped requests',async()=>{
+  const previousChrome=globalThis.chrome,previousDocument=globalThis.document;
+  const elements=new Map(),requests=[];
+  const element=id=>{
+    if(!elements.has(id))elements.set(id,{hidden:true,textContent:'',handlers:{},addEventListener(type,handler){this.handlers[type]=handler;}});
+    return elements.get(id);
+  };
+  globalThis.document={querySelector:element,querySelectorAll:()=>[]};
+  globalThis.chrome={runtime:{async sendMessage(message){requests.push(message.type);return {ok:true,data:{settings:{lookupKey:'D',assistanceMode:'on-demand'},providerConfigured:false}};}},storage:{onChanged:{addListener(){}}},tabs:{query:async()=>[{id:7,url:'chrome://settings'}]}};
+  try{
+    await import('../extension/ui/popup.js?unsupported-page-regression');
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(element('#unsupported-page').hidden).toBe(false);
+    expect(element('#page-controls').hidden).toBe(true);
+    expect(requests).toEqual(['STATE_GET']);
+  }finally{
+    if(previousChrome===undefined)delete globalThis.chrome;else globalThis.chrome=previousChrome;
+    if(previousDocument===undefined)delete globalThis.document;else globalThis.document=previousDocument;
+  }
+});
 test('popup preserves the clicked site choice while rendering its busy state',async()=>{
   const previousChrome=globalThis.chrome,previousDocument=globalThis.document;
   const elements=new Map();

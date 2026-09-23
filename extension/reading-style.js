@@ -109,12 +109,14 @@
     const rules = [];
     const hintScale = current.annotation.size / 100;
 
-    rules.push(`${annotation}{font:inherit!important;letter-spacing:inherit!important;color:inherit!important;display:inline-block!important;position:relative!important;vertical-align:baseline!important;line-height:1.1!important;margin:0 .12em!important;text-align:center!important;max-width:100%!important;border:0!important;background:none!important;padding:calc(max(13px,calc(var(--type-support) * ${hintScale})) * 1.45 + 4px) 0 0!important}`);
-    // Reserve label width in CSS without measuring every annotated word.
-    rules.push(`${annotation}::before{content:attr(data-shisui-annotation)!important;display:block!important;visibility:hidden!important;height:0!important;overflow:hidden!important;max-width:16em!important;font-family:var(--ss-source-font,inherit)!important;font-size:max(13px,calc(var(--type-support) * ${hintScale}))!important;font-weight:var(--weight-regular)!important;letter-spacing:.035em!important;white-space:nowrap!important;padding:0!important;border:0!important;margin:0!important}`);
+    const labelRow = `calc(max(13px,calc(var(--type-support) * ${hintScale})) * 1.45 + 4px)`;
+    // Labels reserve vertical space only; the word keeps its natural width so host
+    // text rhythm is untouched. Collisions are staggered by layoutHints().
+    rules.push(`${annotation}{font:inherit!important;letter-spacing:inherit!important;color:inherit!important;display:inline-block!important;position:relative!important;vertical-align:baseline!important;line-height:1.1!important;margin:0!important;text-align:center!important;max-width:100%!important;border:0!important;background:none!important;padding:${labelRow} 0 0!important}`);
+    rules.push(`${annotation}[data-shisui-label-level="2"]{padding:calc((${labelRow}) * 2) 0 0!important}`);
 
     const markRules = ['font-family:inherit',`font-size:${current.original.size}%`,'line-height:inherit','letter-spacing:inherit','background:none','color:inherit','border:0','border-bottom:0','border-radius:0','box-shadow:none','display:inline','filter:none','font-style:inherit','font-weight:inherit','opacity:1','padding:0','text-decoration:none','text-decoration-color:currentColor','text-decoration-line:none','text-decoration-style:solid','text-decoration-thickness:auto','text-underline-offset:auto'];
-    const hintRules = ['background:none','border:0','border-bottom:0','border-radius:0','box-shadow:none','box-sizing:border-box','color:inherit','display:block','position:absolute','left:0','top:0','width:100%','filter:none','font-family:var(--ss-source-font,inherit)','font-style:normal',`font-size:max(13px,calc(var(--type-support) * ${hintScale}))`,'font-weight:var(--weight-regular)','line-height:1.45','letter-spacing:.035em','word-spacing:normal','margin:0','opacity:1','padding:0','text-align:center','text-decoration:none','white-space:nowrap','overflow:hidden','text-overflow:ellipsis'];
+    const hintRules = ['background:none','border:0','border-bottom:0','border-radius:0','box-shadow:none','box-sizing:border-box','color:inherit','display:block','position:absolute','left:50%','top:2px','transform:translateX(-50%)','max-width:min(16em,60vw)','filter:none','font-family:var(--ss-source-font,inherit)','font-style:normal',`font-size:max(13px,calc(var(--type-support) * ${hintScale}))`,'font-weight:var(--weight-regular)','line-height:1.45','letter-spacing:.035em','word-spacing:normal','margin:0','opacity:1','padding:0','text-align:center','text-decoration:none','white-space:nowrap','overflow:hidden','text-overflow:ellipsis'];
     const blockRules = ['background:none','border:0','border-left:0','border-radius:0','box-shadow:none','box-sizing:border-box','color:var(--ss-source-color,inherit)','display:block','filter:none','font-family:var(--ss-source-font,inherit)','font-style:normal',`font-size:max(13px,calc(var(--ss-source-size,1em) * ${current.translation.size / 100}))`,'font-weight:var(--weight-regular)','line-height:var(--ss-source-leading,inherit)','margin:.4em 0','opacity:1','padding:0','min-width:0','max-width:100%','text-decoration:none','white-space:pre-wrap','overflow-wrap:anywhere','word-break:normal'];
 
     const markStyle = decorate(markRules,current.original,'original');
@@ -128,9 +130,77 @@
     for (const [selector,resolved] of [[mark,markStyle],[hint,hintStyle],[block,blockStyle]]) {
       if (resolved === 'quote' && selector !== block) rules.push(`${selector}::before{content:"“"!important}`,`${selector}::after{content:"”"!important}`);
     }
-    rules.push(block+' > span,'+block+' > p,'+block+' > div > p{font:inherit!important;color:inherit!important;background:none!important;-webkit-text-fill-color:currentColor!important;letter-spacing:inherit!important;margin:0 0 .35em!important;padding:0!important;white-space:inherit!important;overflow-wrap:inherit!important;word-break:inherit!important;max-width:100%!important;min-width:0!important}');
     return rules.join('\n');
   }
 
-  globalThis.ShisuiReadingStyle = Object.freeze({defaults,palettes,normalize,validate,css});
+  // Stagger floating labels without ever widening the annotated word. Items are
+  // {wrapper, hint} pairs; entries settle in list order, so earlier labels keep
+  // the row nearest the text and later colliding labels rise one level. When two
+  // levels cannot separate neighbors the later label is clamped to the free gap
+  // (full text remains in its title and the lookup card).
+  function layoutHints(items) {
+    const entries = [];
+    for (const item of items || []) {
+      const wrapper = item?.wrapper, hint = item?.hint;
+      if (!wrapper?.isConnected || !hint?.isConnected) continue;
+      const view = wrapper.ownerDocument?.defaultView;
+      if (!view) continue;
+      delete wrapper.dataset.shisuiLabelLevel;
+      hint.style.removeProperty('max-width');
+      hint.style.setProperty('max-width','none','important');
+      const natural = hint.getBoundingClientRect().width;
+      hint.style.removeProperty('max-width');
+      const rect = wrapper.getBoundingClientRect();
+      const fontSize = parseFloat(view.getComputedStyle(hint).fontSize) || 13;
+      if (!(natural > 0) || !(rect.width > 0)) continue;
+      const rowUnit = parseFloat(view.getComputedStyle(wrapper).paddingTop) || Math.ceil(fontSize * 1.45) + 1;
+      entries.push({ wrapper, hint, natural, rect, fontSize, rowUnit, view, width: Math.min(natural, fontSize * 16, view.innerWidth * 0.6), level: 1, shift: 0, box: null });
+    }
+    const band = entry => {
+      const center = entry.rect.left + entry.rect.width / 2 + entry.shift;
+      const top = entry.rect.top + 2 - (entry.level - 1) * entry.rowUnit;
+      return { left: center - entry.width / 2, right: center + entry.width / 2, top, bottom: top + entry.rowUnit - 4 };
+    };
+    const overlap = (a, b) => a.left < b.right - 2 && a.right > b.left + 2 && a.top < b.bottom - 2 && a.bottom > b.top + 2;
+    // Fit each label inside the largest free span of its row: viewport edges and
+    // already-settled labels both bound the span. Prefer full width with a small
+    // horizontal shift; truncate only when the span itself is too narrow.
+    const fitRow = (entry, peers) => {
+      const center = entry.rect.left + entry.rect.width / 2;
+      let left = 8, right = entry.view.innerWidth - 8;
+      for (const other of peers) {
+        if (other.box.top >= entry.box.bottom - 2 || other.box.bottom <= entry.box.top + 2) continue;
+        if (other.box.right <= center) left = Math.max(left, other.box.right + 6);
+        else if (other.box.left >= center) right = Math.min(right, other.box.left - 6);
+        else if (right - (other.box.right + 6) >= other.box.left - 6 - left) left = Math.max(left, other.box.right + 6);
+        else right = Math.min(right, other.box.left - 6);
+      }
+      if (right - left < entry.fontSize * 2) return;
+      entry.width = Math.max(entry.fontSize * 2, Math.min(entry.width, right - left));
+      entry.shift = Math.min(Math.max(center, left + entry.width / 2), right - entry.width / 2) - center;
+      entry.box = band(entry);
+    };
+    const settled = [];
+    for (const entry of entries) {
+      const peers = settled.filter(other => Math.abs(other.rect.top - entry.rect.top) <= entry.rowUnit);
+      for (let level = 1; level <= 2; level++) {
+        entry.level = level;
+        entry.shift = 0;
+        entry.box = band(entry);
+        if (!peers.some(other => overlap(entry.box, other.box))) break;
+      }
+      fitRow(entry, peers);
+      settled.push(entry);
+    }
+    for (const entry of entries) {
+      if (entry.level > 1) entry.wrapper.dataset.shisuiLabelLevel = String(entry.level);
+      else delete entry.wrapper.dataset.shisuiLabelLevel;
+      if (entry.width + 1 < entry.natural) entry.hint.style.setProperty('max-width', entry.width + 'px', 'important');
+      else entry.hint.style.removeProperty('max-width');
+      if (Math.abs(entry.shift) >= 1) entry.hint.style.setProperty('left', 'calc(50% + ' + Math.round(entry.shift) + 'px)', 'important');
+      else entry.hint.style.removeProperty('left');
+    }
+  }
+
+  globalThis.ShisuiReadingStyle = Object.freeze({defaults,palettes,normalize,validate,css,layoutHints});
 })();

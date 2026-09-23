@@ -132,7 +132,6 @@ function migrateSense(sense) {
     quietCycles:Math.min(2,integerNonNegative(sense.quietCycles)),
     quietOpportunityDays:integerNonNegative(sense.quietOpportunityDays),
     hintPreference:preference(sense.hintPreference),
-    peekCount:Math.min(2,integerNonNegative(sense.peekCount)),
     assistedPageKey:typeof sense.assistedPageKey === 'string' ? sense.assistedPageKey : '',
     ...(Array.isArray(sense.embedding)?{embedding:sense.embedding.filter(value=>typeof value==='number'&&Number.isFinite(value)).slice(0,512)}:{}),
     definition:{
@@ -187,16 +186,6 @@ export function supportState(word, senseKey, now = Date.now()) {
   return {stage:integerNonNegative(sense.opportunityDays) < HINT_OPPORTUNITY_DAYS ? 'hint' : 'mark'};
 }
 
-/** Most-faded stage among a word's senses, capped at 'mark' — kin never inherits quiet. */
-export function familyStage(word, now = Date.now()) {
-  let best = 'hint';
-  for (const sense of word?.senses || []) {
-    const stage = supportState(word, sense?.key, now).stage;
-    if (stage === 'quiet') return 'mark';
-    if (stage === 'mark') best = 'mark';
-  }
-  return best;
-}
 
 function requireSense(word, senseKey) {
   if (!word || typeof word !== 'object') throw new TypeError('A support word is required');
@@ -261,7 +250,7 @@ export function encounter(word, pageKey, now = Date.now(), {senseKey,hintShown =
 
 /** Applies an explicit successful help or “less help” action to one sense. */
 export function interact(word, action, now = Date.now(), pageKey = '', senseKey) {
-  if (action !== 'help' && action !== 'less' && action !== 'peek') throw new RangeError('Invalid support action');
+  if (action !== 'help' && action !== 'less') throw new RangeError('Invalid support action');
   const {index,sense:stored} = requireSense(word,senseKey);
   if (!stored) throw new RangeError('Invalid sense');
   const current = timestamp(now,Date.now());
@@ -271,14 +260,8 @@ export function interact(word, action, now = Date.now(), pageKey = '', senseKey)
 
   let sense;
   if (action === 'less') sense = {...stored,hintPreference:'less',quietUntil:0};
-  else if (action === 'peek') {
-    const peeks = integerNonNegative(stored.peekCount) + 1;
-    sense = peeks >= 2
-      ? {...stored,opportunityDays:0,lastOpportunityAt:0,peekCount:0}
-      : {...stored,peekCount:peeks};
-  }
   else sense = {...stored,opportunityDays:0,lastOpportunityAt:0,lastHelpAt:current,quietUntil:0,
-      quietCycles:0,quietOpportunityDays:0,hintPreference:null,peekCount:0,
+      quietCycles:0,quietOpportunityDays:0,hintPreference:null,
       assistedPageKey:typeof pageKey === 'string' ? pageKey : ''};
   const next = replaceSense(word,index,sense,current);
   return {...next,hintPreference:null,prevHelpAt:priorHelpAt,
