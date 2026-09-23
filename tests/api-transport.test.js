@@ -324,3 +324,30 @@ test('the jev protocol rejects empty state, malformed questions, and invalid ans
   globalThis.fetch = async () => Response.json({choices: [{finish_reason: 'stop', message: {content: '{"domain": {"probability": 1.7}}'}}]});
   await expect(performProviderRequest(jevService(), {state: 'text', questions: {domain: {type: 'noul', instructions: 'x'}}}, undefined, undefined, {})).rejects.toMatchObject({code: 'JEV_ANSWER'});
 });
+
+test('StepFun reasoning models request the lowest effort instead of a thinking switch',async()=>{
+  const sent=[];globalThis.fetch=async(_url,init)=>{sent.push(requestBody(init));return Response.json({choices:[{finish_reason:'stop',message:{content:'{"value":"ok"}'}}]});};
+  await performProviderRequest(service('stepfun','https://api.stepfun.com/v1','step-3.7-flash'),{},'Explain.',schema);
+  expect(sent[0].reasoning_effort).toBe('low');expect(sent[0].thinking).toBeUndefined();
+  await performProviderRequest(service('stepfun','https://api.stepfun.com/v1','step-1-flash'),{},'Explain.',schema);
+  expect(sent.at(-1).reasoning_effort).toBeUndefined();
+});
+
+test('always-reasoning chat models skip the strict-schema probe and request json_object directly',async()=>{
+  const bodies=[];rawFetch(async(_url,init)=>{const body=requestBody(init);bodies.push(body);return Response.json({choices:[{finish_reason:'stop',message:{content:'{"value":"ok"}'}}]});});
+  const result=await performProviderRequest(service('stepfun','https://api.stepfun.com/v1','step-3.5-flash'),{},'Explain.',schema);
+  expect(result).toEqual({value:'ok'});expect(bodies.length).toBe(1);expect(bodies[0].response_format).toEqual({type:'json_object'});
+});
+
+test('a truncated capability probe falls back to json_object instead of failing',async()=>{
+  const bodies=[];rawFetch(async(_url,init)=>{const body=requestBody(init);bodies.push(body);
+    if(capabilityFormat(body))return Response.json({choices:[{finish_reason:'length',message:{content:'{"probe'}}]});
+    return Response.json({choices:[{finish_reason:'stop',message:{content:'{"value":"ok"}'}}]});});
+  const result=await performProviderRequest(service('mistral','https://api.example.test/v1','truncated-probe-model'),{},'Explain.',schema);
+  expect(result).toEqual({value:'ok'});expect(bodies[1].response_format).toEqual({type:'json_object'});
+});
+
+test('a probe aborted by content filtering still fails the capability check',async()=>{
+  rawFetch(async()=>Response.json({choices:[{finish_reason:'content_filter',message:{content:''}}]}));
+  await expect(performProviderRequest(service('mistral','https://api.example.test/v1','filtered-probe-model'),{},'Explain.',schema)).rejects.toMatchObject({code:'INVALID_RESPONSE'});
+});
