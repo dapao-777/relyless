@@ -4,6 +4,7 @@ const azureFields = [
   {key:'apiVersion',label:'API 版本',type:'text',placeholder:'v1',defaultValue:'v1'},
 ];
 const bedrockFields = [{key:'region',label:'区域',type:'text',placeholder:'us-east-1',defaultValue:'us-east-1'}];
+const stepfunFields = [{key:'plan',label:'接入方式',type:'select',defaultValue:'api',options:[{value:'api',label:'按量付费 API'},{value:'step_plan',label:'Step Plan 订阅套餐'}]}];
 
 // Provider names and ordering follow the supported service catalog. Hosted defaults are
 // selected independently for general reading, explanation, and structured JSON without
@@ -39,7 +40,7 @@ export const API_PROVIDERS = [
   {id:'volcengine',name:'Volcengine',protocol:'chat',baseUrl:'https://ark.cn-beijing.volces.com/api/v3',defaultModel:'doubao-seed-1-6-flash-250828',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'alibaba',name:'Alibaba Cloud',protocol:'chat',baseUrl:'https://dashscope.aliyuncs.com/compatible-mode/v1',defaultModel:'qwen3.8-flash',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'moonshotai',name:'Moonshot AI',protocol:'chat',baseUrl:'https://api.moonshot.ai/v1',defaultModel:'kimi-k2.6',apiKeyUrl:'',keyOptional:false,fields:[]},
-  {id:'stepfun',name:'StepFun (阶跃星辰)',protocol:'chat',baseUrl:'https://api.stepfun.com/v1',defaultModel:'step-1-flash',apiKeyUrl:'',keyOptional:false,fields:[]},
+  {id:'stepfun',name:'StepFun (阶跃星辰)',protocol:'chat',baseUrl:'https://api.stepfun.com/v1',defaultModel:'step-1-flash',apiKeyUrl:'',keyOptional:false,fields:stepfunFields},
   {id:'huggingface',name:'Hugging Face',protocol:'chat',baseUrl:'https://router.huggingface.co/v1',defaultModel:'Qwen/Qwen2.5-7B-Instruct-1M',apiKeyUrl:'',keyOptional:false,fields:[]},
 ];
 
@@ -85,6 +86,7 @@ export function apiProviderBaseUrl(providerId,options={}) {
     if (!/^[a-z]{2}(?:-gov)?-[a-z]+-\d+$/.test(region)) throw new Error('Bedrock 区域无效。');
     return `https://bedrock-runtime.${region}.amazonaws.com`;
   }
+  if (providerId==='stepfun' && normalized.plan==='step_plan') return 'https://api.stepfun.com/step_plan/v1';
   return provider.baseUrl;
 }
 
