@@ -3,6 +3,7 @@ import {normalizeSettings,wordId} from '../extension/shared.js';
 
 import {event,pick,remove,isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
 import {createConversationStore} from '../extension/conversation-store.js';
+import {usageDay} from '../extension/usage-stats.js';
 import {indexedDB,IDBKeyRange} from 'fake-indexeddb';
 
 globalThis.indexedDB=indexedDB;
@@ -896,7 +897,7 @@ test('page request cancellation persists before registration and prunes queued p
 });
 
 test('emergency begin estimates tokens and enforces the monthly budget with explicit confirmation',async()=>{
-  const previous=globalThis.chrome,month=new Date().toISOString().slice(0,10);
+  const previous=globalThis.chrome,month=usageDay();
   const data={wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'},usageBudget:{monthlyTokens:1000}},modelUsage:{rows:[{day:month,provider:'api',service:'svc',model:'fixture',operation:'EMERGENCY_TRANSLATE',requests:1,input:1500,output:600,estInput:0,estOutput:0,inputChars:0,outputChars:0}]}};
   const fixture=isolatedChrome(data,{id:'budget-check'});
   try{
