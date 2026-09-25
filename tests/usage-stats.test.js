@@ -1,7 +1,7 @@
 import {afterEach,beforeEach,expect,test} from 'bun:test';
 import {indexedDB} from 'fake-indexeddb';
 import {performProviderRequest} from '../extension/api-transport.mjs';
-import {mergeUsageEntry,normalizeUsageRow,usageStatsView} from '../extension/usage-stats.js';
+import {mergeUsageEntry,normalizeUsageRow,usageDay,usageStatsView} from '../extension/usage-stats.js';
 import {isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
 
 // 用量统计：传输层解析各协议 usage 字段 → 后台按 天+服务+模型+操作 聚合 → USAGE_STATS/Usage_CLEAR 供设置页读取。
@@ -22,6 +22,7 @@ beforeEach(()=>{
 afterEach(()=>{Object.defineProperty(globalThis,'fetch',{configurable:true,writable:true,value:realFetch});});
 const schema={type:'object',additionalProperties:false,required:['value'],properties:{value:{type:'string'}}};
 const service=(providerId,baseUrl,model='model')=>({id:'test',name:'Test',providerId,baseUrl,model,apiKey:'secret-key',options:{}});
+const localDay=stamp=>{const date=new Date(stamp);return `${String(date.getFullYear()).padStart(4,'0')}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;};
 const sse=chunks=>new Response(new ReadableStream({start(controller){const encoder=new TextEncoder();for(const chunk of chunks)controller.enqueue(encoder.encode(chunk));controller.close();}}),{headers:{'content-type':'text/event-stream'}});
 
 test('usage rows merge by day+service+model+operation and estimate missing tokens',()=>{
@@ -29,11 +30,19 @@ test('usage rows merge by day+service+model+operation and estimate missing token
   rows=mergeUsageEntry(rows,{provider:'api',service:'主力',model:'m1',operation:'ASSIST',ok:true,usage:{input:100,output:20},inputChars:400,outputChars:80},{now:Date.parse('2026-01-10T08:00:00Z')});
   rows=mergeUsageEntry(rows,{provider:'api',service:'主力',model:'m1',operation:'ASSIST',ok:true,usage:{input:50,output:10},inputChars:200,outputChars:40},{now:Date.parse('2026-01-10T09:00:00Z')});
   expect(rows).toHaveLength(1);
-  expect(rows[0]).toMatchObject({day:'2026-01-10',requests:2,errors:0,input:150,output:30,estInput:0,estOutput:0});
+  expect(rows[0]).toMatchObject({day:localDay(Date.parse('2026-01-10T08:00:00Z')),requests:2,errors:0,input:150,output:30,estInput:0,estOutput:0});
   // 服务未返回 usage → 按字符估算（4 字符 ≈ 1 token），失败请求同样计数。
   rows=mergeUsageEntry(rows,{provider:'chatgpt',service:'ChatGPT 订阅',model:'gpt',operation:'ASSIST',ok:false,inputChars:800,outputChars:0},{now:Date.parse('2026-01-10T10:00:00Z')});
   const sub=rows.find(row=>row.provider==='chatgpt');
   expect(sub).toMatchObject({requests:1,errors:1,input:0,output:0,estInput:200,estOutput:0});
+});
+
+test('usage days bucket by the local calendar so 今日 and monthly budgets follow the user timezone',()=>{
+  // 同一时刻的 UTC 日与本机日可能不同（UTC+8 下 20:00Z 已属次日）；分桶必须取本机日，UTC 实现在非 UTC 时区下会失败。
+  const stamp=Date.parse('2026-01-10T20:00:00Z');
+  expect(usageDay(stamp)).toBe(localDay(stamp));
+  const [row]=mergeUsageEntry([],{provider:'api',service:'A',model:'m',operation:'ASSIST',ok:true,usage:{input:1,output:1}},{now:stamp});
+  expect(row.day).toBe(localDay(stamp));
 });
 
 test('local MiniLM rough estimates override char fallback and mark estKind',()=>{
