@@ -17,7 +17,7 @@ export function sitePattern(origin) {
   return `${normalized}/*`;
 }
 
-export const DEFAULT_KEYWORD_HINTS = {enabled:false,keywords:['docs','developer','developers','learn','wiki'],dismissed:[]};
+export const DEFAULT_KEYWORD_HINTS = {badge:false,keywords:['docs','developer','developers','learn','wiki'],dismissed:[]};
 export const KEYWORD_PATTERN = /^(?=.*[a-z])[a-z0-9]{2,32}$/;
 
 export function hostKeyword(hostname, keywords) {
@@ -30,7 +30,7 @@ export function normalizeKeywordHints(value) {
   const keywords = Array.isArray(source.keywords) ? [...new Set(source.keywords.map(entry => typeof entry === 'string' ? entry.trim().toLowerCase() : '').filter(entry => KEYWORD_PATTERN.test(entry)))].slice(0,20) : [...DEFAULT_KEYWORD_HINTS.keywords];
   const seen = new Set();
   const dismissed = (Array.isArray(source.dismissed) ? source.dismissed : []).filter(entry => typeof entry === 'string' && pageOrigin(entry) === entry && !seen.has(entry) && seen.add(entry)).slice(0,500);
-  return {enabled:source.enabled === true,keywords,dismissed};
+  return {badge:source.badge === true,keywords,dismissed};
 }
 
 export function validateAutomation(value, base) {
@@ -65,11 +65,11 @@ export function validateAutomation(value, base) {
     const hints = value.keywordHints;
     if (!hints || typeof hints !== 'object' || Array.isArray(hints)) throw new Error('无效的域名关键词提示设置。');
     const keys = Object.keys(hints);
-    if (keys.length !== 3 || keys.some(key => !['enabled','keywords','dismissed'].includes(key))) throw new Error('无效的域名关键词提示设置。');
-    if (typeof hints.enabled !== 'boolean') throw new Error('无效的域名关键词提示设置。');
+    if (keys.length !== 3 || keys.some(key => !['badge','keywords','dismissed'].includes(key))) throw new Error('无效的域名关键词提示设置。');
+    if (typeof hints.badge !== 'boolean') throw new Error('无效的域名关键词提示设置。');
     if (!Array.isArray(hints.keywords) || hints.keywords.length > 20 || new Set(hints.keywords).size !== hints.keywords.length || hints.keywords.some(keyword => typeof keyword !== 'string' || !KEYWORD_PATTERN.test(keyword))) throw new Error('关键词只能包含 2–32 个小写字母或数字，且至少含一个字母，最多 20 个且不能重复。');
     if (!Array.isArray(hints.dismissed) || hints.dismissed.length > 500 || new Set(hints.dismissed).size !== hints.dismissed.length || hints.dismissed.some(entry => typeof entry !== 'string' || pageOrigin(entry) !== entry)) throw new Error('忽略列表必须使用唯一且完整的 HTTP 或 HTTPS origin。');
-    result.keywordHints = {enabled:hints.enabled,keywords:[...hints.keywords],dismissed:[...hints.dismissed]};
+    result.keywordHints = {badge:hints.badge,keywords:[...hints.keywords],dismissed:[...hints.dismissed]};
   }
   return result;
 }
@@ -99,7 +99,7 @@ export function resolveAutomation(automation,activationUrl,paused = false) {
   const hostname = origin ? new URL(origin).hostname : '';
   const videoAvailable = Boolean(VIDEO_SUPPORT_ENABLED && !paused && automation.videoSites && ['www.youtube.com','m.youtube.com'].includes(hostname));
   const hints = automation.keywordHints;
-  const keywordHint = origin && hints?.enabled && siteRule === null && !automation.allSites && !hints.dismissed.includes(origin) ? hostKeyword(hostname,hints.keywords) : null;
+  const keywordHint = origin && siteRule === null && !automation.allSites && !hints?.dismissed.includes(origin) ? hostKeyword(hostname,hints?.keywords) : null;
   return {origin,siteRule,effective,sentenceGroupsEffective,paused:Boolean(paused),videoAvailable,keywordHint};
 }
 

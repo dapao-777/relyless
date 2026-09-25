@@ -147,11 +147,11 @@ test('hostKeyword matches whole hostname segments only and honors keyword order'
   expect(hostKeyword('learn.docs.example.com',['learn','docs'])).toBe('learn');
 });
 
-test('keywordHint resolves only for enabled hints on unruled non-dismissed http sites',()=>{
-  const hints={enabled:true,keywords:['docs'],dismissed:[]};
+test('keywordHint resolves on unruled non-dismissed http sites regardless of the badge flag',()=>{
+  const hints={badge:false,keywords:['docs'],dismissed:[]};
   const automation=validateAutomation({keywordHints:{...hints,dismissed:[]}},{...activationDefaults,keywordHints:hints});
   expect(resolveAutomation(automation,'https://docs.example/read').keywordHint).toBe('docs');
-  expect(resolveAutomation({...automation,keywordHints:{...hints,enabled:false}},'https://docs.example/read').keywordHint).toBe(null);
+  expect(resolveAutomation({...automation,keywordHints:{...hints,badge:true}},'https://docs.example/read').keywordHint).toBe('docs');
   expect(resolveAutomation({...automation,sites:[{origin:'https://docs.example',enabled:true}]},'https://docs.example/read').keywordHint).toBe(null);
   expect(resolveAutomation({...automation,sites:[{origin:'https://docs.example',enabled:false}]},'https://docs.example/read').keywordHint).toBe(null);
   expect(resolveAutomation({...automation,allSites:true},'https://docs.example/read').keywordHint).toBe(null);
@@ -160,20 +160,21 @@ test('keywordHint resolves only for enabled hints on unruled non-dismissed http 
 });
 
 test('keywordHints validation enforces exact shape, keyword format, and origin list',()=>{
-  const base={...activationDefaults,keywordHints:{enabled:false,keywords:['docs'],dismissed:[]}};
-  expect(validateAutomation({keywordHints:{enabled:true,keywords:['docs','wiki'],dismissed:['https://a.example']}},base).keywordHints).toEqual({enabled:true,keywords:['docs','wiki'],dismissed:['https://a.example']});
-  expect(()=>validateAutomation({keywordHints:{enabled:true,keywords:['docs']}},base)).toThrow('域名关键词提示');
-  expect(()=>validateAutomation({keywordHints:{enabled:true,keywords:['docs'],dismissed:[],extra:1}},base)).toThrow('域名关键词提示');
+  const base={...activationDefaults,keywordHints:{badge:false,keywords:['docs'],dismissed:[]}};
+  expect(validateAutomation({keywordHints:{badge:true,keywords:['docs','wiki'],dismissed:['https://a.example']}},base).keywordHints).toEqual({badge:true,keywords:['docs','wiki'],dismissed:['https://a.example']});
+  expect(()=>validateAutomation({keywordHints:{enabled:true,keywords:['docs'],dismissed:[]}},base)).toThrow('域名关键词提示');
+  expect(()=>validateAutomation({keywordHints:{badge:true,keywords:['docs']}},base)).toThrow('域名关键词提示');
+  expect(()=>validateAutomation({keywordHints:{badge:true,keywords:['docs'],dismissed:[],extra:1}},base)).toThrow('域名关键词提示');
   for(const keywords of [['Docs'],['a'],['123'],['do.cs'],['docs','docs'],Array(21).fill(0).map((_v,i)=>'k'+i)]){
-    expect(()=>validateAutomation({keywordHints:{enabled:true,keywords,dismissed:[]}},base)).toThrow('关键词');
+    expect(()=>validateAutomation({keywordHints:{badge:true,keywords,dismissed:[]}},base)).toThrow('关键词');
   }
-  expect(()=>validateAutomation({keywordHints:{enabled:true,keywords:['docs'],dismissed:['https://a.example/path']}},base)).toThrow('忽略列表');
-  expect(()=>validateAutomation({keywordHints:{enabled:true,keywords:['docs'],dismissed:['https://a.example','https://a.example']}},base)).toThrow('忽略列表');
-  expect(()=>validateAutomation({keywordHints:{enabled:true,keywords:['docs'],dismissed:Array(501).fill(0).map((_v,i)=>'https://d'+i+'.example')}},base)).toThrow('忽略列表');
+  expect(()=>validateAutomation({keywordHints:{badge:true,keywords:['docs'],dismissed:['https://a.example/path']}},base)).toThrow('忽略列表');
+  expect(()=>validateAutomation({keywordHints:{badge:true,keywords:['docs'],dismissed:['https://a.example','https://a.example']}},base)).toThrow('忽略列表');
+  expect(()=>validateAutomation({keywordHints:{badge:true,keywords:['docs'],dismissed:Array(501).fill(0).map((_v,i)=>'https://d'+i+'.example')}},base)).toThrow('忽略列表');
 });
 
 test('keyword hints never broaden permission or registration requirements',()=>{
-  const automation=validateAutomation({keywordHints:{enabled:true,keywords:['docs'],dismissed:[]}},activationDefaults);
+  const automation=validateAutomation({keywordHints:{badge:true,keywords:['docs'],dismissed:[]}},activationDefaults);
   expect(registrationMatches(automation)).toEqual([]);
   expect(requiredPermissionOrigins(automation)).toEqual([]);
 });
@@ -181,9 +182,10 @@ test('keyword hints never broaden permission or registration requirements',()=>{
 test('normalizeSettings applies lenient keyword hint defaults and drops invalid entries',()=>{
   expect(normalizeSettings({}).automation.keywordHints).toEqual(DEFAULT_KEYWORD_HINTS);
   expect(normalizeSettings({automation:{allSites:true,sites:[]}}).automation.keywordHints).toEqual(DEFAULT_KEYWORD_HINTS);
-  expect(normalizeSettings({automation:{keywordHints:{enabled:true,keywords:['Docs','bad!','wiki','a','123','do.cs'],dismissed:['https://a.example','https://a.example/path','not-a-url','https://a.example']}}}).automation.keywordHints).toEqual({enabled:true,keywords:['docs','wiki'],dismissed:['https://a.example']});
-  expect(normalizeSettings({automation:{keywordHints:{enabled:true,keywords:[],dismissed:[]}}}).automation.keywordHints.keywords).toEqual([]);
-  expect(normalizeSettings({automation:{keywordHints:{enabled:'yes'}}}).automation.keywordHints.enabled).toBe(false);
+  expect(normalizeSettings({automation:{keywordHints:{badge:true,keywords:['Docs','bad!','wiki','a','123','do.cs'],dismissed:['https://a.example','https://a.example/path','not-a-url','https://a.example']}}}).automation.keywordHints).toEqual({badge:true,keywords:['docs','wiki'],dismissed:['https://a.example']});
+  expect(normalizeSettings({automation:{keywordHints:{badge:true,keywords:[],dismissed:[]}}}).automation.keywordHints.keywords).toEqual([]);
+  expect(normalizeSettings({automation:{keywordHints:{badge:'yes'}}}).automation.keywordHints.badge).toBe(false);
+  expect(normalizeSettings({automation:{keywordHints:{enabled:true,keywords:['docs'],dismissed:[]}}}).automation.keywordHints.badge).toBe(false);
 });
 
 test('popup shows the keyword hint note and dismisses the origin through an automation patch',async()=>{
@@ -194,7 +196,7 @@ test('popup shows the keyword hint note and dismisses the origin through an auto
     return elements.get(id);
   };
   const patches=[];
-  const hints={enabled:true,keywords:['docs'],dismissed:[]};
+  const hints={badge:false,keywords:['docs'],dismissed:[]};
   const automation={allSites:false,sites:[],videoSites:false,keywordHints:hints};
   globalThis.document={querySelector:element,querySelectorAll:()=>[]};
   globalThis.chrome={runtime:{async sendMessage(message){
@@ -209,7 +211,7 @@ test('popup shows the keyword hint note and dismisses the origin through an auto
     expect(element('#site-hint-dismiss').hidden).toBe(false);
     element('#site-hint-dismiss').handlers.click();
     await new Promise(resolve=>setTimeout(resolve,0));
-    expect(patches).toEqual([{keywordHints:{enabled:true,keywords:['docs'],dismissed:['https://docs.example']}}]);
+    expect(patches).toEqual([{keywordHints:{badge:false,keywords:['docs'],dismissed:['https://docs.example']}}]);
     expect(element('#site-hint-dismiss').hidden).toBe(true);
   }finally{
     if(previousChrome===undefined)delete globalThis.chrome;else globalThis.chrome=previousChrome;

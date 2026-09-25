@@ -1403,9 +1403,10 @@ let automationReconciliation = Promise.resolve();
 const keywordHintKey=tabId=>'keywordHint:'+tabId;
 async function refreshKeywordHint(tabId,url) {
   if (!Number.isInteger(tabId)) return;
-  const key=keywordHintKey(tabId),marked=await chrome.storage.session.get(key);
-  const {settings}=await load(false);
-  const keyword=resolveAutomation(settings.automation,url).keywordHint;
+  const key=keywordHintKey(tabId);
+  const {settings:raw}=await chrome.storage.local.get('settings');
+  const automation=normalizeSettings(raw).automation;
+  const keyword=automation.keywordHints.badge&&url?resolveAutomation(automation,url).keywordHint:null;
   if (keyword) {
     await Promise.allSettled([
       chrome.action.setBadgeBackgroundColor({tabId,color:'#70509c'}),
@@ -1415,7 +1416,7 @@ async function refreshKeywordHint(tabId,url) {
     ]);
     return;
   }
-  if (!marked[key]) return;
+  if (!(await chrome.storage.session.get(key))[key]) return;
   await Promise.allSettled([clearTabStatus(tabId),chrome.storage.session.remove(key)]);
 }
 chrome.webNavigation.onCommitted.addListener(details => {
@@ -1428,7 +1429,7 @@ function reconcileAutomation() {
     await reconcileAutoScript(settings);
     const tabs = await chrome.tabs.query({});
     await Promise.allSettled(tabs.map(activateTab));
-    const hintsEnabled=settings.automation.keywordHints?.enabled===true;
+    const hintsEnabled=settings.automation.keywordHints?.badge===true;
     await Promise.allSettled(tabs.map(async tab => {
       if (!Number.isInteger(tab?.id)) return;
       const url=hintsEnabled?await chrome.webNavigation.getFrame({tabId:tab.id,frameId:0}).then(frame=>frame?.url||'').catch(()=>null):'';
