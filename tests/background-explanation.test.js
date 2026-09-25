@@ -67,10 +67,10 @@ test('lookup key normalization migrates lowercase and rejects unsafe stored valu
 });
 test('legacy API settings migrate once and named services remain independent and private',async()=>{
   expect(stored.settings.provider).toBeUndefined();
-  expect(stored.settings.apiServices).toEqual([{id:'legacy-api',name:'原有 API 服务',providerId:'openai-compatible',baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key',apiKeys:['fixture-key'],options:{}}]);
+  expect(stored.settings.apiServices).toEqual([{id:'legacy-api',name:'原有 API 服务',providerId:'openai-compatible',baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key',apiKeys:['fixture-key'],options:{thinking:'auto'}}]);
   expect(stored.settings.activeApiServiceId).toBe('legacy-api');
   expect(stored.settings.lookupKey).toBe('D');
-  const services=[stored.settings.apiServices[0],{id:'second-api',name:'Second API',providerId:'openai-compatible',baseUrl:'https://second.example/v1',model:'second-model',apiKey:'second-key',apiKeys:['second-key'],options:{}}];
+  const services=[stored.settings.apiServices[0],{id:'second-api',name:'Second API',providerId:'openai-compatible',baseUrl:'https://second.example/v1',model:'second-model',apiKey:'second-key',apiKeys:['second-key'],options:{thinking:'auto'}}];
   await send({type:'STATE_PATCH',patch:{apiServices:services,activeApiServiceId:'second-api'}},extensionSender);
   expect(stored.settings.apiServices).toEqual(services);expect(stored.settings.activeApiServiceId).toBe('second-api');
   await send({type:'STATE_PATCH',patch:{activeApiServiceId:'legacy-api'}},extensionSender);
@@ -237,7 +237,7 @@ test('usage estimates prefer the warm local tokenizer over char fallback',async(
 });
 test('failing primary api service fails over to its configured fallback once',async()=>{
   const savedServices=structuredClone(stored.settings.apiServices),savedActive=stored.settings.activeApiServiceId,savedFailed=failedAssists;
-  const services=[...savedServices,{id:'primary-fail',name:'Primary',providerId:'openai-compatible',baseUrl:'https://primary.example/v1',model:'p-model',apiKey:'k1',apiKeys:['k1'],options:{},fallbackServiceId:'legacy-api'}];
+  const services=[...savedServices,{id:'primary-fail',name:'Primary',providerId:'openai-compatible',baseUrl:'https://primary.example/v1',model:'p-model',apiKey:'k1',apiKeys:['k1'],options:{thinking:'auto'},fallbackServiceId:'legacy-api'}];
   await send({type:'STATE_PATCH',patch:{apiServices:services,activeApiServiceId:'primary-fail'}},extensionSender);
   try{
     tab.incognito=true; // 无痕：跳过词档/缓存写入，避免异步落盘链污染后续测试

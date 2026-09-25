@@ -5,6 +5,10 @@ const azureFields = [
 ];
 const bedrockFields = [{key:'region',label:'区域',type:'text',placeholder:'us-east-1',defaultValue:'us-east-1'}];
 
+// 思考模式经 per-service options 下发；replicate 预测与 jev 判定通道没有对应参数，不提供该选项。
+const THINKING_FIELD = {key:'thinking',label:'思考模式',type:'select',defaultValue:'auto',options:[{value:'auto',label:'自动'},{value:'off',label:'关闭'},{value:'low',label:'低'},{value:'medium',label:'中'},{value:'high',label:'高'}]};
+const THINKING_PROTOCOLS = new Set(['chat','responses','anthropic','google','bedrock','cohere','ollama']);
+
 // Provider names and ordering follow the supported service catalog. Hosted defaults are
 // selected independently for general reading, explanation, and structured JSON without
 // forced reasoning. Empty apiKeyUrl values avoid referral links and guessed console URLs.
@@ -41,7 +45,7 @@ export const API_PROVIDERS = [
   {id:'moonshotai',name:'Moonshot AI',protocol:'chat',baseUrl:'https://api.moonshot.ai/v1',defaultModel:'kimi-k2.6',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'stepfun',name:'StepFun (阶跃星辰)',protocol:'chat',baseUrl:'https://api.stepfun.com/v1',defaultModel:'step-1-flash',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'huggingface',name:'Hugging Face',protocol:'chat',baseUrl:'https://router.huggingface.co/v1',defaultModel:'Qwen/Qwen2.5-7B-Instruct-1M',apiKeyUrl:'',keyOptional:false,fields:[]},
-];
+].map(provider => THINKING_PROTOCOLS.has(provider.protocol) ? {...provider,fields:[...provider.fields,THINKING_FIELD]} : provider);
 
 const providersById = new Map(API_PROVIDERS.map(provider => [provider.id,provider]));
 
