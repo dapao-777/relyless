@@ -814,7 +814,8 @@ test('a repeated in-flight query receives the existing readable definition befor
     pending.push(settle(isolatedSend(fixture,{...command,requestId:'first-query'},page)));await firstProgress;
     pending.push(settle(isolatedSend(fixture,{...command,requestId:'latest-query'},page)));
     while(fixture.session['pendingAssists:91']?.['latest-query']?.status!=='running')await new Promise(resolve=>setTimeout(resolve,0));
-    await new Promise(resolve=>setTimeout(resolve,0));
+    // 进度重放隔着能力探测、哈希与多次存储读取，单个宏任务不可靠；等消息真实到达。
+    while(!messages.some(message=>message.requestId==='latest-query'))await new Promise(resolve=>setTimeout(resolve,0));
     expect(messages.find(message=>message.requestId==='latest-query')).toMatchObject({definition:'减轻；缓解',level:'rescue'});
     expect(calls).toBe(1);
     await expect(isolatedSend(fixture,{type:'ASSIST_COMMIT',requestId:'latest-query'},page)).rejects.toThrow();
@@ -1302,7 +1303,11 @@ test('domain detection accepts a jev mode with bounded fields', async () => {
   await import(`../extension/background.js?jev-settings=${Date.now()}`);
   const send=(message,sender=pageSender)=>new Promise((resolve,reject)=>runtimeMessage.listeners[0](message,sender,response=>response.ok?resolve(response.data):reject(new Error(response.error))));
   const saved=await send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevModel:'typesafe/jev-1.13.0',jevApiKey:'jev-secret',jevBaseUrl:'https://router.requesty.ai/v1'}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'});
-  expect(saved.settings.domainDetection).toMatchObject({mode:'jev',jevModel:'typesafe/jev-1.13.0',jevApiKey:'jev-secret',jevBaseUrl:'https://router.requesty.ai/v1'});
+  expect(saved.settings.domainDetection).toMatchObject({mode:'jev',jevProvider:'requesty',jevModel:'typesafe/jev-1.13.0',jevApiKey:'jev-secret',jevBaseUrl:'https://router.requesty.ai/v1'});
+  const switched=await send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevProvider:'siliconflow-systemone',jevModel:'diffusiongemma',jevApiKey:'sf-secret',jevBaseUrl:'https://api.siliconflow.cn/v1'}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'});
+  expect(switched.settings.domainDetection).toMatchObject({jevProvider:'siliconflow-systemone',jevModel:'diffusiongemma',jevBaseUrl:'https://api.siliconflow.cn/v1'});
+  await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevProvider:'openai'}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('无效的判定接入');
+  await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevProvider:'bogus'}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('无效的判定接入');
   await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevApiKey:'x'.repeat(4097)}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('Jev API Key');
   await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'nope',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''}}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('无效的领域识别配置');
   globalThis.chrome=chromeBefore;
