@@ -9,6 +9,7 @@ const registrations = [];
 const tab = {id:11,windowId:7,url:'https://docs.example/article',title:'Fixture',active:true};
 let tabGetBarrier = null;
 const tabMessages = [];
+const badgeCalls = [];
 const fetchBefore = globalThis.fetch;
 globalThis.fetch = async()=>{throw new Error('unexpected model call');};
 const pick = (source,keys) => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).filter(key => Object.hasOwn(source,key)).map(key => [key,source[key]]));
@@ -41,8 +42,9 @@ globalThis.chrome = {
     unregisterContentScripts:async ({ids})=>{for (const id of ids) {const index=registrations.findIndex(item=>item.id===id);if(index>=0) registrations.splice(index,1);}},
     registerContentScripts:async scripts=>{registrations.push(...scripts);},
   },
+  webNavigation:{onCommitted:event(),getFrame:async({tabId})=>tabId===tab.id?{documentId:'activation-document',url:tab.url}:null},
   contextMenus:{onClicked:event(),removeAll:async()=>{},create:(_options,callback)=>callback()},
-  commands:{onCommand:event()},action:{setBadgeText:async()=>{},setTitle:async()=>{},setBadgeBackgroundColor:async()=>{}},
+  commands:{onCommand:event()},action:{setBadgeText:async options=>{badgeCalls.push({call:'text',...options});},setTitle:async options=>{badgeCalls.push({call:'title',...options});},setBadgeBackgroundColor:async options=>{badgeCalls.push({call:'color',...options});}},
 };
 
 await import(`../extension/background.js?activation=${Date.now()}`);
@@ -57,7 +59,7 @@ afterAll(()=>{globalThis.chrome=chromeBefore;globalThis.fetch=fetchBefore;});
 
 test('automation is not persisted until its exact host permission exists',async()=>{
   await expect(send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{sites:[{origin:'https://docs.example',enabled:true}]}})).rejects.toThrow('权限');
-  expect(stored.settings.automation).toEqual({allSites:false,sentenceGroupsAllSites:false,sites:[],videoSites:false});
+  expect(stored.settings.automation).toEqual({allSites:false,sentenceGroupsAllSites:false,sites:[],videoSites:false,keywordHints:{enabled:false,keywords:['docs','developer','developers','learn','wiki'],dismissed:[]}});
 
   granted.add('https://docs.example/*');
   const result = await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{sites:[{origin:'https://docs.example',enabled:true}]}});
@@ -232,4 +234,36 @@ test('explicit reader translation remains available on a paused page',async()=>{
     expect(started.token).toBeTruthy();
     await send({type:'EMERGENCY_END',token:started.token},pageSender);
   }finally{await send({type:'PAGE_ACTIVITY_SET',enabled:true},pageSender);}
+});
+
+test('keyword hint badge appears on matching main-frame commits and clears on non-matches',async()=>{
+  badgeCalls.length=0;
+  await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{keywordHints:{enabled:true,keywords:['docs'],dismissed:[]}}});
+  expect(badgeCalls).toContainEqual({call:'text',tabId:tab.id,text:'+'});
+  expect(badgeCalls.some(call=>call.call==='title'&&call.tabId===tab.id&&call.title.includes('docs'))).toBe(true);
+  expect(session['keywordHint:'+tab.id]).toBe(true);
+
+  badgeCalls.length=0;
+  globalThis.chrome.webNavigation.onCommitted.listeners.forEach(listener=>listener({tabId:tab.id,url:'https://wiki.example.org/p',frameId:1}));
+  await new Promise(resolve=>setTimeout(resolve,0));
+  expect(badgeCalls).toEqual([]);
+
+  globalThis.chrome.webNavigation.onCommitted.listeners.forEach(listener=>listener({tabId:tab.id,url:'https://example.com/',frameId:0}));
+  await new Promise(resolve=>setTimeout(resolve,0));
+  expect(badgeCalls).toContainEqual({call:'text',tabId:tab.id,text:''});
+  expect(session['keywordHint:'+tab.id]).toBeUndefined();
+
+  badgeCalls.length=0;
+  globalThis.chrome.webNavigation.onCommitted.listeners.forEach(listener=>listener({tabId:tab.id,url:'https://example.com/other',frameId:0}));
+  await new Promise(resolve=>setTimeout(resolve,0));
+  expect(badgeCalls.some(call=>call.call==='text')).toBe(false);
+
+  session['keywordHint:'+tab.id]=true;
+  await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{keywordHints:{enabled:false,keywords:['docs'],dismissed:[]}}});
+  await new Promise(resolve=>setTimeout(resolve,0));
+  expect(session['keywordHint:'+tab.id]).toBeUndefined();
+  badgeCalls.length=0;
+  globalThis.chrome.webNavigation.onCommitted.listeners.forEach(listener=>listener({tabId:tab.id,url:'https://docs.example.com/x',frameId:0}));
+  await new Promise(resolve=>setTimeout(resolve,0));
+  expect(badgeCalls).toEqual([]);
 });
