@@ -22,6 +22,16 @@ test('provider options are strict and dynamic endpoints remain on their provider
   expect(()=>normalizeApiService({id:'x',name:'X',providerId:'bedrock',baseUrl:'',model:'m',apiKey:'k',options:{region:'us-west-2',secretAccessKey:'secret'}})).toThrow('未知选项');
 });
 
+test('stepfun plan option switches between metered and subscription endpoints',()=>{
+  expect(apiProviderBaseUrl('stepfun')).toBe('https://api.stepfun.com/v1');
+  expect(apiProviderBaseUrl('stepfun',{plan:'api'})).toBe('https://api.stepfun.com/v1');
+  expect(apiProviderBaseUrl('stepfun',{plan:'step_plan'})).toBe('https://api.stepfun.com/step_plan/v1');
+  const service=normalizeApiService({id:'s',name:'S',providerId:'stepfun',baseUrl:'',model:'step-3.7-flash',apiKey:'k',options:{plan:'step_plan'}});
+  expect(service.options.plan).toBe('step_plan');
+  expect(service.baseUrl).toBe('https://api.stepfun.com/step_plan/v1');
+  expect(()=>normalizeApiService({id:'x',name:'X',providerId:'stepfun',baseUrl:'',model:'m',apiKey:'k',options:{plan:'vip'}})).toThrow('无效');
+});
+
 test('thinking option applies only to protocols with thinking parameters',()=>{
   expect(normalizeApiService({id:'t',name:'T',providerId:'stepfun',baseUrl:'',model:'step-3.7-flash',apiKey:'k',options:{thinking:'high'}}).options.thinking).toBe('high');
   expect(normalizeApiService({id:'t',name:'T',providerId:'openai',baseUrl:'',model:'gpt-5.6-luna',apiKey:'k',options:{}}).options.thinking).toBe('auto');
