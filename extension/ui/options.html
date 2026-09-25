@@ -518,14 +518,8 @@
           <div class="adaptive-setting">
 <div>
 <b>文档类网站提示</b>
-<p>域名片段命中关键词时在扩展图标上提示，再由你在弹窗中为该网站授权。开启后扩展会在本机检查每次打开网页的域名，不保存、不发送网址。</p>
+<p>打开弹窗时，如果当前网站的域名片段命中下列关键词，会提示可为此网站开启自动辅助。</p>
 </div>
-<label class="switch">
-<input id="keyword-hints-enabled" type="checkbox">
-<span aria-hidden="true">
-</span>
-<span class="sr-only">文档类网站提示</span>
-</label>
 </div>
           <form id="keyword-hints-form" class="automation-site-form">
 <label class="field">
@@ -535,6 +529,18 @@
 </label>
 <button class="primary-action narrow" type="submit">保存关键词</button>
 </form>
+          <div class="adaptive-setting">
+<div>
+<b>同时在扩展图标上提示</b>
+<p>开启后扩展会在本机检查每次打开网页的域名，命中时在图标上显示提示；不保存、不发送网址。</p>
+</div>
+<label class="switch">
+<input id="keyword-hints-badge" type="checkbox">
+<span aria-hidden="true">
+</span>
+<span class="sr-only">同时在扩展图标上提示</span>
+</label>
+</div>
           <p id="keyword-hints-result" class="inline-message" aria-live="polite" hidden="">
 </p>
           <div id="keyword-hints-dismissed-list" class="automation-site-list">
