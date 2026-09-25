@@ -236,11 +236,12 @@ function replicateCreateURL(service){const base=serviceBase(service),model=servi
 async function performReplicate(service,payload,instructions,schema,options){const base=serviceBase(service),url=replicateCreateURL(service),isVersion=!service.model.includes('/');const input={prompt:JSON.stringify(payload),system_prompt:systemPrompt(instructions,schema),temperature:0.2,max_tokens:8192};const response=await checkedFetch(url,{method:'POST',signal:options.signal,headers:{Prefer:'wait=25'},body:JSON.stringify(isVersion?{version:service.model,input}:{input})},service,'replicate');let prediction=await jsonResponse(response);responseError(prediction);for(let count=0;!['succeeded','failed','canceled'].includes(prediction.status)&&count<MAX_REPLICATE_POLLS;count++){if(typeof prediction.urls?.get!=='string'||!prediction.urls.get)throw transportError('Replicate 未返回有效的预测状态地址。','INVALID_RESPONSE');const poll=assertSameOrigin(base,prediction.urls.get);await abortableDelay(250,options.signal);prediction=await jsonResponse(await checkedFetch(poll,{method:'GET',signal:options.signal},service,'replicate'));responseError(prediction);}if(prediction.status!=='succeeded')throw transportError('Replicate 预测未成功完成。','PROVIDER_ERROR');const output=Array.isArray(prediction.output)?prediction.output.join(''):prediction.output;if(options.onContent&&typeof output==='string')await options.onContent(output);return parseObject(output);}
 function abortableDelay(ms,signal){return new Promise((resolve,reject)=>{if(signal?.aborted){reject(signal.reason||new DOMException('Aborted','AbortError'));return;}const timer=setTimeout(done,ms);function done(){signal?.removeEventListener('abort',abort);resolve();}function abort(){clearTimeout(timer);signal.removeEventListener('abort',abort);reject(signal.reason||new DOMException('Aborted','AbortError'));}signal?.addEventListener('abort',abort,{once:true});});}
 
-// 单次请求超时预算：慢速推理服务给更长的时间，其余用默认值。按服务商覆盖，不暴露给页面。
+// 单次请求超时预算：慢速推理服务与显式思考档位给更长的时间，其余用默认值。不暴露给页面。
 const PROVIDER_TIMEOUT_MS = Object.freeze({stepfun: 300_000});
 const DEFAULT_REQUEST_TIMEOUT_MS = 180_000;
+const REASONING_REQUEST_TIMEOUT_MS = 300_000;
 export function providerRequestTimeoutMs(service) {
-  return PROVIDER_TIMEOUT_MS[service?.providerId] || DEFAULT_REQUEST_TIMEOUT_MS;
+  return PROVIDER_TIMEOUT_MS[service?.providerId] || (THINKING_LEVELS.has(service?.options?.thinking) ? REASONING_REQUEST_TIMEOUT_MS : DEFAULT_REQUEST_TIMEOUT_MS);
 }
 
 function jevNumber(value){const n=typeof value==='string'&&value.trim()?Number(value):value;return typeof n==='number'&&Number.isFinite(n)?n:null;}

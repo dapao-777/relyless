@@ -1,5 +1,5 @@
 import {afterEach,beforeEach,expect,test} from 'bun:test';
-import {performProviderRequest} from '../extension/api-transport.mjs';
+import {performProviderRequest,providerRequestTimeoutMs} from '../extension/api-transport.mjs';
 import {translationProgress} from '../extension/assistance-stream.mjs';
 import {EMERGENCY_SCHEMA} from '../extension/gloss.mjs';
 
@@ -241,6 +241,17 @@ test('thinking off sends generic disable params and still rejects always-reasoni
   await expect(performProviderRequest({...service('stepfun','https://api.stepfun.com/v1','step-3.7-flash'),options:{thinking:'off'}},{},'Explain.',schema)).rejects.toMatchObject({code:'THINKING_REQUIRED'});
   await expect(performProviderRequest({...service('openai','https://api.openai.com/v1','o3'),options:{thinking:'off'}},{},'Explain.',schema)).rejects.toMatchObject({code:'THINKING_REQUIRED'});
   expect(calls).toBe(0);
+});
+
+test('explicit thinking levels widen the request timeout while auto and off keep the default',()=>{
+  const mistral=service('mistral','https://api.mistral.ai/v1','mistral-small-latest');
+  expect(providerRequestTimeoutMs(mistral)).toBe(180_000);
+  expect(providerRequestTimeoutMs({...mistral,options:{thinking:'auto'}})).toBe(180_000);
+  expect(providerRequestTimeoutMs({...mistral,options:{thinking:'off'}})).toBe(180_000);
+  for(const thinking of ['low','medium','high'])expect(providerRequestTimeoutMs({...mistral,options:{thinking}})).toBe(300_000);
+  // 服务商覆盖仍优先：stepfun 无论档位都给慢推理预算。
+  expect(providerRequestTimeoutMs(service('stepfun','https://api.stepfun.com/v1','step-3.7-flash'))).toBe(300_000);
+  expect(providerRequestTimeoutMs({...service('stepfun','https://api.stepfun.com/v1','step-3.7-flash'),options:{thinking:'off'}})).toBe(300_000);
 });
 
 test('Azure v1 chat uses the common v1 route and keeps the deployment name in model',async()=>{
