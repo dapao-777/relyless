@@ -99,6 +99,11 @@ test('HTTP failures do not read or expose a provider body that may echo secrets'
   expect(bodyRead).toBe(false);
 });
 
+test('HTTP 402 maps to a quota error instead of a misleading endpoint message',async()=>{
+  globalThis.fetch=async()=>({ok:false,status:402,json:async()=>({code:30001,message:'Sorry, your account balance is insufficient'})});
+  await expect(performProviderRequest(service('siliconflow-systemone','https://api.siliconflow.cn/v1','diffusiongemma'),{state:'s',questions:{q:{type:'choice',instructions:'i'}}},undefined,undefined,{})).rejects.toMatchObject({code:'QUOTA',detail:{httpStatus:402}});
+});
+
 
 test('hosted chat protocols send their documented no-thinking controls without retrying',async()=>{
   const cases=[

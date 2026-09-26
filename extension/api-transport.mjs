@@ -142,8 +142,8 @@ async function checkedFetch(url,init,service,protocol,detectSchemaSupport=false)
   if(response.ok)return response;
   if(detectSchemaSupport&&await rejectsSchemaFormat(response))throw transportError('此服务或模型不支持严格 JSON Schema。','SCHEMA_UNSUPPORTED');
   const incompatible=[400,404,405,422].includes(response.status);
-  const message=[401,403].includes(response.status)?'服务拒绝访问，请检查 API Key、模型权限与账户状态。':response.status===429?'服务额度不足或请求过快，请稍后重试或检查账户。':incompatible?'服务或模型不兼容无思考模式、结构化输出或当前原生协议，已停止且不会删除参数重试。':`服务返回 HTTP ${response.status}，请检查 API 地址和模型。`;
-  throw transportError(message,[401,403].includes(response.status)?'AUTH':response.status===429?'RATE_LIMIT':incompatible?'INCOMPATIBLE_REQUEST':'HTTP',{httpStatus:response.status});
+  const message=[401,403].includes(response.status)?'服务拒绝访问，请检查 API Key、模型权限与账户状态。':response.status===402?'服务账户余额不足，请充值或检查服务商账户状态。':response.status===429?'服务额度不足或请求过快，请稍后重试或检查账户。':incompatible?'服务或模型不兼容无思考模式、结构化输出或当前原生协议，已停止且不会删除参数重试。':`服务返回 HTTP ${response.status}，请检查 API 地址和模型。`;
+  throw transportError(message,[401,403].includes(response.status)?'AUTH':response.status===402?'QUOTA':response.status===429?'RATE_LIMIT':incompatible?'INCOMPATIBLE_REQUEST':'HTTP',{httpStatus:response.status});
 }
 function systemPrompt(instructions,schema){return instructions+JSON_SUFFIX+JSON.stringify(schema);}
 function isHybridChatModel(model){return /(?:deepseek-(?:v3|v4)|glm-5\.2|kimi-k2\.6|kimi-k3|qwen3\.(?:5|6|8)|minimax-m3|gemini-2\.5-(?:flash|flash-lite)|grok-4\.3)/i.test(model||'');}
