@@ -1548,6 +1548,7 @@ const CONTEXT_EXPLAIN = 'ss-explain-selection';
 const CONTEXT_TOGGLE_READING = 'ss-toggle-reading';
 const CONTEXT_COPY_PARAGRAPH = 'ss-copy-paragraph';
 const CONTEXT_TRANSLATE_LINK = 'ss-translate-link';
+const CONTEXT_OPEN_PDF = 'ss-open-pdf-reader';
 let menuRegistration = Promise.resolve();
 
 function contextMenuCreate(options) {
@@ -1567,6 +1568,8 @@ function registerContextMenus() {
     await contextMenuCreate({id:CONTEXT_TOGGLE_READING,title:'RelyLess：开启/暂停阅读辅助',contexts:['page'],documentUrlPatterns:['http://*/*','https://*/*']});
     await contextMenuCreate({id:CONTEXT_COPY_PARAGRAPH,title:'RelyLess：复制选中段落的原文',contexts:['selection'],documentUrlPatterns:['http://*/*','https://*/*']});
     await contextMenuCreate({id:CONTEXT_TRANSLATE_LINK,title:'RelyLess：翻译导航链接文字',contexts:['link'],documentUrlPatterns:['http://*/*','https://*/*']});
+    // PDF 明确入口：只在 .pdf 链接上出现，点击即单次使用内置阅读器，与 pdfReader 设置无关。
+    await contextMenuCreate({id:CONTEXT_OPEN_PDF,title:'RelyLess：在阅读器中打开 PDF',contexts:['link'],documentUrlPatterns:['http://*/*','https://*/*'],targetUrlPatterns:['http://*/*.pdf','http://*/*.pdf?*','http://*/*.pdf#*','https://*/*.pdf','https://*/*.pdf?*','https://*/*.pdf#*']});
   });
   menuRegistration.catch(error => console.error('注册右键菜单失败',error));
   return menuRegistration;
@@ -1679,6 +1682,14 @@ chrome.contextMenus.onClicked.addListener((info,tab) => {
         await clearTabStatus(tab.id);
       } catch (error) { await showTabError(tab.id,error,'此页面无法复制段落原文。'); }
     })();
+    return;
+  }
+  if (info.menuItemId === CONTEXT_OPEN_PDF) {
+    try {
+      const src=new URL(info.linkUrl||'');
+      if(!['http:','https:'].includes(src.protocol)||!src.pathname.toLowerCase().endsWith('.pdf'))return;
+      void chrome.tabs.create({url:pdfViewerPrefix()+encodeURIComponent(src.href),index:(tab.index??0)+1,openerTabId:tab.id});
+    } catch { return; }
     return;
   }
   if (info.menuItemId !== CONTEXT_EXPLAIN) return;

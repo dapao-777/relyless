@@ -35,4 +35,20 @@ test('viewer tab can arm an emergency translation session without page injection
   expect(typeof result.token).toBe('string');
 });
 
+// 真实 Chrome 中扩展页对 chrome.tabs 不暴露 url：EMERGENCY_BEGIN 须回落 sender.url 校验。
+test('extension page without visible tab.url arms via sender.url fallback',async()=>{
+  fixture.api.tabs.get=async()=>({id:92,active:true});
+  const realViewer='chrome-extension://'+fixture.id+'/pdf-viewer.html?src='+encodeURIComponent('https://docs.example/no-tab-url.pdf');
+  const result=await isolatedSend(fixture,{type:'EMERGENCY_BEGIN',tabId:92,url:realViewer,confirmed:true},{id:fixture.id,url:realViewer,tab:{id:92}});
+  expect(typeof result.token).toBe('string');
+  fixture.api.tabs.get=async()=>({id:91,url:viewerUrl,active:true,title:'RelyLess PDF 阅读'});
+});
+
+test('pdfReader defaults off and only an explicit true enables it',async()=>{
+  const {normalizeSettings}=await import('../extension/shared.js');
+  expect(normalizeSettings({}).pdfReader).toBe(false);
+  expect(normalizeSettings({pdfReader:true}).pdfReader).toBe(true);
+  expect(normalizeSettings({pdfReader:'yes'}).pdfReader).toBe(false);
+});
+
 test.afterAll?.(()=>{globalThis.chrome=chromeBefore;});

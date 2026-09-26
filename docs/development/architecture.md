@@ -38,7 +38,7 @@ content/reader.js 在当前主框架中做有上限的本地正文筛选和白�
 
 ### `extension/pdf-viewer.*` 与 `extension/pdf-blocks.mjs`
 
-扩展自有的 PDF 阅读表面。`background.js` 通过 `webNavigation.onBeforeNavigate` 拦截主框架 `.pdf` 导航并重定向到 `pdf-viewer.html?src=<原文档地址>`；`#relyless-native` 与 `pdfReader` 设置是回到浏览器原生查看器的出口。阅读器加载 `extension/vendor/pdfjs/` 内的本地 PDF.js（无远程脚本），画布负责视觉排版，文本层按 `pdf-blocks.mjs` 的几何规则聚合成可译文本块。查词、选段翻译、整页翻译复用 `ASSIST`/`PASSAGE_TRANSLATE`/`EMERGENCY_*` 既有契约——后台把 viewer 标签页视作文档表面，文档身份取自 `src` 参数而非扩展页 URL（扩展页对 `chrome.tabs` 不暴露 `url`，身份回落到 `sender.url`）。阅读器不新增持久化、不自动翻译；远程文档仅在站点拒绝跨域读取时经用户点击申请该站访问权限。详见 ADR 0005。
+扩展自有的 PDF 阅读表面。默认仍由浏览器原生查看器接管 .pdf 导航；进入路径有两条且都源于用户明确动作：`.pdf` 链接右键菜单「在阅读器中打开 PDF」单次进入，或 `pdfReader` 设置开启后 `webNavigation.onBeforeNavigate` 拦截主框架 `.pdf` 导航并重定向到 `pdf-viewer.html?src=<原文档地址>`。`#relyless-native` 是「在原生查看器打开」的单次逃逸标记。阅读器加载 `extension/vendor/pdfjs/` 内的本地 PDF.js（无远程脚本），画布负责视觉排版，文本层按 `pdf-blocks.mjs` 的几何规则聚合成可译文本块；渲染按代次（renderGen）失效，缩放会取消在途任务。查词、选段翻译、整页翻译复用 `ASSIST`/`PASSAGE_TRANSLATE`/`EMERGENCY_*` 既有契约——后台把 viewer 标签页视作文档表面，文档身份取自 `src` 参数而非扩展页 URL（扩展页对 `chrome.tabs` 不暴露 `url`，身份回落到 `sender.url`）。阅读器不新增持久化、不自动翻译；远程文档仅在站点拒绝跨域读取时经用户点击申请该站访问权限。详见 ADR 0005。
 
 ### 领域与阅读模块
 

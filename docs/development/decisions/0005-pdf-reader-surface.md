@@ -37,13 +37,13 @@
 
 ## 决策
 
-采用方案 B：
+采用方案 B，但默认不接管导航（依审查意见改为显式入口）：
 
-- `onBeforeNavigate` 在主框架 `.pdf` 导航（http/https）时 `tabs.update` 到 `pdf-viewer.html?src=`；`pdfReader` 设置或 `#relyless-native` 时放行原生查看器。
-- `pdf-viewer.html` + vendored `pdf.min.mjs`/`pdf.worker.min.mjs`：canvas + `TextLayer`；`pdf-blocks.mjs` 纯函数按基线/间距/缩进聚合成块。
+- `pdfReader` 设置默认关闭：仅当用户显式开启后，`onBeforeNavigate` 才在主框架 `.pdf` 导航（http/https）时 `tabs.update` 到 `pdf-viewer.html?src=`；关闭或 `#relyless-native` 时一律放行原生查看器。默认状态下 `.pdf` 链接的右键菜单「在阅读器中打开 PDF」提供单次明确入口。
+- `pdf-viewer.html` + vendored `pdf.min.mjs`/`pdf.worker.min.mjs`：canvas + `TextLayer`；`pdf-blocks.mjs` 纯函数按基线/间距/缩进聚合成块。渲染按 `renderGen` 代次失效：缩放清空 wrap 前取消在途 `renderTask`，过期任务的异步写回被守卫丢弃。
 - `readingSource` 识别 viewer 页：文档哈希取自 `src` 地址；`tab.url` 对扩展页不可见时回落 `sender.url`，`emergencyBegin`/`tabPage` 同样回落，校验强度不变（仍要求 sender 断言当前文档地址）。
 - viewer 抓取远程 PDF：先尝试直接 `fetch`（兼容带 CORS 的站点），`TypeError` 后才在阅读器内显示授权按钮并 `chrome.permissions.request` 该站 origin。
-- 整页翻译走 `EMERGENCY_BEGIN`+`EMERGENCY_TRANSLATE`，译文显示在原文块下方，不移除原文。
+- 整页翻译走 `EMERGENCY_BEGIN`+`EMERGENCY_TRANSLATE`，译文显示在原文块下方，不移除原文；预算超支须页内二次确认。
 
 ## 结果
 
@@ -56,7 +56,7 @@
 
 ### 代价与风险
 
-- 接管 `.pdf` 导航改变了浏览器默认行为：靠 `pdfReader` 设置（默认开）和 `#relyless-native` 逃生口兜底；回归风险集中在导航拦截条件。
+- 导航接管按审查意见默认关闭、由明确入口驱动：不改变默认阅读体验，代价是 PDF 能力需要用户先发现入口（右键菜单或设置开关）。
 - 新增约 1.8MB vendored PDF.js，升级时需同步 `NOTICE.txt` 与版本号。
 - 文本层几何分块对复杂排版（多栏、表格、竖排）保守处理——分不出来的块不译而不是乱译。
 - 扩展页 `tab.url` 不可见这一平台行为若变化，需回归 `readingSource`/`emergencyBegin` 的回落路径。

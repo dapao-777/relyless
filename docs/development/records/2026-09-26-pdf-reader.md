@@ -12,7 +12,7 @@
 
 ## 目标
 
-- 点击 .pdf 链接进入扩展自有阅读器，原文排版完整、文本可选。
+- 默认沿用原生查看器；.pdf 链接右键「在阅读器中打开 PDF」单次进入，或设置开启「在 RelyLess 阅读器中打开 PDF」后点击链接进入，原文排版完整、文本可选。
 - 单击单词打开求助卡片；选中文字出现翻译/解释操作；工具栏可逐块或整页翻译，译文对照显示且不移除原文。
 - 无服务端时各入口明确报错；不自动扫描或翻译文档。
 - 可回退原生查看器（设置开关与 `#relyless-native`）。
@@ -25,14 +25,14 @@
 
 ## 实现边界
 
-- `background.js`：`webNavigation.onBeforeNavigate` 拦截主框架 `.pdf`（http/https）→ `tabs.update` 到 `pdf-viewer.html?src=`。`readingSource` 放行扩展 viewer 页、文档身份取 `src`；`tabPage`/`emergencyBegin` 对扩展页统一 `tab.url || sender.url` 回落（扩展页对 `chrome.tabs` 不暴露 `url` 是实测平台行为）。`isPdfViewerUrl`/`pdfSourceUrl` 集中校验，拒绝伪造 viewer 地址（origin+pathname+src 协议三重检查）。
+- `background.js`：`webNavigation.onBeforeNavigate` 仅在 `pdfReader` 开启时拦截主框架 `.pdf`（http/https）→ `tabs.update` 到 `pdf-viewer.html?src=`；`.pdf` 链接右键菜单提供与设置无关的单次明确入口（`targetUrlPatterns` 限定）。`readingSource` 放行扩展 viewer 页、文档身份取 `src`；`tabPage`/`emergencyBegin` 对扩展页统一 `tab.url || sender.url` 回落（扩展页对 `chrome.tabs` 不暴露 `url` 是实测平台行为）。`isPdfViewerUrl`/`pdfSourceUrl` 集中校验，拒绝伪造 viewer 地址（origin+pathname+src 协议三重检查）。
 - `pdf-blocks.mjs`：纯几何分块（基线容差聚行 → 行距/缩进/栏宽聚块 → 上限裁剪），DOM 无关，Bun 直接测。
-- `pdf-viewer.*`：vendored PDF.js（`vendor/pdfjs/`，Apache-2.0，NOTICE.txt 已登记）。画布层负责视觉，TextLayer 负责选择与几何。覆盖层 `pointer-events:none`，仅块级「译」按钮可点；单词命中用 `caretPositionFromPoint` 解到 span→块映射。`SS_EMERGENCY_COUNT`/`SS_TRANSLATION_PROGRESS` 监听让后台用量探针与流式进度正常工作。
+- `pdf-viewer.*`：vendored PDF.js（`vendor/pdfjs/`，Apache-2.0，NOTICE.txt 已登记）。画布层负责视觉，TextLayer 负责选择与几何。覆盖层 `pointer-events:none`，仅块级「译」按钮可点；单词命中用 `caretPositionFromPoint` 解到 span→块映射。渲染按 `renderGen` 代次失效：缩放清空 wrap 前取消在途 `renderTask`，过期任务的写回被守卫丢弃（修审查指出的 rezoom 竞态）。`SS_EMERGENCY_COUNT`/`SS_TRANSLATION_PROGRESS` 监听让后台用量探针与流式进度正常工作。
 - 权限：直接 `fetch` 先试（覆盖带 CORS 的站点），`TypeError` 后才渲染授权按钮申请该站 origin；拒绝时提示可改原生查看器。
 
 ## 数据、权限与费用
 
-- 新增持久化：无。`pdfReader` 是布尔设置（默认 true），随 `settings` 常规迁移与导出。
+- 新增持久化：无。`pdfReader` 是布尔设置（默认 false，按审查意见改为显式开启），随 `settings` 常规迁移与导出。
 - 新请求面：与网页一致的 ASSIST/PASSAGE_TRANSLATE/EMERGENCY_*；PDF 文本只在点击单词、划词翻译、块/页翻译时发送，走同样的预算估算、会话缓存与无痕排除。
 - 文档地址 `src` 只存在于标签页 URL；不写入历史、诊断或日志。
 - 远程抓取：先零权限直接拉取，失败再逐站可选授权（`optional_host_permissions` 已有 http/https，不新增权限声明）。

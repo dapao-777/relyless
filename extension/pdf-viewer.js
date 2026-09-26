@@ -5,7 +5,7 @@ const $=id=>document.getElementById(id);
 const pagesEl=$('pages'),statusEl=$('status'),zhPanel=$('zh-panel'),zhList=$('zh-list'),cardEl=$('word-card'),selActions=$('sel-actions');
 const ext=globalThis.chrome?.runtime?.id?globalThis.chrome:null;
 GlobalWorkerOptions.workerSrc=(ext?.runtime?.getURL?ext.runtime.getURL('vendor/pdfjs/pdf.worker.min.mjs'):'./vendor/pdfjs/pdf.worker.min.mjs');
-const state={src:'',doc:null,scale:1.15,pages:[],currentPage:1,domain:'',emergency:null,requestSeq:0,translateBusy:false};
+const state={src:'',doc:null,scale:1.15,pages:[],currentPage:1,domain:'',emergency:null,requestSeq:0,translateBusy:false,renderGen:0,observer:null};
 
 function setStatus(text){statusEl.textContent=text||'';}
 addEventListener('error',event=>{if(statusEl&&!statusEl.textContent)setStatus('脚本加载失败：'+(event.message||'未知错误'));});
@@ -73,24 +73,33 @@ async function boot(){
   setStatus('');
 }
 
-function buildPlaceholders(){
+function observePages(){
+  const gen=state.renderGen;
+  state.observer?.disconnect();
   const observer=new IntersectionObserver(entries=>{
     for(const entry of entries){
       if(!entry.isIntersecting)continue;
       const pageNo=Number(entry.target.dataset.page);observer.unobserve(entry.target);
-      void renderPage(pageNo,entry.target);
+      void renderPage(pageNo,entry.target,gen);
     }
     updatePageInfo();
   },{rootMargin:'800px 0px'});
+  state.observer=observer;
+  for(const page of state.pages)if(page?.wrap)observer.observe(page.wrap);
+}
+
+function buildPlaceholders(){
   for(let index=1;index<=state.doc.numPages;index++){
     const wrap=document.createElement('div');wrap.className='pdf-page';wrap.dataset.page=String(index);wrap.style.minHeight='640px';
     pagesEl.append(wrap);state.pages[index]={wrap,rendered:false,blocks:[]};
-    observer.observe(wrap);
   }
+  observePages();
 }
 
-async function renderPage(pageNo,wrap){
+// gen 代次守卫：缩放/重建期间过期的渲染任务不得再写 wrap 或块状态。
+async function renderPage(pageNo,wrap,gen){
   const page=await state.doc.getPage(pageNo);
+  if(gen!==state.renderGen)return;
   const viewport=page.getViewport({scale:state.scale});
   wrap.style.minHeight='';wrap.style.width=viewport.width+'px';wrap.style.height=viewport.height+'px';
   const canvas=document.createElement('canvas');canvas.className='pdf-canvas';
@@ -101,7 +110,10 @@ async function renderPage(pageNo,wrap){
   const layer=document.createElement('div');layer.className='textLayer';layer.style.setProperty('--scale-factor',String(state.scale));
   wrap.append(layer);
   const textLayer=new pdfjsTextLayer({textContentSource:page.streamTextContent(),container:layer,viewport});
-  await Promise.all([renderTask.promise,textLayer.render()]);
+  const rec=state.pages[pageNo];if(rec)rec.renderTask=renderTask;
+  try{await Promise.all([renderTask.promise,textLayer.render()]);}catch(error){if(gen!==state.renderGen)return;setStatus('页面渲染失败：'+(error?.message||'未知错误'));return;}
+  if(gen!==state.renderGen)return;
+  if(rec&&rec.renderTask===renderTask)rec.renderTask=null;
   const divs=[...layer.querySelectorAll('span')].map(el=>({el,x:el.offsetLeft,y:el.offsetTop,w:el.offsetWidth,h:el.offsetHeight,text:el.textContent}));
   const blocks=pdfBlocks(divs);
   for(const block of blocks){
@@ -141,10 +153,9 @@ function scrollToPage(pageNo){const page=state.pages[Math.min(Math.max(pageNo,1)
 $('zoom-out').addEventListener('click',()=>rezoom(Math.max(state.scale-0.15,0.5)));
 $('zoom-in').addEventListener('click',()=>rezoom(Math.min(state.scale+0.15,3)));
 async function rezoom(scale){
-  state.scale=scale;
-  for(const page of state.pages)if(page?.wrap){page.rendered=false;page.blocks=[];page.wrap.replaceChildren();page.wrap.style.minHeight='640px';}
-  const observer=new IntersectionObserver(entries=>{for(const entry of entries){if(!entry.isIntersecting)continue;const pageNo=Number(entry.target.dataset.page);observer.unobserve(entry.target);void renderPage(pageNo,entry.target);}},{rootMargin:'800px 0px'});
-  for(const page of state.pages)if(page?.wrap)observer.observe(page.wrap);
+  state.scale=scale;state.renderGen++;
+  for(const page of state.pages)if(page?.wrap){page.rendered=false;page.blocks=[];try{page.renderTask?.cancel();}catch{}page.renderTask=null;page.wrap.replaceChildren();page.wrap.style.minHeight='640px';}
+  observePages();
 }
 $('native-open').addEventListener('click',()=>{
   if(!state.src)return;

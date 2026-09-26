@@ -326,7 +326,7 @@ function optionsRenderAll(){
   optionsEls.rememberSupport.checked=optionsState.settings.rememberSupport!==false;
   optionsEls.persistTranslationCache.checked=optionsState.settings.persistTranslationCache===true;
   optionsEls.keyboardNav.checked=optionsState.settings.keyboardNav?.enabled===true;
-  optionsEls.pdfReader.checked=optionsState.settings.pdfReader!==false;
+  optionsEls.pdfReader.checked=optionsState.settings.pdfReader===true;
   optionsEls.usageBudget.value=String(optionsState.settings.usageBudget?.monthlyTokens||0)||'';
   setResult(optionsEls.dataProblem,optionsState.dataProblem||'',Boolean(optionsState.dataProblem));
   const video=optionsState.settings.video||{fontSize:20,theme:'auto'};
