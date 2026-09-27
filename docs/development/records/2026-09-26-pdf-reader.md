@@ -45,18 +45,19 @@
 
 ## 验证证据
 
-- 自动检查：`npm run check` —— 466 pass / 0 fail / 2457 expect()，新增 `tests/pdf-blocks.test.js`、`tests/pdf-viewer.test.js`（分块几何、viewer 消息放行、伪造扩展页拒绝、EMERGENCY_BEGIN 对 viewer 发 token）。
-- 浏览器冒烟（Playwright Chromium 153 + `--load-extension`，真实本地 HTTP PDF 服务）：
-  - `.pdf` 导航重定向到 `pdf-viewer.html?src=…`；canvas 渲染、textLayer 9+ span、几何分块 3 块。
-  - 单击单词 → ASSIST → 卡片显示「请先连接服务。」（无服务时诚实错误）。
-  - 划选 → 「翻译所选/解释所选」操作条 → PASSAGE_TRANSLATE 同样诚实报错。
-  - 「翻译本页」→ EMERGENCY_BEGIN 返回 token → 译文面板 3 行对照，原文保留。
-  - `#relyless-native` 与 `pdfReader:false` → 原生查看器接管。
-  - 无 CORS 站点 → 授权按钮出现；拒绝 → 「未获得权限」提示。
-  - 损坏 PDF → 「文档解析失败」；缺 src → 「缺少有效的文档地址。」
-- 无障碍/视觉：工具按钮原生 `<button>` 可键盘聚焦；状态文本不经颜色单独表达；沿用 design token。
+- 自动检查：`npm run check` —— 472 pass / 0 fail，新增 `tests/pdf-blocks.test.js`、`tests/pdf-viewer.test.js` 与 api-transport 推理额度回归测试。
+- 浏览器冒烟（Playwright Chromium + `--load-extension`，本地 HTTP 服务提供自生成单栏/双栏/跨栏标题三份 PDF，模型服务为真实 StepFun 套餐端点 `step-3.5-flash`）：
+  - `.pdf` 导航重定向到 `pdf-viewer.html?src=…`；canvas 渲染、textLayer span、几何分块正常，无 console 错误。
+  - 块「译」→ 真实中文译文同时写入块下内嵌译文与右侧对照栏；「文」按钮可收起/展开内嵌译文。
+  - 单击单词 → 卡片返回真实英文提示（默认 hint；中文释义按钮实测返回 `{"translation":"查询规划器","sense":"…"}`）；× 按钮与 Escape 均可关闭。
+  - 划选 → 操作条 → PASSAGE_TRANSLATE 返回真实译文；「翻译本页」→ EMERGENCY_BEGIN → 逐块内嵌译文 + 右侧栏对照行，行点击平滑滚动回原文块并高亮 1.2s。
+  - `←`/`→` 翻页，页码指示同步；连续缩放后再渲染，内嵌译文按块 id 恢复不丢失。
+  - 双栏样张：左右栏分块不混杂、块序左栏先于右栏；跨栏标题样张渲染正常（不切分退化为单栏行为）。
+  - `#relyless-native` 与 `pdfReader:false` → 原生查看器接管；无 CORS 站点 → 授权按钮；损坏 PDF / 缺 src → 明确报错。
+- 无障碍/视觉：工具按钮原生 `<button>` 可键盘聚焦；沿用 design token（`data-shisui-page` 已接入）。
 
 ## 后续事项
 
-- 授权成功路径在 headless 无法覆盖（权限对话框需要真实窗口）；`chrome.permissions.request` → `boot()` 是标准调用，需人工在正常浏览器过一次。
-- 多栏分块已加 x 投影净空缝切分（≤3 栏、两侧 ≥2 项且 >10% 总宽）；横跨整宽的元素会阻止切分，竖排 PDF 仍依赖真实样张回归，遇到乱序块应反馈样本。
+- 授权成功路径在自动化中无法覆盖（权限对话框需要真实窗口点击）；`chrome.permissions.request` → `boot()` 是标准调用，需人工在正常浏览器过一次。
+- 阶跃星辰推理模型单次查词实测可达 40–100s（推理烧完输出预算的问题已由 `max_tokens` 32768 修复，但延迟是模型行为），卡片 12s 后显示「模型仍在思考」提示。
+- 多栏分块用 x 投影净空缝切分（≤3 栏、两侧 ≥2 项且 >10% 总宽）；横跨整宽的元素会阻止切分，竖排 PDF 仍依赖真实样张回归，遇到乱序块应反馈样本。
