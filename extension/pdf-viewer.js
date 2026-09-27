@@ -5,7 +5,7 @@ const $=id=>document.getElementById(id);
 const pagesEl=$('pages'),statusEl=$('status'),zhPanel=$('zh-panel'),zhList=$('zh-list'),cardEl=$('word-card'),selActions=$('sel-actions');
 const ext=globalThis.chrome?.runtime?.id?globalThis.chrome:null;
 GlobalWorkerOptions.workerSrc=(ext?.runtime?.getURL?ext.runtime.getURL('vendor/pdfjs/pdf.worker.min.mjs'):'./vendor/pdfjs/pdf.worker.min.mjs');
-const state={src:'',doc:null,scale:1.15,pages:[],currentPage:1,domain:'',emergency:null,requestSeq:0,translateBusy:false,renderGen:0,observer:null};
+const state={src:'',doc:null,scale:1.15,pages:[],currentPage:1,domain:'',emergency:null,requestSeq:0,translateBusy:false,renderGen:0,observer:null,translations:new Map()};
 
 function setStatus(text){statusEl.textContent=text||'';}
 addEventListener('error',event=>{if(statusEl&&!statusEl.textContent)setStatus('脚本加载失败：'+(event.message||'未知错误'));});
@@ -122,7 +122,12 @@ async function renderPage(pageNo,wrap,gen){
     const overlay=document.createElement('div');overlay.className='pdf-block';overlay.dataset.block=block.id;
     overlay.style.left=block.x+'px';overlay.style.top=block.y+'px';overlay.style.width=block.w+'px';overlay.style.height=block.h+'px';
     const action=document.createElement('button');action.type='button';action.className='block-action';action.textContent='译';
-    action.addEventListener('click',event=>{event.stopPropagation();void translateBlocks(pageNo,[block]);});
+    action.addEventListener('click',event=>{
+      event.stopPropagation();
+      const zh=overlay.querySelector('.pdf-zh');
+      if(zh){zh.hidden=!zh.hidden;action.textContent=zh.hidden?'译':'文';}
+      else void translateBlocks(pageNo,[block]);
+    });
     overlay.append(action);
     layer.append(overlay);
     block.overlay=overlay;
@@ -131,6 +136,8 @@ async function renderPage(pageNo,wrap,gen){
       el.addEventListener('mouseleave',()=>overlay.classList.remove('hover'));
       el.addEventListener('click',event=>onSpanClick(event,el,block));
     }
+    const saved=state.translations.get(pageNo+':'+block.id);
+    if(saved)setTranslation(block,saved);
   }
   state.pages[pageNo].blocks=blocks;state.pages[pageNo].rendered=true;
 }
@@ -200,9 +207,9 @@ function onSpanClick(event,spanEl,block){
 }
 async function openWordCard(word,block,x,y){
   cardEl.hidden=false;cardEl.style.left=Math.min(x,innerWidth-316)+'px';cardEl.style.top=Math.min(y+12,innerHeight-200)+'px';
-  cardEl.innerHTML='<div class="card-word"></div><div class="card-sense"></div><div class="card-answer">查询中…</div><div class="card-actions"><button type="button" data-act="hint">英文提示</button><button type="button" data-act="rescue">中文释义</button></div>';
+  cardEl.innerHTML='<button type="button" class="card-close" aria-label="关闭">×</button><div class="card-word"></div><div class="card-sense"></div><div class="card-answer">查询中…</div><div class="card-actions"><button type="button" data-act="hint">英文提示</button><button type="button" data-act="rescue">中文释义</button></div>';
   cardEl.querySelector('.card-word').textContent=word;
-  cardEl.querySelectorAll('button').forEach(button=>button.addEventListener('click',()=>void runAssist(button.dataset.act)));
+  cardEl.querySelectorAll('.card-actions button').forEach(button=>button.addEventListener('click',()=>void runAssist(button.dataset.act)));
   async function runAssist(level){
     const answer=cardEl.querySelector('.card-answer');answer.textContent='查询中…';
     try{
@@ -216,6 +223,18 @@ async function openWordCard(word,block,x,y){
 }
 document.addEventListener('mousedown',event=>{
   if(!cardEl.hidden&&!event.target.closest('#word-card'))cardEl.hidden=true;
+});
+cardEl.addEventListener('click',event=>{if(event.target.closest('.card-close'))cardEl.hidden=true;});
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape'){
+    cardEl.hidden=true;selActions.hidden=true;pendingSelection=null;passageCard=null;
+    getSelection()?.removeAllRanges();
+    return;
+  }
+  const tag=event.target?.tagName||'';
+  if(/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(tag)||event.target?.isContentEditable)return;
+  if(event.key==='ArrowLeft')scrollToPage(state.currentPage-1);
+  else if(event.key==='ArrowRight')scrollToPage(state.currentPage+1);
 });
 
 // 选段：翻译或解释
@@ -239,16 +258,32 @@ function selectionCard(){
   cardEl.hidden=false;cardEl.style.left=Math.min(rect.left,innerWidth-316)+'px';cardEl.style.top=Math.min(rect.bottom+12,innerHeight-260)+'px';
   return cardEl;
 }
+// 译文挂上块覆盖层：inline 显示在原文块下方，右侧面板行保持不变。
+function setTranslation(block,text){
+  state.translations.set(block.pageNo+':'+block.id,text);
+  if(!block.overlay)return;
+  block.overlay.classList.add('translated');
+  let zh=block.overlay.querySelector('.pdf-zh');
+  if(!zh){zh=document.createElement('div');zh.className='pdf-zh';block.overlay.append(zh);}
+  zh.hidden=false;
+  zh.style.fontSize=Math.max(9,Math.min(15,(block.h/Math.max(block.lines?.length||1,1))*0.7))+'px';
+  zh.textContent=text.length>280?text.slice(0,280)+'…':text;
+  const action=block.overlay.querySelector('.block-action');
+  if(action)action.textContent='文';
+}
 async function translateBlocks(pageNo,blocks){
   const first=blocks[0];
   const rect=first.overlay?.getBoundingClientRect()||{left:innerWidth/2,bottom:innerHeight/2};
   cardEl.hidden=false;cardEl.style.left=Math.min(rect.left,innerWidth-316)+'px';cardEl.style.top=Math.min(rect.bottom+10,innerHeight-260)+'px';
-  cardEl.innerHTML='<div class="card-word">段落翻译</div><div class="card-answer">翻译中…</div>';
+  cardEl.innerHTML='<button type="button" class="card-close" aria-label="关闭">×</button><div class="card-word">段落翻译</div><div class="card-answer">翻译中…</div>';
   try{
     const result=await send('PASSAGE_TRANSLATE',{requestId:crypto.randomUUID(),items:blocks.map(block=>({id:block.id,text:block.text.slice(0,4000)}))});
     const lines=(result.items||[]).map(item=>item.translation).filter(Boolean);
     cardEl.querySelector('.card-answer').textContent=lines.join('\n\n')||(result.errors?.[0]?'翻译失败：'+result.errors[0].code:'没有返回译文。');
-    for(const block of blocks)block.overlay?.classList.add('translated');
+    for(const item of result.items||[]){
+      const block=blocks.find(b=>b.id===item.id);
+      if(block&&item.translation)setTranslation(block,item.translation);
+    }
   }catch(error){cardEl.querySelector('.card-answer').innerHTML='';const p=document.createElement('p');p.className='card-error';p.textContent=error.message;cardEl.querySelector('.card-answer').append(p);}
 }
 function applyPassageProgress(requestId,items){
@@ -259,7 +294,7 @@ function applyPassageProgress(requestId,items){
 async function translateSelection(){
   if(!pendingSelection)return;const text=pendingSelection.text;selActions.hidden=true;
   const card=selectionCard();const requestId=crypto.randomUUID();passageCard=card;card.dataset.requestId=requestId;
-  card.innerHTML='<div class="card-word">翻译选段</div><div class="card-answer">翻译中…</div>';
+  card.innerHTML='<button type="button" class="card-close" aria-label="关闭">×</button><div class="card-word">翻译选段</div><div class="card-answer">翻译中…</div>';
   try{
     const result=await send('PASSAGE_TRANSLATE',{requestId,items:[{id:'s1',text:text.slice(0,4000)}]});
     const item=result.items?.[0];card.querySelector('.card-answer').textContent=item?.translation||(result.errors?.[0]?'翻译失败：'+result.errors[0].code:'没有返回译文。');
@@ -269,7 +304,7 @@ async function explainSelection(){
   if(!pendingSelection)return;const text=pendingSelection.text;selActions.hidden=true;
   if(text.length>600||text.split(/[.!?。！？]+/).filter(Boolean).length>3){setStatus('解释选段最多 3 句、600 字符，请缩小选择范围。');return;}
   const card=selectionCard();
-  card.innerHTML='<div class="card-word">解释选段</div><div class="card-answer">分析中…</div>';
+  card.innerHTML='<button type="button" class="card-close" aria-label="关闭">×</button><div class="card-word">解释选段</div><div class="card-answer">分析中…</div>';
   try{
     const domain=await ensureDomain();
     const block=state.pages.flatMap(p=>p.blocks||[]).find(b=>b.text.includes(text));
@@ -305,7 +340,9 @@ async function beginEmergency(tabId){
 }
 async function translateCurrentPage(){
   if(state.translateBusy)return;
-  const page=state.pages[state.currentPage];
+  selActions.hidden=true;pendingSelection=null;
+  const pageNo=state.currentPage;
+  const page=state.pages[pageNo];
   if(!page?.rendered||!page.blocks.length){setStatus('当前页还没有可翻译的文本层。');return;}
   if(!ext){setStatus('翻译需要在扩展中运行。');return;}
   state.translateBusy=true;$('translate-page').disabled=true;
@@ -320,22 +357,35 @@ async function translateCurrentPage(){
     const blocks=page.blocks.filter(block=>block.text.length<=4000);
     const rows=new Map();
     for(const block of blocks){
-      const row=document.createElement('div');row.className='zh-row';
+      const row=document.createElement('div');row.className='zh-row';row.dataset.blockId=block.id;
       const src=document.createElement('div');src.className='zh-src';src.textContent=block.text.slice(0,120)+(block.text.length>120?'…':'');
       const zh=document.createElement('div');zh.className='zh-dst';zh.textContent='等待翻译…';
       row.append(src,zh);zhList.append(row);rows.set(block.id,zh);
-      row.addEventListener('mouseenter',()=>block.overlay?.classList.add('translated'));
+      const target=()=>state.pages[pageNo]?.blocks.find(b=>b.id===block.id)?.overlay;
+      row.addEventListener('mouseenter',()=>target()?.classList.add('translated'));
+      row.addEventListener('click',()=>{
+        selActions.hidden=true;pendingSelection=null;
+        const overlay=target();
+        if(!overlay)return;
+        overlay.scrollIntoView({behavior:'smooth',block:'center'});
+        overlay.classList.add('highlight');
+        setTimeout(()=>overlay.classList.remove('highlight'),1200);
+      });
     }
     const batches=[];for(let i=0;i<blocks.length;i+=4)batches.push(blocks.slice(i,i+4));
     let done=0;setStatus('正在翻译本页（0/'+batches.length+' 批）…');
     for(const batch of batches){
       const requestSeq=++state.requestSeq;
       const result=await send('EMERGENCY_TRANSLATE',{token:state.emergency.token,requestSeq,items:batch.map(block=>({id:block.id,text:block.text,context:blockContext(block)}))});
-      for(const item of result.items||[]){const zh=rows.get(item.id);if(zh){zh.textContent=item.translation;const block=blocks.find(b=>b.id===item.id);block?.overlay?.classList.add('translated');}}
+      for(const item of result.items||[]){
+        const zh=rows.get(item.id);if(zh)zh.textContent=item.translation;
+        const block=blocks.find(b=>b.id===item.id);
+        if(block&&item.translation)setTranslation(block,item.translation);
+      }
       for(const error of result.errors||[]){const zh=rows.get(error.id);if(zh){zh.textContent='翻译失败：'+error.code;zh.classList.add('zh-err');}}
       done++;setStatus('正在翻译本页（'+done+'/'+batches.length+' 批）…');
     }
-    setStatus('本页翻译完成，原文保留，译文在右侧栏。');
+    setStatus('本页翻译完成，译文附在原文下方，右侧栏可总览。');
   }catch(error){
     setStatus(error.message);
     if(/过期|失效|变化/.test(error.message))state.emergency=null;

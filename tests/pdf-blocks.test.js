@@ -56,3 +56,40 @@ test('heading and body become separate blocks when spacing differs',()=>{
   expect(blocks).toHaveLength(2);
   expect(blocks[0].text).toBe('Chapter One');
 });
+
+const twoColumnItems=()=>[
+  span(50,100,200,10,'Left column opening line.'),
+  span(350,104,200,10,'Right column opening line.'),
+  span(50,112,200,10,'Left column continues here.'),
+  span(350,116,200,10,'Right column continues here.'),
+  span(50,124,180,10,'Left column final line.'),
+  span(350,128,190,10,'Right column final line.'),
+];
+
+test('two-column pages never merge columns into one block',()=>{
+  const blocks=pdfBlocks(twoColumnItems());
+  expect(blocks).toHaveLength(2);
+  for(const block of blocks){
+    expect(/Left/.test(block.text)&&/Right/.test(block.text)).toBe(false);
+  }
+  // 阅读顺序：左栏整块在前
+  expect(blocks[0].text).toBe('Left column opening line. Left column continues here. Left column final line.');
+  expect(blocks[1].text).toBe('Right column opening line. Right column continues here. Right column final line.');
+});
+
+test('pdfLines keeps columns apart so selection stays per-column',()=>{
+  const lines=pdfLines(twoColumnItems());
+  expect(lines).toHaveLength(6);
+  expect(lines.slice(0,3).every(line=>line.text.startsWith('Left'))).toBe(true);
+  expect(lines.slice(3).every(line=>line.text.startsWith('Right'))).toBe(true);
+});
+
+test('a too-narrow side strip is not treated as a column',()=>{
+  const lines=pdfLines([
+    span(50,100,500,10,'Main line one. '),
+    span(600,100,20,10,'¹'),
+    span(50,112,500,10,'Main line two. '),
+    span(600,112,20,10,'²'),
+  ]);
+  expect(lines.map(line=>line.text)).toEqual(['Main line one. ¹','Main line two. ²']);
+});
