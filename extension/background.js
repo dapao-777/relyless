@@ -1401,13 +1401,30 @@ async function activateTab(tab) {
 }
 let automationReconciliation = Promise.resolve();
 const keywordHintKey=tabId=>'keywordHint:'+tabId;
-async function refreshKeywordHint(tabId,url) {
+const tabErrorKey=tabId=>'tabError:'+tabId;
+const tabStatusQueues=new Map();
+function withTabStatus(tabId,fn) {
+  const run=(tabStatusQueues.get(tabId)||Promise.resolve()).catch(()=>{}).then(fn);
+  tabStatusQueues.set(tabId,run);
+  void run.finally(()=>{if(tabStatusQueues.get(tabId)===run)tabStatusQueues.delete(tabId);});
+  return run;
+}
+function resetBadge(tabId) {
+  return Promise.all([
+    chrome.action.setBadgeText({tabId,text:''}),
+    chrome.action.setTitle({tabId,title:'RelyLess'})
+  ]);
+}
+async function applyKeywordHint(tabId,url) {
   if (!Number.isInteger(tabId)) return;
   const key=keywordHintKey(tabId);
   const {settings:raw}=await chrome.storage.local.get('settings');
   const automation=normalizeSettings(raw).automation;
+  if (automation.keywordHints.badge&&url===undefined) url=await chrome.webNavigation.getFrame({tabId,frameId:0}).then(frame=>frame?.url||'').catch(()=>null);
+  if (url===null) return;
   const keyword=automation.keywordHints.badge&&url?resolveAutomation(automation,url).keywordHint:null;
   if (keyword) {
+    if ((await chrome.storage.session.get(tabErrorKey(tabId)))[tabErrorKey(tabId)]) return;
     await Promise.allSettled([
       chrome.action.setBadgeBackgroundColor({tabId,color:'#70509c'}),
       chrome.action.setBadgeText({tabId,text:'+'}),
@@ -1417,11 +1434,17 @@ async function refreshKeywordHint(tabId,url) {
     return;
   }
   if (!(await chrome.storage.session.get(key))[key]) return;
-  await Promise.allSettled([clearTabStatus(tabId),chrome.storage.session.remove(key)]);
+  await Promise.allSettled([resetBadge(tabId),chrome.storage.session.remove(key)]);
+}
+function refreshKeywordHint(tabId,url) {
+  return withTabStatus(tabId,()=>applyKeywordHint(tabId,url));
 }
 chrome.webNavigation.onCommitted.addListener(details => {
   if (details.frameId !== 0) return;
-  void refreshKeywordHint(details.tabId,details.url).catch(error => console.error('更新文档类网站提示失败',error));
+  void withTabStatus(details.tabId,async()=>{
+    await chrome.storage.session.remove(tabErrorKey(details.tabId));
+    await applyKeywordHint(details.tabId,details.url);
+  }).catch(error => console.error('更新文档类网站提示失败',error));
 },{url:[{schemes:['http','https']}]});
 function reconcileAutomation() {
   const work = automationReconciliation.catch(() => {}).then(async () => {
@@ -1429,13 +1452,7 @@ function reconcileAutomation() {
     await reconcileAutoScript(settings);
     const tabs = await chrome.tabs.query({});
     await Promise.allSettled(tabs.map(activateTab));
-    const hintsEnabled=settings.automation.keywordHints?.badge===true;
-    await Promise.allSettled(tabs.map(async tab => {
-      if (!Number.isInteger(tab?.id)) return;
-      const url=hintsEnabled?await chrome.webNavigation.getFrame({tabId:tab.id,frameId:0}).then(frame=>frame?.url||'').catch(()=>null):'';
-      if (url===null) return;
-      await refreshKeywordHint(tab.id,url);
-    }));
+    await Promise.allSettled(tabs.map(tab=>refreshKeywordHint(tab.id)));
   });
   automationReconciliation = work;
   return work;
@@ -1588,7 +1605,7 @@ chrome.runtime.onInstalled.addListener(registerContextMenus);
 chrome.runtime.onStartup.addListener(registerContextMenus);
 void registerContextMenus();
 async function forgetTabAutomation(tabId) {
-  await chrome.storage.session.remove([tabPauseKey(tabId),offeredKey(tabId),pendingKey(tabId),assistCacheKey(tabId),'pageDomain:'+tabId,keywordHintKey(tabId)]);
+  await chrome.storage.session.remove([tabPauseKey(tabId),offeredKey(tabId),pendingKey(tabId),assistCacheKey(tabId),'pageDomain:'+tabId,keywordHintKey(tabId),tabErrorKey(tabId)]);
   for(const key of assistQueues.keys())if(key.startsWith(tabId+':')){assistQueues.delete(key);commitFlights.delete(key);}
 }
 
@@ -1616,21 +1633,26 @@ chrome.tabs.onRemoved.addListener(tabId => {
 void reconcileAutomation().catch(error => console.error('初始化自动开启策略失败',error));
 
 
-async function clearTabStatus(tabId) {
-  await Promise.all([
-    chrome.action.setBadgeText({tabId,text:''}),
-    chrome.action.setTitle({tabId,title:'RelyLess'})
-  ]);
+function clearTabStatus(tabId) {
+  return withTabStatus(tabId,async()=>{
+    if (!(await chrome.storage.session.get(tabErrorKey(tabId)))[tabErrorKey(tabId)]) return;
+    await Promise.allSettled([resetBadge(tabId),chrome.storage.session.remove(tabErrorKey(tabId))]);
+    await applyKeywordHint(tabId);
+  });
 }
 
-async function showTabError(tabId,error,fallback) {
+function showTabError(tabId,error,fallback) {
   const message = error instanceof Error && error.message ? error.message : fallback;
   console.error(fallback,error);
-  await Promise.allSettled([
-    chrome.action.setBadgeBackgroundColor({tabId,color:'#B42318'}),
-    chrome.action.setBadgeText({tabId,text:'!'}),
-    chrome.action.setTitle({tabId,title:`RelyLess：${message}`})
-  ]);
+  return withTabStatus(tabId,async()=>{
+    await Promise.allSettled([
+      chrome.action.setBadgeBackgroundColor({tabId,color:'#B42318'}),
+      chrome.action.setBadgeText({tabId,text:'!'}),
+      chrome.action.setTitle({tabId,title:`RelyLess：${message}`}),
+      chrome.storage.session.set({[tabErrorKey(tabId)]:true}),
+      chrome.storage.session.remove(keywordHintKey(tabId))
+    ]);
+  });
 }
 
 async function toggleReading(tab) {

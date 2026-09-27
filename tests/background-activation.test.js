@@ -274,3 +274,122 @@ test('badge off: no badge writes, no getFrame reads, and stale markers clear wit
   await new Promise(resolve=>setTimeout(resolve,0));
   expect(badgeCalls).toEqual([]);
 });
+
+const flushBadgeQueue=async()=>{for(let i=0;i<5;i++)await new Promise(resolve=>setTimeout(resolve,0));};
+const commitMainFrame=(url)=>{globalThis.chrome.webNavigation.onCommitted.listeners.forEach(listener=>listener({tabId:tab.id,url,frameId:0}));};
+const clickMenu=(menuItemId,info={})=>{globalThis.chrome.contextMenus.onClicked.listeners.forEach(listener=>listener({menuItemId,frameId:0,...info},tab));};
+const failTabSend=()=>{const real=globalThis.chrome.tabs.sendMessage;globalThis.chrome.tabs.sendMessage=async()=>({ok:false,error:'fixture failure'});return()=>{globalThis.chrome.tabs.sendMessage=real;};};
+const lastText=()=>badgeCalls.filter(call=>call.call==='text'&&call.tabId===tab.id).at(-1)?.text;
+const enableDocsBadge=()=>send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{keywordHints:{badge:true,keywords:['docs'],dismissed:[]}}});
+
+test('error badge wins over hint: matching reconcile keeps ! and skips +',async()=>{
+  badgeCalls.length=0;
+  const restore=failTabSend();
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  restore();
+  expect(lastText()).toBe('!');
+  expect(session['tabError:'+tab.id]).toBe(true);
+  badgeCalls.length=0;
+  await enableDocsBadge();
+  await flushBadgeQueue();
+  expect(badgeCalls.some(call=>call.call==='text'&&call.text==='+')).toBe(false);
+  expect(session['keywordHint:'+tab.id]).toBeUndefined();
+  expect(session['tabError:'+tab.id]).toBe(true);
+  delete session['tabError:'+tab.id];
+});
+
+test('hint then error then non-matching reconcile: ! persists, no clear call',async()=>{
+  await enableDocsBadge();
+  badgeCalls.length=0;
+  commitMainFrame('https://docs.example.com/x');
+  await flushBadgeQueue();
+  expect(lastText()).toBe('+');
+  const restore=failTabSend();
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  restore();
+  expect(lastText()).toBe('!');
+  expect(session['keywordHint:'+tab.id]).toBeUndefined();
+  badgeCalls.length=0;
+  await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{keywordHints:{badge:true,keywords:['wiki'],dismissed:[]}}});
+  await flushBadgeQueue();
+  expect(badgeCalls.some(call=>call.call==='text'&&call.text==='')).toBe(false);
+  expect(lastText()).toBeUndefined();
+  expect(session['tabError:'+tab.id]).toBe(true);
+  delete session['tabError:'+tab.id];
+  await enableDocsBadge();
+});
+
+test('successful action after error restores + on matching tab, plain clear when badge off',async()=>{
+  await enableDocsBadge();
+  const restore=failTabSend();
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  restore();
+  expect(lastText()).toBe('!');
+  badgeCalls.length=0;
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  expect(session['tabError:'+tab.id]).toBeUndefined();
+  expect(session['keywordHint:'+tab.id]).toBe(true);
+  expect(lastText()).toBe('+');
+
+  session['keywordHint:'+tab.id]=undefined;delete session['keywordHint:'+tab.id];
+  await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{keywordHints:{badge:false,keywords:['docs'],dismissed:[]}}});
+  await flushBadgeQueue();
+  badgeCalls.length=0;getFrameCalls=0;
+  const restore2=failTabSend();
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  restore2();
+  expect(lastText()).toBe('!');
+  badgeCalls.length=0;
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  expect(lastText()).toBe('');
+  expect(getFrameCalls).toBe(0);
+  expect(session['tabError:'+tab.id]).toBeUndefined();
+  expect(session['keywordHint:'+tab.id]).toBeUndefined();
+});
+
+test('successful action with no prior error leaves + untouched',async()=>{
+  await enableDocsBadge();
+  badgeCalls.length=0;
+  commitMainFrame('https://docs.example.com/x');
+  await flushBadgeQueue();
+  expect(lastText()).toBe('+');
+  badgeCalls.length=0;
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  expect(badgeCalls.some(call=>call.call==='text')).toBe(false);
+  expect(session['keywordHint:'+tab.id]).toBe(true);
+});
+
+test('main-frame commit clears error state and applies matching hint',async()=>{
+  await enableDocsBadge();
+  const restore=failTabSend();
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  restore();
+  expect(session['tabError:'+tab.id]).toBe(true);
+  badgeCalls.length=0;
+  commitMainFrame('https://docs.example.com/x');
+  await flushBadgeQueue();
+  expect(session['tabError:'+tab.id]).toBeUndefined();
+  expect(lastText()).toBe('+');
+  expect(session['keywordHint:'+tab.id]).toBe(true);
+});
+
+test('queued error and hint refresh resolve deterministically to !',async()=>{
+  await enableDocsBadge();
+  badgeCalls.length=0;
+  const restore=failTabSend();
+  clickMenu('ss-toggle-reading');
+  commitMainFrame('https://docs.example.com/x');
+  await flushBadgeQueue();
+  restore();
+  expect(lastText()).toBe('!');
+  expect(session['keywordHint:'+tab.id]).toBeUndefined();
+  delete session['tabError:'+tab.id];
+});
