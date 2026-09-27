@@ -133,8 +133,8 @@ test('a siliconflow systemone judge routes through the systemone endpoint', asyn
   const seen = [];
   globalThis.fetch = withCapabilityProbe(async (url, init) => {
     const body = JSON.parse(init.body);
-    seen.push({url: String(url), model: body.model, state: typeof body.state === 'string'});
-    if (String(url).includes('api.siliconflow.cn')) return Response.json({answers: {tier: {selected: 'premium'}, confidence: {score: 0.4}}});
+    seen.push({url: String(url), model: body.model, state: typeof body.state === 'string', confidenceType: body.questions?.confidence?.type});
+    if (String(url).includes('api.siliconflow.cn')) return Response.json({answers: {tier: {selected: 'premium'}, confidence: {noul: 0.4}}});
     return assistReply(init);
   });
   await import(`../extension/background.js?routing-systemone=${Date.now()}`);
@@ -144,6 +144,7 @@ test('a siliconflow systemone judge routes through the systemone endpoint', asyn
   expect(judge).toBeTruthy();
   expect(judge.model).toBe('diffusiongemma');
   expect(judge.state).toBe(true);
+  expect(judge.confidenceType).toBe('noul');
   const served = seen.filter(entry => !entry.url.includes('api.siliconflow.cn'));
   expect(served.at(-1).url).toContain('premium.example');
   const stats = await isolatedSend(fixture, {type: 'ROUTING_STATS'}, {id: 'routing-systemone', url: 'chrome-extension://routing-systemone/ui/options.html'});

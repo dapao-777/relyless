@@ -1008,7 +1008,7 @@ async function chooseRoute(operation, summary, {settings, guard = async () => {}
   }
   let answers = null;
   try {
-    const value = await withBackgroundSlot(() => apiRequest(judge, {state: summary, questions: routingQuestions()}, undefined, undefined, {trace, beforeRequest: guard}), guard);
+    const value = await withBackgroundSlot(() => apiRequest(judge, {state: summary, questions: routingQuestions(getApiProvider(judge.providerId)?.protocol)}, undefined, undefined, {trace, beforeRequest: guard}), guard);
     answers = value?.answers || null;
   } catch { routingStats.judgeFailed++; }
   if (!answers) {

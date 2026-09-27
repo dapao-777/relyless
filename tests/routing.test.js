@@ -33,13 +33,16 @@ test('partial patches merge over current settings instead of resetting', () => {
   expect(merged.operations.assist).toBe(true);
 });
 
-test('the judge question contract has one choice and one score with criteria', () => {
+test('the judge question contract has one choice and one confidence question with criteria', () => {
   const questions = routingQuestions();
   expect(Object.keys(questions)).toEqual(['tier', 'confidence']);
   expect(questions.tier.type).toBe('choice');
   expect(Object.keys(questions.tier.criteria)).toEqual(['routine', 'elevated', 'premium']);
   expect(questions.tier.instructions).toContain('untrusted data');
   expect(questions.confidence.type).toBe('score');
+  const systemone = routingQuestions('systemone');
+  expect(systemone.tier).toEqual(questions.tier);
+  expect(systemone.confidence.type).toBe('noul');
 });
 
 test('request summaries are bounded and carry the operation contract', () => {
@@ -59,6 +62,8 @@ test('escalation only happens for premium tier or unconfident elevated', () => {
   expect(decideRoute({tier: {selected: 'routine'}, confidence: {score: 0.4}}, policy)).toEqual({route: 'primary', reason: 'tier-routine'});
   expect(decideRoute({tier: {selected: 'other'}, confidence: {score: 1}}, policy)).toEqual({route: 'primary', reason: 'judge-invalid'});
   expect(decideRoute({tier: {selected: 'elevated'}}, policy)).toEqual({route: 'premium', reason: 'tier-elevated-low-confidence'});
+  expect(decideRoute({tier: {selected: 'elevated'}, confidence: {probability: 0.9}}, policy)).toEqual({route: 'primary', reason: 'tier-elevated-confident'});
+  expect(decideRoute({tier: {selected: 'elevated'}, confidence: {probability: 0.2}}, policy)).toEqual({route: 'premium', reason: 'tier-elevated-low-confidence'});
   expect(decideRoute(null, policy)).toEqual({route: 'primary', reason: 'judge-invalid'});
 });
 

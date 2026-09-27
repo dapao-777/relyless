@@ -32,8 +32,8 @@ export function normalizeRouting(value, current = {}) {
   };
 }
 
-/** 判卷问题契约：一个分级选择 + 一个把握度打分。问题文本与回答校验在传输层。 */
-export function routingQuestions() {
+/** 判卷问题契约：一个分级选择 + 一个把握度问题。System One 端点未实现 score，改用 noul（命题成立概率）。 */
+export function routingQuestions(protocol) {
   return {
     tier: {
       type: 'choice',
@@ -44,7 +44,9 @@ export function routingQuestions() {
         premium: 'passage-level explanation, rescue translation, or hard content; needs the strongest model',
       },
     },
-    confidence: {type: 'score', instructions: 'How confident are you in the tier above, from 0 to 1?'},
+    confidence: protocol === 'systemone'
+      ? {type: 'noul', instructions: 'The tier decision above correctly matches the capability this request needs.'}
+      : {type: 'score', instructions: 'How confident are you in the tier above, from 0 to 1?'},
   };
 }
 
@@ -72,7 +74,7 @@ function simpleHash(text) {
 /** 决策：premium 档，或 elevated 档但把握度不足时升级；其余走主路由。 */
 export function decideRoute(answers, policy) {
   const tier = answers?.tier?.selected;
-  const confidence = Number(answers?.confidence?.score);
+  const confidence = Number(answers?.confidence?.score ?? answers?.confidence?.probability);
   if (!TIERS.includes(tier)) return {route: 'primary', reason: 'judge-invalid'};
   if (tier === 'premium') return {route: 'premium', reason: 'tier-premium'};
   if (tier === 'elevated' && (!Number.isFinite(confidence) || confidence < (policy?.minConfidence ?? DEFAULT_MIN_CONFIDENCE))) {
