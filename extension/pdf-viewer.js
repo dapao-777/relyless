@@ -26,7 +26,7 @@ if(ext)ext.runtime.onMessage.addListener((message,_sender,reply)=>{
   if(message?.type==='SS_TRANSLATION_PROGRESS'&&Array.isArray(message.items))applyPassageProgress(message.requestId,message.items);
   return false;
 });
-function visibleChars(){let chars=0;for(const page of state.pages)if(page.rendered)for(const block of page.blocks)chars+=block.text.length;return chars;}
+function visibleChars(){let chars=0;for(const page of state.pages)if(page?.rendered)for(const block of page.blocks)chars+=block.text.length;return chars;}
 
 const srcParam=new URLSearchParams(location.search).get('src')||'';
 function docName(src){try{const name=decodeURIComponent(new URL(src).pathname.split('/').pop()||'');return name||'PDF 文档';}catch{return 'PDF 文档';}}
@@ -212,14 +212,15 @@ async function openWordCard(word,block,x,y){
   cardEl.querySelectorAll('.card-actions button').forEach(button=>button.addEventListener('click',()=>void runAssist(button.dataset.act)));
   async function runAssist(level){
     const answer=cardEl.querySelector('.card-answer');answer.textContent='查询中…';
+    const slow=setTimeout(()=>{if(answer.textContent==='查询中…')answer.textContent='查询中…（模型仍在思考，可能需要半分钟以上）';},12000);
     try{
       const domain=await ensureDomain();
       const result=await send('ASSIST',{requestId:crypto.randomUUID(),text:word,context:aroundContext(word,block.text),domain,kind:'word',level,detail:'brief',articleKey:''});
       if(level==='hint')answer.textContent=result.hint||'没有可用提示。';
       else{answer.textContent=result.translation||'没有释义。';cardEl.querySelector('.card-sense').textContent=result.sense||'';}
-    }catch(error){answer.innerHTML='';const p=document.createElement('p');p.className='card-error';p.textContent=error.message;answer.append(p);}
+    }catch(error){answer.innerHTML='';const p=document.createElement('p');p.className='card-error';p.textContent=error.message;answer.append(p);}finally{clearTimeout(slow);}
   }
-  void runAssist('rescue');
+  void runAssist('hint');
 }
 document.addEventListener('mousedown',event=>{
   if(!cardEl.hidden&&!event.target.closest('#word-card'))cardEl.hidden=true;
