@@ -84,6 +84,28 @@ test('pdfLines keeps columns apart so selection stays per-column',()=>{
   expect(lines.slice(3).every(line=>line.text.startsWith('Right'))).toBe(true);
 });
 
+// 评审复现：通栏标题把两栏的 x 投影缝堵死，修复前同行左右栏被错误拼接。
+test('a full-width title splits the page into bands so columns stay ordered',()=>{
+  const blocks=pdfBlocks([
+    span(50,20,540,16,'Full Width Title'),
+    span(50,60,200,10,'L0'),span(350,60,200,10,'R0'),
+    span(50,72,200,10,'L1'),span(350,72,200,10,'R1'),
+    span(50,84,200,10,'L2'),span(350,84,200,10,'R2'),
+    span(50,96,200,10,'L3'),span(350,96,200,10,'R3'),
+  ]);
+  expect(blocks.map(block=>block.text)).toEqual(['Full Width Title','L0 L1 L2 L3','R0 R1 R2 R3']);
+});
+
+// 单栏文档里撑满版心的长行不得被误判为分隔带。
+test('a single-column long line is not treated as a band separator',()=>{
+  const blocks=pdfBlocks([
+    span(50,20,540,10,'A justified line that spans almost the whole text measure.'),
+    span(50,32,300,10,'Next line.'),
+  ]);
+  expect(blocks).toHaveLength(1);
+  expect(blocks[0].text).toContain('Next line.');
+});
+
 test('a too-narrow side strip is not treated as a column',()=>{
   const lines=pdfLines([
     span(50,100,500,10,'Main line one. '),

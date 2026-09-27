@@ -762,10 +762,16 @@ async function preparedAssist(message,sender){
   await writeReadingSession({[key]:Object.fromEntries(Object.entries(pending).slice(-128))},generation);if(command.detail==='brief')await readingHistory.prepareQuery(sender,command.requestId,command,publicResult);return publicResult;
 }
 // 整页翻译预估：字符数 × 该服务·模型近 30 天 tokens/字符比率；无历史按 chars/4 回退。
-async function emergencyUsageEstimate(tabId,settings){
+// tabs.sendMessage 到不了扩展页（如 PDF 查看器），扩展界面须在请求里自带字符数；
+// 内容脚本页面则回落到 SS_EMERGENCY_COUNT 探针。
+async function emergencyUsageEstimate(tabId,settings,declared){
   settings=settings.providerKind==='local'?(localFallbackSettings(settings)||settings):settings;
-  const probe=await chrome.tabs.sendMessage(tabId,{type:'SS_EMERGENCY_COUNT'},{frameId:0}).catch(()=>null);
-  const chars=probe?.ok&&Number.isSafeInteger(probe.data?.chars)?Math.min(probe.data.chars,2000000):0;
+  let chars;
+  if(Number.isSafeInteger(declared)&&declared>=0)chars=Math.min(declared,2000000);
+  else{
+    const probe=await chrome.tabs.sendMessage(tabId,{type:'SS_EMERGENCY_COUNT'},{frameId:0}).catch(()=>null);
+    chars=probe?.ok&&Number.isSafeInteger(probe.data?.chars)?Math.min(probe.data.chars,2000000):0;
+  }
   const api=provider=>provider==='api';
   const active=api(settings.providerKind)?activeApiProvider(settings):null;
   const service=api(settings.providerKind)?(active?.name||active?.model||''):settings.providerKind==='local'?'本机模型':'订阅服务',model=api(settings.providerKind)?(active?.model||''):settings.providerKind==='local'?'gemini-nano':(settings.subscriptionModel||'');
@@ -782,7 +788,7 @@ async function emergencyBegin(message,sender){
   if(actual!==message.url)throw new Error('页面已变化，请重新确认。');
   if(!isPdfViewerUrl(actual)&&injectedEmergencyPages.get(message.tabId)!==actual)throw new Error('请先准备当前页面再开始紧急翻译。');
   if(!isPdfViewerUrl(actual)&&!['http:','https:'].includes(new URL(actual).protocol))throw new Error('此网页不支持紧急翻译。');
-  const estimate=await emergencyUsageEstimate(message.tabId,(await load(false)).settings);
+  const estimate=await emergencyUsageEstimate(message.tabId,(await load(false)).settings,message.chars);
   if(estimate.budgetExceeded&&message.confirmed!==true)return {budgetExceeded:true,estimate:estimate.estimate,monthlyUsed:estimate.monthlyUsed,budget:estimate.budget};
   return changeEmergency(async()=>{const loaded=await load(),state={...loaded,settings:dispatchSettings(loaded.settings)},generation=providerGeneration,token=crypto.randomUUID()+crypto.randomUUID(),provider=await emergencyProvider(state.settings),current=await chrome.tabs.get(message.tabId);
     if((current.url||sender?.url)!==message.url||generation!==providerGeneration)throw new Error('页面或服务已变化，请重新确认。');
@@ -862,7 +868,12 @@ async function passageTranslate(message,sender) {
   let open=true,pending=null,previous=null,delivering=false,timer=0;
   const deliver=async()=>{
     const progress=pending;pending=null;delivering=true;
-    try{if(open&&await current()&&open)await chrome.tabs.sendMessage(source.tabId,{type:'SS_TRANSLATION_PROGRESS',requestId:message.requestId,items:progress.items},{frameId:0,...(sender.documentId?{documentId:sender.documentId}:{})}).catch(()=>{});}catch{}finally{delivering=false;if(open)timer=setTimeout(()=>{timer=0;if(pending)void deliver();},50);}
+    try{if(open&&await current()&&open){
+      const payload={type:'SS_TRANSLATION_PROGRESS',requestId:message.requestId,items:progress.items};
+      // tabs.sendMessage 只投递给内容脚本：扩展页来源（PDF 查看器）走 runtime 广播＋tabId 定向。
+      if(isPdfViewerUrl(source.url))await chrome.runtime.sendMessage({...payload,tabId:source.tabId}).catch(()=>{});
+      else await chrome.tabs.sendMessage(source.tabId,payload,{frameId:0,...(sender.documentId?{documentId:sender.documentId}:{})}).catch(()=>{});
+    }}catch{}finally{delivering=false;if(open)timer=setTimeout(()=>{timer=0;if(pending)void deliver();},50);}
   };
   const onProgress=progress=>{
     if(!open||!progress?.items.length||previous&&previous.items.length===progress.items.length&&previous.items.every((item,index)=>item.id===progress.items[index].id&&item.translation===progress.items[index].translation))return;
@@ -1517,7 +1528,7 @@ async function handle(message,sender) {
     case 'READER_TRANSLATION_ESTIMATE':{const source=await readingSource(sender);if(!source.active)throw new Error('当前网页不可翻译。');return emergencyUsageEstimate(source.tabId,(await load(false)).settings);}
     case 'READER_TRANSLATION_BEGIN':{const source=await readingSource(sender);if(!source.active||typeof message.confirmed!=='boolean')throw new Error('当前网页不可翻译。');injectedEmergencyPages.set(source.tabId,source.url);return emergencyBegin({tabId:source.tabId,url:source.url,confirmed:message.confirmed});}
     case 'EMERGENCY_BEGIN':if(!trusted)throw new Error('仅扩展界面可确认紧急翻译。');return emergencyBegin(message,sender);
-    case 'EMERGENCY_ESTIMATE':{if(!trusted)throw new Error('仅扩展界面可确认紧急翻译。');if(!Number.isInteger(message.tabId))throw new Error('无效的预估请求。');return emergencyUsageEstimate(message.tabId,(await load(false)).settings);}
+    case 'EMERGENCY_ESTIMATE':{if(!trusted)throw new Error('仅扩展界面可确认紧急翻译。');if(!Number.isInteger(message.tabId))throw new Error('无效的预估请求。');return emergencyUsageEstimate(message.tabId,(await load(false)).settings,message.chars);}
     case 'PASSAGE_TRANSLATE':return passageTranslate(message,sender);
     case 'EMERGENCY_TRANSLATE':return emergencyTranslate(message,sender);
     case 'EMERGENCY_CANCEL_REQUEST':return emergencyCancelRequest(message,sender);

@@ -38,6 +38,31 @@ function columnCut(items) {
   return {byX, cut, gap: widest};
 }
 
+// 全宽元素（通栏标题/分隔条）会把左右栏的 x 投影缝堵死，使 columnCut 失效、
+// 两栏被同行合并。先按全宽元素把版面切成水平条带，再在条带内做竖切。
+// 判定按宽度占版心比例（≥60%），不要求贴齐两边——居中标题同样生效。
+// 仅当移除全宽元素后确实能分出多栏才启用，避免单栏文档里偶然的长行被当作分隔。
+function splitBands(items) {
+  const minX = Math.min(...items.map(item => item.x));
+  const maxX = Math.max(...items.map(item => item.x + item.w));
+  const totalW = maxX - minX || 1;
+  const isWide = item => item.w >= totalW * 0.6;
+  if (!items.some(isWide)) return [items];
+  const rest = items.filter(item => !isWide(item));
+  if (rest.length < 4 || splitColumns(rest).length < 2) return [items];
+  const bands = [];
+  let band = [];
+  for (const item of [...items].sort((a, b) => a.y - b.y || a.x - b.x)) {
+    if (isWide(item)) {
+      if (band.length) bands.push(band);
+      bands.push([item]);
+      band = [];
+    } else band.push(item);
+  }
+  if (band.length) bands.push(band);
+  return bands;
+}
+
 // XY 切分的竖切阶段：最多两轮（≤3 栏），每轮在所有区域中取最大净空缝。
 function splitColumns(items) {
   let regions = [items];
@@ -86,7 +111,8 @@ function linesIn(column, overlap) {
 // 返回 [{x,y,w,h,text,parts:[item,...]}]，多栏页面按栏序（先左栏自上而下）拼接。
 export function pdfLines(items, {overlap = 0.5} = {}) {
   const lines = [];
-  for (const column of splitColumns(normItems(items))) lines.push(...linesIn(column, overlap));
+  for (const band of splitBands(normItems(items)))
+    for (const column of splitColumns(band)) lines.push(...linesIn(column, overlap));
   return lines;
 }
 
@@ -95,7 +121,8 @@ export function pdfLines(items, {overlap = 0.5} = {}) {
 // text 为行文本以单个空格拼接后的整块正文。
 export function pdfBlocks(items, {gapRatio = 0.9, overlap = 0.5} = {}) {
   const blocks = [];
-  for (const column of splitColumns(normItems(items))) {
+  for (const band of splitBands(normItems(items))) {
+    for (const column of splitColumns(band)) {
     const lines = linesIn(column, overlap);
     if (!lines.length) continue;
     const heights = lines.map(line => line.h).sort((a, b) => a - b);
@@ -115,6 +142,7 @@ export function pdfBlocks(items, {gapRatio = 0.9, overlap = 0.5} = {}) {
       }
     }
     blocks.push(...local);
+    }
   }
   return blocks.map((block, order) => ({
     ...block,

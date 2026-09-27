@@ -5,7 +5,7 @@ const $=id=>document.getElementById(id);
 const pagesEl=$('pages'),statusEl=$('status'),zhPanel=$('zh-panel'),zhList=$('zh-list'),cardEl=$('word-card'),selActions=$('sel-actions');
 const ext=globalThis.chrome?.runtime?.id?globalThis.chrome:null;
 GlobalWorkerOptions.workerSrc=(ext?.runtime?.getURL?ext.runtime.getURL('vendor/pdfjs/pdf.worker.min.mjs'):'./vendor/pdfjs/pdf.worker.min.mjs');
-const state={src:'',doc:null,scale:1.15,pages:[],currentPage:1,domain:'',emergency:null,requestSeq:0,translateBusy:false,renderGen:0,observer:null,translations:new Map()};
+const state={src:'',doc:null,scale:1.15,pages:[],currentPage:1,domain:'',emergency:null,requestSeq:0,translateBusy:false,renderGen:0,observer:null,translations:new Map(),tabId:null,assistSeq:0};
 
 function setStatus(text){statusEl.textContent=text||'';}
 addEventListener('error',event=>{if(statusEl&&!statusEl.textContent)setStatus('脚本加载失败：'+(event.message||'未知错误'));});
@@ -20,13 +20,12 @@ function send(type,payload={}){
     });
   });
 }
-// tabs.sendMessage 能到达扩展页主框架时，应答后台的用量探针与翻译进度。
-if(ext)ext.runtime.onMessage.addListener((message,_sender,reply)=>{
-  if(message?.type==='SS_EMERGENCY_COUNT'){reply({ok:true,data:{chars:visibleChars()}});return true;}
-  if(message?.type==='SS_TRANSLATION_PROGRESS'&&Array.isArray(message.items))applyPassageProgress(message.requestId,message.items);
-  return false;
+// tabs.sendMessage 只投递给内容脚本，到不了扩展页：用量字符数由 EMERGENCY_BEGIN 自带，
+// 翻译进度走 runtime 广播并按 tabId 定向过滤。
+if(ext)ext.runtime.onMessage.addListener(message=>{
+  if(message?.type==='SS_TRANSLATION_PROGRESS'&&message.tabId===state.tabId&&Array.isArray(message.items))applyPassageProgress(message.requestId,message.items);
 });
-function visibleChars(){let chars=0;for(const page of state.pages)if(page?.rendered)for(const block of page.blocks)chars+=block.text.length;return chars;}
+if(ext)chrome.tabs.getCurrent(tab=>{state.tabId=tab?.id??null;});
 
 const srcParam=new URLSearchParams(location.search).get('src')||'';
 function docName(src){try{const name=decodeURIComponent(new URL(src).pathname.split('/').pop()||'');return name||'PDF 文档';}catch{return 'PDF 文档';}}
@@ -37,8 +36,10 @@ async function resolveSrc(){
 
 async function fetchPdf(url){
   try{
-    const response=await fetch(url.href);
-    if(!response.ok)throw new Error('文档读取失败（HTTP '+response.status+'）。');
+    const response=await fetch(url.href,{credentials:'include'});
+    if(!response.ok)throw new Error(response.status===401||response.status===403
+      ?'该文档需要登录或授权（HTTP '+response.status+'）。请先在来源站点登录后重试，或改用原生查看器。'
+      :'文档读取失败（HTTP '+response.status+'）。');
     return await response.arrayBuffer();
   }catch(error){
     if(!(error instanceof TypeError)&&error.message)throw error;
@@ -206,6 +207,7 @@ function onSpanClick(event,spanEl,block){
   openWordCard(word,block,event.clientX,event.clientY);
 }
 async function openWordCard(word,block,x,y){
+  const seq=++state.assistSeq;
   cardEl.hidden=false;cardEl.style.left=Math.min(x,innerWidth-316)+'px';cardEl.style.top=Math.min(y+12,innerHeight-200)+'px';
   cardEl.innerHTML='<button type="button" class="card-close" aria-label="关闭">×</button><div class="card-word"></div><div class="card-sense"></div><div class="card-answer">查询中…</div><div class="card-actions"><button type="button" data-act="hint">英文提示</button><button type="button" data-act="rescue">中文释义</button></div>';
   cardEl.querySelector('.card-word').textContent=word;
@@ -216,9 +218,10 @@ async function openWordCard(word,block,x,y){
     try{
       const domain=await ensureDomain();
       const result=await send('ASSIST',{requestId:crypto.randomUUID(),text:word,context:aroundContext(word,block.text),domain,kind:'word',level,detail:'brief',articleKey:''});
+      if(seq!==state.assistSeq)return; // 卡片已被更新请求接管，丢弃过期响应
       if(level==='hint')answer.textContent=result.hint||'没有可用提示。';
       else{answer.textContent=result.translation||'没有释义。';cardEl.querySelector('.card-sense').textContent=result.sense||'';}
-    }catch(error){answer.innerHTML='';const p=document.createElement('p');p.className='card-error';p.textContent=error.message;answer.append(p);}finally{clearTimeout(slow);}
+    }catch(error){if(seq!==state.assistSeq)return;answer.innerHTML='';const p=document.createElement('p');p.className='card-error';p.textContent=error.message;answer.append(p);}finally{clearTimeout(slow);}
   }
   void runAssist('hint');
 }
@@ -273,12 +276,16 @@ function setTranslation(block,text){
   if(action)action.textContent='文';
 }
 async function translateBlocks(pageNo,blocks){
+  const seq=++state.assistSeq;
   const first=blocks[0];
   const rect=first.overlay?.getBoundingClientRect()||{left:innerWidth/2,bottom:innerHeight/2};
   cardEl.hidden=false;cardEl.style.left=Math.min(rect.left,innerWidth-316)+'px';cardEl.style.top=Math.min(rect.bottom+10,innerHeight-260)+'px';
   cardEl.innerHTML='<button type="button" class="card-close" aria-label="关闭">×</button><div class="card-word">段落翻译</div><div class="card-answer">翻译中…</div>';
+  const oversized=blocks.filter(block=>block.text.length>4000);
+  if(oversized.length){cardEl.querySelector('.card-answer').textContent='该段超过 4000 字符上限，暂不支持整段发送；请改用选段翻译并缩小范围。';return;}
   try{
-    const result=await send('PASSAGE_TRANSLATE',{requestId:crypto.randomUUID(),items:blocks.map(block=>({id:block.id,text:block.text.slice(0,4000)}))});
+    const result=await send('PASSAGE_TRANSLATE',{requestId:crypto.randomUUID(),items:blocks.map(block=>({id:block.id,text:block.text}))});
+    if(seq!==state.assistSeq)return;
     const lines=(result.items||[]).map(item=>item.translation).filter(Boolean);
     cardEl.querySelector('.card-answer').textContent=lines.join('\n\n')||(result.errors?.[0]?'翻译失败：'+result.errors[0].code:'没有返回译文。');
     for(const item of result.items||[]){
@@ -294,24 +301,29 @@ function applyPassageProgress(requestId,items){
 }
 async function translateSelection(){
   if(!pendingSelection)return;const text=pendingSelection.text;selActions.hidden=true;
+  if(text.length>4000){setStatus('选段超过 4000 字符上限，请缩小选择范围。');return;}
+  const seq=++state.assistSeq;
   const card=selectionCard();const requestId=crypto.randomUUID();passageCard=card;card.dataset.requestId=requestId;
   card.innerHTML='<button type="button" class="card-close" aria-label="关闭">×</button><div class="card-word">翻译选段</div><div class="card-answer">翻译中…</div>';
   try{
-    const result=await send('PASSAGE_TRANSLATE',{requestId,items:[{id:'s1',text:text.slice(0,4000)}]});
+    const result=await send('PASSAGE_TRANSLATE',{requestId,items:[{id:'s1',text}]});
+    if(seq!==state.assistSeq)return;
     const item=result.items?.[0];card.querySelector('.card-answer').textContent=item?.translation||(result.errors?.[0]?'翻译失败：'+result.errors[0].code:'没有返回译文。');
-  }catch(error){card.querySelector('.card-answer').innerHTML='';const p=document.createElement('p');p.className='card-error';p.textContent=error.message;card.querySelector('.card-answer').append(p);}
+  }catch(error){if(seq!==state.assistSeq)return;card.querySelector('.card-answer').innerHTML='';const p=document.createElement('p');p.className='card-error';p.textContent=error.message;card.querySelector('.card-answer').append(p);}
 }
 async function explainSelection(){
   if(!pendingSelection)return;const text=pendingSelection.text;selActions.hidden=true;
   if(text.length>600||text.split(/[.!?。！？]+/).filter(Boolean).length>3){setStatus('解释选段最多 3 句、600 字符，请缩小选择范围。');return;}
+  const seq=++state.assistSeq;
   const card=selectionCard();
   card.innerHTML='<button type="button" class="card-close" aria-label="关闭">×</button><div class="card-word">解释选段</div><div class="card-answer">分析中…</div>';
   try{
     const domain=await ensureDomain();
     const block=state.pages.flatMap(p=>p.blocks||[]).find(b=>b.text.includes(text));
     const result=await send('ASSIST',{requestId:crypto.randomUUID(),text,context:aroundContext(text,block?.text||text),domain,kind:'passage',level:'rescue',detail:'full',articleKey:''});
+    if(seq!==state.assistSeq)return;
     card.querySelector('.card-answer').textContent=result.translation||'没有解释。';
-  }catch(error){card.querySelector('.card-answer').innerHTML='';const p=document.createElement('p');p.className='card-error';p.textContent=error.message;card.querySelector('.card-answer').append(p);}
+  }catch(error){if(seq!==state.assistSeq)return;card.querySelector('.card-answer').innerHTML='';const p=document.createElement('p');p.className='card-error';p.textContent=error.message;card.querySelector('.card-answer').append(p);}
 }
 
 // 整页翻译：紧急翻译会话复用同一授权与计费路径。
@@ -328,11 +340,13 @@ function confirmBudgetExceeded(b){
     statusEl.append(ok,' ',no);
   });
 }
-async function beginEmergency(tabId){
-  const begun=await send('EMERGENCY_BEGIN',{tabId,url:location.href});
+// chars 由查看器按当前实际待译块计算后随请求上报：tabs.sendMessage 到不了扩展页，
+// 后台无法探测扩展页内容，故预算口径以本消息声明值为准（后台仍会封顶 2e6）。
+async function beginEmergency(tabId,chars){
+  const begun=await send('EMERGENCY_BEGIN',{tabId,url:location.href,chars});
   if(begun?.budgetExceeded){
     if(!await confirmBudgetExceeded(begun))return null;
-    const retry=await send('EMERGENCY_BEGIN',{tabId,url:location.href,confirmed:true});
+    const retry=await send('EMERGENCY_BEGIN',{tabId,url:location.href,confirmed:true,chars});
     if(!retry?.token)throw new Error(retry?.error||'翻译授权失败。');
     return retry;
   }
@@ -346,47 +360,67 @@ async function translateCurrentPage(){
   const page=state.pages[pageNo];
   if(!page?.rendered||!page.blocks.length){setStatus('当前页还没有可翻译的文本层。');return;}
   if(!ext){setStatus('翻译需要在扩展中运行。');return;}
+  const sendable=page.blocks.filter(block=>block.text.length<=4000);
+  const skipped=page.blocks.filter(block=>block.text.length>4000);
+  const chars=sendable.reduce((sum,block)=>sum+block.text.length,0);
   state.translateBusy=true;$('translate-page').disabled=true;
   try{
     const tabId=await new Promise((resolve,reject)=>{chrome.tabs.getCurrent(tab=>resolve(tab?.id));setTimeout(()=>reject(new Error('无法定位当前标签页。')),3000);});
     if(!state.emergency){
-      const begun=await beginEmergency(tabId);
+      const begun=await beginEmergency(tabId,chars);
       if(!begun)return;
       state.emergency={token:begun.token,tabId};
     }
     zhPanel.hidden=false;zhList.replaceChildren();
-    const blocks=page.blocks.filter(block=>block.text.length<=4000);
     const rows=new Map();
-    for(const block of blocks){
+    const jump=block=>{
+      selActions.hidden=true;pendingSelection=null;
+      const overlay=state.pages[pageNo]?.blocks.find(b=>b.id===block.id)?.overlay;
+      if(!overlay)return;
+      overlay.scrollIntoView({behavior:'smooth',block:'center'});
+      overlay.classList.add('highlight');
+      setTimeout(()=>overlay.classList.remove('highlight'),1200);
+    };
+    for(const block of sendable){
       const row=document.createElement('div');row.className='zh-row';row.dataset.blockId=block.id;
+      row.tabIndex=0;row.setAttribute('role','button');row.title='回跳到原文块';
       const src=document.createElement('div');src.className='zh-src';src.textContent=block.text.slice(0,120)+(block.text.length>120?'…':'');
-      const zh=document.createElement('div');zh.className='zh-dst';zh.textContent='等待翻译…';
+      const zh=document.createElement('div');zh.className='zh-dst';
+      const saved=state.translations.get(pageNo+':'+block.id);
+      zh.textContent=saved||'等待翻译…';
       row.append(src,zh);zhList.append(row);rows.set(block.id,zh);
       const target=()=>state.pages[pageNo]?.blocks.find(b=>b.id===block.id)?.overlay;
       row.addEventListener('mouseenter',()=>target()?.classList.add('translated'));
-      row.addEventListener('click',()=>{
-        selActions.hidden=true;pendingSelection=null;
-        const overlay=target();
-        if(!overlay)return;
-        overlay.scrollIntoView({behavior:'smooth',block:'center'});
-        overlay.classList.add('highlight');
-        setTimeout(()=>overlay.classList.remove('highlight'),1200);
-      });
+      row.addEventListener('click',()=>jump(block));
+      row.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();jump(block);}});
     }
-    const batches=[];for(let i=0;i<blocks.length;i+=4)batches.push(blocks.slice(i,i+4));
-    let done=0;setStatus('正在翻译本页（0/'+batches.length+' 批）…');
+    for(const block of skipped){
+      const row=document.createElement('div');row.className='zh-row zh-skip';
+      const src=document.createElement('div');src.className='zh-src';src.textContent=block.text.slice(0,120)+'…';
+      const zh=document.createElement('div');zh.className='zh-dst zh-err';zh.textContent='原文块超过 4000 字符，未送译（可框选其中片段翻译）。';
+      row.append(src,zh);zhList.append(row);
+    }
+    // 重试只补发尚未译出的块，已成功的块直接复用缓存译文。
+    const pending=sendable.filter(block=>!state.translations.get(pageNo+':'+block.id));
+    const batches=[];for(let i=0;i<pending.length;i+=4)batches.push(pending.slice(i,i+4));
+    let done=0;setStatus(pending.length?'正在翻译本页（0/'+batches.length+' 批）…':'本页已全部翻译。');
     for(const batch of batches){
       const requestSeq=++state.requestSeq;
       const result=await send('EMERGENCY_TRANSLATE',{token:state.emergency.token,requestSeq,items:batch.map(block=>({id:block.id,text:block.text,context:blockContext(block)}))});
       for(const item of result.items||[]){
         const zh=rows.get(item.id);if(zh)zh.textContent=item.translation;
-        const block=blocks.find(b=>b.id===item.id);
+        const block=sendable.find(b=>b.id===item.id);
         if(block&&item.translation)setTranslation(block,item.translation);
       }
       for(const error of result.errors||[]){const zh=rows.get(error.id);if(zh){zh.textContent='翻译失败：'+error.code;zh.classList.add('zh-err');}}
       done++;setStatus('正在翻译本页（'+done+'/'+batches.length+' 批）…');
     }
-    setStatus('本页翻译完成，译文附在原文下方，右侧栏可总览。');
+    const untranslated=sendable.filter(block=>!state.translations.get(pageNo+':'+block.id));
+    let status=untranslated.length
+      ?'本页已译 '+(sendable.length-untranslated.length)+'/'+sendable.length+' 块，'+untranslated.length+' 块失败，可再次点击重试。'
+      :'本页翻译完成（'+sendable.length+' 块），译文附在原文下方，右侧栏可总览。';
+    if(skipped.length)status+=' '+skipped.length+' 个超长块未送译。';
+    setStatus(status);
   }catch(error){
     setStatus(error.message);
     if(/过期|失效|变化/.test(error.message))state.emergency=null;
