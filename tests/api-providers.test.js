@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {API_PROVIDERS,apiProviderBaseUrl,apiServiceOrigins,apiServiceReady,normalizeApiService} from '../extension/api-providers.mjs';
+import {API_PROVIDERS,apiProviderBaseUrl,apiProviderDefaultModel,apiProviderDefaultModels,apiServiceOrigins,apiServiceReady,normalizeApiService} from '../extension/api-providers.mjs';
 
 test('catalog exposes the complete unique supported LLM provider set',()=>{
   expect(API_PROVIDERS).toHaveLength(32);
@@ -38,6 +38,12 @@ test('stepfun plan option switches between metered and subscription endpoints',(
   expect(service.options.plan).toBe('step_plan');
   expect(service.baseUrl).toBe('https://api.stepfun.com/step_plan/v1');
   expect(()=>normalizeApiService({id:'x',name:'X',providerId:'stepfun',baseUrl:'',model:'m',apiKey:'k',options:{plan:'vip'}})).toThrow('无效');
+  // 套餐端点不含 step-1-flash（实测 model_invalid），默认模型按接入方式区分。
+  expect(apiProviderDefaultModel('stepfun')).toBe('step-1-flash');
+  expect(apiProviderDefaultModel('stepfun',{plan:'step_plan'})).toBe('step-3.5-flash');
+  expect(apiProviderDefaultModels('stepfun').has('step-1-flash')).toBe(true);
+  expect(apiProviderDefaultModels('stepfun').has('step-3.5-flash')).toBe(true);
+  expect(apiProviderDefaultModels('stepfun').has('custom-model')).toBe(false);
 });
 
 test('service origins reject credential exfiltration URLs and allow keyless loopback only',()=>{

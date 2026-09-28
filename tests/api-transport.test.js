@@ -226,6 +226,47 @@ test('per-service thinking levels map to each provider protocol parameter',async
   for(const [providerId,baseUrl,model,level,reply,check] of cases){let sent;globalThis.fetch=async(_url,init)=>{sent=JSON.parse(init.body);return Response.json(reply);};const configured={...service(providerId,baseUrl,model),options:{thinking:level}};expect(await performProviderRequest(configured,{},'Explain.',schema)).toEqual({value:'ok'});expect(check(sent)).toBe(true);}
 });
 
+test('explicit thinking never sends the incompatible temperature parameter',async()=>{
+  // Anthropic/Bedrock 扩展思考与 temperature 不兼容；OpenAI 推理模型与显式 effort 同样省略采样参数。
+  let sent;globalThis.fetch=async(_url,init)=>{sent=JSON.parse(init.body);return Response.json({stop_reason:'end_turn',content:[{text:'{"value":"ok"}'}]});};
+  await performProviderRequest({...service('anthropic','https://api.anthropic.com/v1','claude-sonnet-4-5'),options:{thinking:'medium'}},{},'Explain.',schema);
+  expect(sent.thinking).toEqual({type:'enabled',budget_tokens:4096});expect(sent.temperature).toBeUndefined();
+  // auto/off 路径不受影响：thinking 关闭时照常发送 temperature。
+  await performProviderRequest({...service('anthropic','https://api.anthropic.com/v1','claude-haiku-4-5'),options:{thinking:'off'}},{},'Explain.',schema);
+  expect(sent.thinking).toEqual({type:'disabled'});expect(sent.temperature).toBe(0.2);
+
+  globalThis.fetch=async(_url,init)=>{sent=JSON.parse(init.body);return Response.json({stopReason:'end_turn',output:{message:{content:[{text:'{"value":"ok"}'}]}}});};
+  await performProviderRequest({...service('bedrock','https://bedrock-runtime.us-east-1.amazonaws.com','anthropic.claude-sonnet-4-5-v1:0'),options:{thinking:'high'}},{},'Explain.',schema);
+  expect(sent.additionalModelRequestFields).toEqual({thinking:{type:'enabled',budget_tokens:7168}});expect(sent.inferenceConfig.temperature).toBeUndefined();
+  await performProviderRequest(service('bedrock','https://bedrock-runtime.us-east-1.amazonaws.com','us.amazon.nova-micro-v1:0'),{},'Explain.',schema);
+  expect(sent.inferenceConfig.temperature).toBe(0.2);
+});
+
+test('OpenAI reasoning models and explicit effort omit temperature on both protocols',async()=>{
+  const sent=[];globalThis.fetch=async(_url,init)=>{sent.push(JSON.parse(init.body));return Response.json({status:'completed',output_text:'{"value":"ok"}'});};
+  await performProviderRequest({...service('openai','https://api.openai.com/v1','o3'),options:{thinking:'low'}},{},'Explain.',schema);
+  expect(sent.at(-1).reasoning).toEqual({effort:'low'});expect(sent.at(-1).temperature).toBeUndefined();
+  // gpt-5 系 auto 档位（effort:none）保留温度，显式档位则省略。
+  await performProviderRequest(service('openai','https://api.openai.com/v1','gpt-5.6-luna'),{},'Explain.',schema);
+  expect(sent.at(-1).reasoning).toEqual({effort:'none'});expect(sent.at(-1).temperature).toBe(0.2);
+  await performProviderRequest({...service('openai','https://api.openai.com/v1','gpt-5.6-luna'),options:{thinking:'high'}},{},'Explain.',schema);
+  expect(sent.at(-1).reasoning).toEqual({effort:'high'});expect(sent.at(-1).temperature).toBeUndefined();
+  // Chat 协议下的 o 系模型同样省略。
+  globalThis.fetch=async(_url,init)=>{sent.push(JSON.parse(init.body));return Response.json({choices:[{finish_reason:'stop',message:{content:'{"value":"ok"}'}}]});};
+  await performProviderRequest({...service('openai-compatible','https://custom-o3.example/v1','o3-mini'),options:{thinking:'medium'}},{},'Explain.',schema);
+  expect(sent.at(-1).reasoning_effort).toBe('medium');expect(sent.at(-1).temperature).toBeUndefined();
+});
+
+test('Gemini reports billed thought tokens as output usage',async()=>{
+  let usage;globalThis.fetch=async()=>Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:'{"value":"ok"}'}]}}],usageMetadata:{promptTokenCount:11,candidatesTokenCount:5,thoughtsTokenCount:40}});
+  await performProviderRequest({...service('google','https://generativelanguage.googleapis.com/v1beta','gemini-2.5-flash'),options:{thinking:'low'}},{},'Explain.',schema,{onUsage:value=>{usage=value;}});
+  expect(usage).toEqual({input:11,output:45});
+  // 流式路径同样计入思考 token。
+  usage=null;globalThis.fetch=async()=>sse(['data: '+JSON.stringify({candidates:[{content:{parts:[{text:'{"value":"ok"}'}]},finishReason:'STOP'}],usageMetadata:{promptTokenCount:7,candidatesTokenCount:3,thoughtsTokenCount:17}})+'\n\n']);
+  await performProviderRequest({...service('google','https://generativelanguage.googleapis.com/v1beta','gemini-2.5-flash'),options:{thinking:'low'}},{},'Explain.',schema,{onContent:()=>{},onUsage:value=>{usage=value;}});
+  expect(usage).toEqual({input:7,output:20});
+});
+
 test('explicit thinking levels reach Google, Anthropic, Bedrock and Ollama native params',async()=>{
   let sent;globalThis.fetch=async(_url,init)=>{sent=JSON.parse(init.body);return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:'{"value":"ok"}'}]}}]});};
   await performProviderRequest({...service('google','https://generativelanguage.googleapis.com/v1beta','gemini-2.5-flash-lite'),options:{thinking:'high'}},{},'Explain.',schema);

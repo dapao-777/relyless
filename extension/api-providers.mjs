@@ -7,7 +7,7 @@ const bedrockFields = [{key:'region',label:'区域',type:'text',placeholder:'us-
 const stepfunFields = [{key:'plan',label:'接入方式',type:'select',defaultValue:'api',options:[{value:'api',label:'按量付费 API'},{value:'step_plan',label:'Step Plan 订阅套餐'}]}];
 
 // 思考模式经 per-service options 下发；replicate 预测与 jev 判定通道没有对应参数，不提供该选项。
-const THINKING_FIELD = {key:'thinking',label:'思考模式',type:'select',defaultValue:'auto',options:[{value:'auto',label:'自动'},{value:'off',label:'关闭'},{value:'low',label:'低'},{value:'medium',label:'中'},{value:'high',label:'高'}]};
+const THINKING_FIELD = {key:'thinking',label:'思考模式',type:'select',defaultValue:'auto',hint:'开启思考会增加响应延迟与计费 token；「自动」保持现状。',options:[{value:'auto',label:'自动'},{value:'off',label:'关闭'},{value:'low',label:'低'},{value:'medium',label:'中'},{value:'high',label:'高'}]};
 const THINKING_PROTOCOLS = new Set(['chat','responses','anthropic','google','bedrock','cohere','ollama']);
 
 // Provider names and ordering follow the supported service catalog. Hosted defaults are
@@ -92,6 +92,18 @@ export function apiProviderBaseUrl(providerId,options={}) {
   }
   if (providerId==='stepfun' && normalized.plan==='step_plan') return 'https://api.stepfun.com/step_plan/v1';
   return provider.baseUrl;
+}
+
+// Step Plan 订阅套餐不含 step-1-flash（实测返回 model_invalid），套餐端点的可用默认模型是 step-3.5-flash；
+// 返回该接入方式的默认模型，自定义模型始终保留不动。
+export function apiProviderDefaultModel(providerId,options={}) {
+  const provider=getApiProvider(providerId);
+  if (providerId==='stepfun') return normalizedOptions(provider,options).plan==='step_plan'?'step-3.5-flash':'step-1-flash';
+  return provider?.defaultModel || '';
+}
+// StepFun 各接入方式的默认模型集合，供切换接入方式时识别「仍是默认值、可以替换」的情形。
+export function apiProviderDefaultModels(providerId) {
+  return providerId==='stepfun'?new Set(['step-1-flash','step-3.5-flash']):new Set([getApiProvider(providerId)?.defaultModel||'']);
 }
 
 function normalizedBaseUrl(value) {
