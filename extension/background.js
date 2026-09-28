@@ -1,5 +1,5 @@
 import { DEFAULT_SETTINGS, DOMAINS, wordId, normalizeSettings, activeApiProvider } from './shared.js';
-import {apiServiceOrigins,apiServiceReady,getApiProvider,normalizeApiService} from './api-providers.mjs';
+import {apiServiceOrigins,apiServiceReady,getApiProvider,isJudgmentProvider,JUDGMENT_PROTOCOLS,normalizeApiService} from './api-providers.mjs';
 import {listProviderModels,performProviderRequest,providerRequestTimeoutMs} from './api-transport.mjs';
 import {analyze,analyzeBatch,englishTokenStats,historyMatches,identifyPageLanguage,isKnownTerm,localReferenceFor,resolveCanonicalTerm} from './lexicon.js';
 import { encounter, interact, migrateSupportWord, normalizeKnownAt, normalizeSenseLabel, readingEvidence } from './reading.js';
@@ -144,6 +144,7 @@ const sentenceGroupCacheReady=chrome.storage.session.get('sentenceGroupCache').t
 function persistSentenceGroupCache(expectedProvider){sentenceGroupCacheWrites=sentenceGroupCacheWrites.catch(()=>{}).then(async()=>{if(expectedProvider!==providerGeneration)return;await chrome.storage.session.set({sentenceGroupCache:Object.fromEntries(sentenceGroupCache)});});return sentenceGroupCacheWrites;}
 function clearProviderState() {
   supportCache.clear();supportInFlight.clear();sentenceGroupCache.clear();sentenceGroupInFlight.clear();translationCache.clear();translationInFlight.clear();providerError='';providerGeneration++;void pruneBackgroundQueue();
+  routeCache={};routeCacheLoaded=true;routeCacheWrite=routeCacheWrite.catch(()=>{}).then(()=>chrome.storage.local.remove(ROUTE_CACHE_KEY)).catch(()=>{});
   void chrome.storage.session.remove('supportCache').catch(()=>{});
   sentenceGroupCacheWrites=sentenceGroupCacheWrites.catch(()=>{}).then(()=>chrome.storage.session.remove('sentenceGroupCache'));void sentenceGroupCacheWrites.catch(()=>{});
   return clearEmergencySessions();
@@ -213,7 +214,6 @@ function text(value,name,max,required=true) { if (typeof value !== 'string' || v
 function domain(value) { if (!Object.hasOwn(DOMAINS,value)) throw new Error('不支持的领域。'); return value; }
 function customDetectionService(api,model='') { return {id:'domain-detection',name:'领域识别 API',providerId:'openai-compatible',baseUrl:api.baseUrl,model,apiKey:api.apiKey,options:{}}; }
 // 判定通道（领域识别 / 路由判卷）可在支持判定协议的服务商之间切换；缺省为 Requesty。
-const JUDGMENT_PROTOCOLS=['jev','systemone'];
 function judgmentProvider(detection){const provider=getApiProvider(detection?.jevProvider);return provider&&JUDGMENT_PROTOCOLS.includes(provider.protocol)?provider:getApiProvider('requesty');}
 function judgmentService(detection,{id='domain-detection-jev',name='Jev 领域识别',apiKey}={}){const provider=judgmentProvider(detection),same=!detection?.jevProvider||detection.jevProvider===provider.id;return normalizeApiService({id,name,providerId:provider.id,baseUrl:((same?detection?.jevBaseUrl:'')||provider.baseUrl).trim(),model:((same?detection?.jevModel:'')||provider.defaultModel).trim(),apiKey:apiKey??(detection?.jevApiKey||''),options:{}});}
 function validatePatch(patch,currentSettings) {
@@ -251,7 +251,7 @@ function validatePatch(patch,currentSettings) {
   if (patch.providerKind !== undefined) { if (!['chatgpt','grok','antigravity','api','local'].includes(patch.providerKind)) throw new Error('不支持的服务类型。'); result.providerKind=patch.providerKind; }
   if (patch.apiServices !== undefined) {
     if (!Array.isArray(patch.apiServices) || patch.apiServices.length>20) throw new Error('API 服务最多保存 20 个。');
-    const ids=new Set();result.apiServices=patch.apiServices.map(value=>{const service=normalizeApiService(value);service.id=text(service.id,'服务编号',128);service.name=text(service.name,'服务名称',60);service.baseUrl=text(service.baseUrl,'API 地址',2048);service.model=text(service.model,'模型',150);service.apiKey=text(service.apiKey,'API Key',4096,false);if(!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(service.id)||ids.has(service.id))throw new Error('API 服务编号必须安全且唯一。');if(!getApiProvider(service.providerId).keyOptional&&!service.apiKey&&!currentSettings.apiServices?.some(item=>item.id===service.id))throw new Error('API Key 不能为空。');apiServiceOrigins(service);ids.add(service.id);return service;});
+    const ids=new Set();result.apiServices=patch.apiServices.map(value=>{const service=normalizeApiService(value);if(isJudgmentProvider(service.providerId))throw new Error('“'+service.name+'”是判定协议服务，只能应答判定载荷，不能保存为 API 服务；请在领域识别的判定接入中配置。');service.id=text(service.id,'服务编号',128);service.name=text(service.name,'服务名称',60);service.baseUrl=text(service.baseUrl,'API 地址',2048);service.model=text(service.model,'模型',150);service.apiKey=text(service.apiKey,'API Key',4096,false);if(!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(service.id)||ids.has(service.id))throw new Error('API 服务编号必须安全且唯一。');if(!getApiProvider(service.providerId).keyOptional&&!service.apiKey&&!currentSettings.apiServices?.some(item=>item.id===service.id))throw new Error('API Key 不能为空。');apiServiceOrigins(service);ids.add(service.id);return service;});
   }
   if (patch.activeApiServiceId !== undefined) result.activeApiServiceId=text(patch.activeApiServiceId,'当前 API 服务',128,false);
   const services=result.apiServices??currentSettings.apiServices,active=result.activeApiServiceId??currentSettings.activeApiServiceId;
@@ -434,7 +434,7 @@ async function apiRequest(provider,payload,instructions,schema,{onContent,trace,
   const resolveFallback=async primary=>{
     const id=primary.fallbackServiceId;if(!id)return null;
     const row=(settings.apiServices||[]).find(value=>value?.id===id);
-    if(!row||row.id===primary.id||!apiServiceReady(row))return null;
+    if(!row||row.id===primary.id||!apiServiceReady(row)||isJudgmentProvider(row.providerId))return null;
     try{const fallback=normalizeApiService(row);await requireApiPermission(fallback);return fallback;}catch{return null;}
   };
   const attempt=async current=>{
@@ -967,9 +967,10 @@ async function clearModelUsage() {
   return work;
 }
 function routingSettingsOf(settings) { return normalizeRouting(settings?.routing || {}, DEFAULT_SETTINGS.routing); }
-function routingVersion(settings) {
+async function routingVersion(settings, judge) {
   const routing = routingSettingsOf(settings);
-  return JSON.stringify([routing.enabled, routing.premiumServiceId, routing.minConfidence, routing.operations]);
+  const judgeIdentity = judge ? [judge.providerId, judge.baseUrl, judge.model, await hashValue(judge.apiKey || '')] : null;
+  return JSON.stringify([routing.enabled, routing.premiumServiceId, routing.minConfidence, routing.operations, judgeIdentity]);
 }
 function judgeService(settings) {
   const detection = settings?.domainDetection || {};
@@ -980,7 +981,7 @@ function premiumTarget(settings, routing, operation) {
   if (!routing.premiumServiceId) return null;
   if (routing.premiumServiceId === ROUTING_LIMITS.SUBSCRIPTION_TARGET) return operation!=='conversation'&&subscriptionStatus().authenticated ? {kind: 'subscription', service: null} : null;
   const found = (settings.apiServices || []).find(service => service.id === routing.premiumServiceId);
-  if (!found || !apiServiceReady(found)) return null;
+  if (!found || !apiServiceReady(found) || isJudgmentProvider(found.providerId)) return null;
   return {kind: 'api', service: found};
 }
 // 返回 {kind, service, reason}；任何失败都回落主路由，绝不阻塞请求。
@@ -990,7 +991,7 @@ async function chooseRoute(operation, summary, {settings, guard = async () => {}
   if (!routing.enabled || !routing.operations[operation]) { routingStats.skipped++; return primary; }
   const judge = judgeService(settings);
   if (!judge) { routingStats.skipped++; return {...primary, reason: 'judge-unconfigured'}; }
-  const cache = incognito ? {} : await loadRouteCache(), key = routeCacheKey(operation, summary, routingVersion(settings)), now = Date.now();
+  const cache = incognito ? {} : await loadRouteCache(), key = routeCacheKey(operation, summary, await routingVersion(settings, judge)), now = Date.now();
   const remember = async (route, reason) => {
     if (incognito) return;
     cache[key] = {at: now, route, reason};
@@ -1329,7 +1330,9 @@ function providerPermissionPatterns(settings) {
   const add = service => { try { for(const origin of apiServiceOrigins(service))patterns.add(origin+'/*'); } catch {} };
   for (const service of settings.apiServices) add(service);
   if (settings.domainDetection.mode === 'api' && settings.domainDetection.api.apiKey) add(customDetectionService(settings.domainDetection.api,settings.domainDetection.apiModel));
-  if (settings.domainDetection.mode === 'jev' && settings.domainDetection.jevApiKey) add(judgmentService(settings.domainDetection));
+  // 判定接入同时服务领域识别与模型路由判卷：任一使用者在用就保留主机权限，关闭最后一个使用者才回收。
+  const judgeInUse = settings.domainDetection.mode === 'jev' || routingSettingsOf(settings).enabled;
+  if (judgeInUse && settings.domainDetection.jevApiKey) add(judgmentService(settings.domainDetection));
   return patterns;
 }
 

@@ -4,7 +4,7 @@
  * 交互层只编排既有面板（订阅面板 / API 面板与表单），不持有服务状态本身。
  */
 
-import {API_PROVIDERS} from '../api-providers.mjs';
+import {API_PROVIDERS, JUDGMENT_PROTOCOLS} from '../api-providers.mjs';
 import {providerIconUrl} from './provider-icons.js';
 
 export const CATALOG_CATEGORIES = [
@@ -64,7 +64,7 @@ const PROVIDER_CATALOG_META = {
 // 目录模板由服务商清单派生，新增服务商无需改动这里即可出现在目录中（归入自定义）。
 export const CATALOG_TEMPLATES = [
   ...SUBSCRIPTION_TEMPLATES,
-  ...API_PROVIDERS.map(provider => {
+  ...API_PROVIDERS.filter(provider => !JUDGMENT_PROTOCOLS.includes(provider.protocol)).map(provider => {
     const meta = PROVIDER_CATALOG_META[provider.id];
     return {
       id: provider.id,

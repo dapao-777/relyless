@@ -1,5 +1,5 @@
 import {afterEach,beforeEach,expect,test} from 'bun:test';
-import {performProviderRequest} from '../extension/api-transport.mjs';
+import {performProviderRequest,listProviderModels} from '../extension/api-transport.mjs';
 import {translationProgress} from '../extension/assistance-stream.mjs';
 import {EMERGENCY_SCHEMA} from '../extension/gloss.mjs';
 
@@ -406,4 +406,11 @@ test('a truncated capability probe falls back to json_object instead of failing'
 test('a probe aborted by content filtering still fails the capability check',async()=>{
   rawFetch(async()=>Response.json({choices:[{finish_reason:'content_filter',message:{content:''}}]}));
   await expect(performProviderRequest(service('mistral','https://api.example.test/v1','filtered-probe-model'),{},'Explain.',schema)).rejects.toMatchObject({code:'INVALID_RESPONSE'});
+});
+
+test('judgment-protocol services do not offer a model catalog',async()=>{
+  let fetched=false;rawFetch(async()=>{fetched=true;return Response.json({data:[]});});
+  await expect(listProviderModels(service('requesty','https://router.requesty.ai/v1','typesafe/jev-1.13.0'))).rejects.toMatchObject({code:'MODELS_UNSUPPORTED'});
+  await expect(listProviderModels(service('siliconflow-systemone','https://api.siliconflow.cn/v1','diffusiongemma'))).rejects.toMatchObject({code:'MODELS_UNSUPPORTED'});
+  expect(fetched).toBe(false);
 });

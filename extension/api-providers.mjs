@@ -46,8 +46,17 @@ export const API_PROVIDERS = [
 
 const providersById = new Map(API_PROVIDERS.map(provider => [provider.id,provider]));
 
+// 判定协议只应答 {state, questions} 载荷，不能当普通翻译/查词服务使用；
+// apiServices 保存、回落与升级目标都必须排除这些服务商（正确入口是领域识别的判定接入字段）。
+export const JUDGMENT_PROTOCOLS = ['jev','systemone'];
+
 export function getApiProvider(id) {
   return providersById.get(id) || null;
+}
+
+export function isJudgmentProvider(providerId) {
+  const provider = getApiProvider(providerId);
+  return Boolean(provider && JUDGMENT_PROTOCOLS.includes(provider.protocol));
 }
 
 function cleanOption(value,key) {

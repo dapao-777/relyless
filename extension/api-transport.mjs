@@ -1,4 +1,4 @@
-import {apiProviderBaseUrl,getApiProvider} from './api-providers.mjs';
+import {apiProviderBaseUrl,getApiProvider,JUDGMENT_PROTOCOLS} from './api-providers.mjs';
 
 const CONTENT_LIMIT=24_000;
 const STREAM_BUFFER_LIMIT=64*1024;
@@ -275,7 +275,7 @@ export async function performProviderRequest(service,payload,instructions,schema
 
 function modelsBase(service){const base=serviceBase(service),url=new URL(base.href);url.search='';url.hash='';url.pathname=cleanPath(url.pathname).replace(/\/(?:chat\/completions|responses|messages|v2\/chat|api\/chat)$/i,'');return url;}
 function normalizedModels(items,idOf,nameOf=idOf){const seen=new Set(),models=[];for(const item of items||[]){const id=idOf(item);if(typeof id!=='string'||!id.trim()||seen.has(id))continue;seen.add(id);const name=nameOf(item);models.push({id,name:typeof name==='string'&&name.trim()?name:id});}return models.sort((a,b)=>a.name.localeCompare(b.name));}
-export async function listProviderModels(service,{signal}={}){const provider=providerFor(service),protocol=service.providerId==='azure'?(service.options?.apiMode==='chat'?'chat':'responses'):provider.protocol;if(service.providerId==='azure'||protocol==='bedrock'||protocol==='responses'&&service.providerId==='open-responses')unsupportedModels();let url,parse;
+export async function listProviderModels(service,{signal}={}){const provider=providerFor(service),protocol=service.providerId==='azure'?(service.options?.apiMode==='chat'?'chat':'responses'):provider.protocol;if(service.providerId==='azure'||protocol==='bedrock'||JUDGMENT_PROTOCOLS.includes(protocol)||protocol==='responses'&&service.providerId==='open-responses')unsupportedModels();let url,parse;
   if(protocol==='google'){url=appendPath(modelsBase(service),'models');parse=value=>normalizedModels(value.models,item=>(item.name||'').replace(/^models\//,''),item=>item.displayName||item.name);}
   else if(protocol==='anthropic'){url=appendPath(modelsBase(service),'models');parse=value=>normalizedModels(value.data,item=>item.id,item=>item.display_name||item.id);}
   else if(protocol==='cohere'){url=new URL('/v1/models',serviceBase(service));parse=value=>normalizedModels(value.models,item=>item.name,item=>item.name);}

@@ -1,6 +1,6 @@
 import {DOMAINS, request, activeApiProvider, errorText, setResult, parseOrigin, downloadJson, upsertSiteEntry} from '../shared.js';
 import {parseRulePack} from '../rule-pack.js';
-import {API_PROVIDERS, getApiProvider, apiProviderBaseUrl, normalizeApiService, apiServiceOrigins} from '../api-providers.mjs';
+import {API_PROVIDERS, getApiProvider, apiProviderBaseUrl, normalizeApiService, apiServiceOrigins, JUDGMENT_PROTOCOLS} from '../api-providers.mjs';
 import {createProviderPicker} from './provider-picker.js';
 import {serviceCatalog} from './options-service-catalog.js';
 import {VIDEO_SUPPORT_ENABLED} from '../activation.js';
@@ -19,7 +19,7 @@ Object.assign(optionsEls,Object.fromEntries(['provider-id','provider-key-link','
 Object.assign(optionsEls,Object.fromEntries(['persist-translation-cache','clear-translation-cache','translation-cache-result'].map(id=>[id.replace(/-([a-z])/g,(_match,char)=>char.toUpperCase()),document.querySelector('#'+id)])));
 const optionsMissing = Object.entries(optionsEls).filter(([, element]) => !element).map(([key]) => key);
 if (optionsMissing.length) throw new Error('设置页缺少元素：' + optionsMissing.join(', '));
-const optionsProviderPicker=createProviderPicker(optionsEls.providerId,API_PROVIDERS);
+const optionsProviderPicker=createProviderPicker(optionsEls.providerId,API_PROVIDERS.filter(provider=>!JUDGMENT_PROTOCOLS.includes(provider.protocol)));
 const optionsSentenceDensityInputs=[...document.querySelectorAll('input[name="sentence-density"]')];
 const optionsSentenceLineInputs=[...document.querySelectorAll('input[name="sentence-line-style"]')];
 const optionsSentenceDensityResult=document.querySelector('#sentence-density-result');
@@ -144,7 +144,7 @@ async function optionsRefreshUsage(){
 function optionsRenderModels(select,selected,note) { select.replaceChildren(new Option('由连接器选择默认模型',''));for(const model of optionsModels)select.append(new Option(model.name||model.id,model.id));select.value=[...select.options].some(option=>option.value===selected)?selected:'';note.textContent=optionsModels.length?'可选择账户当前可用模型。':'连接后刷新可用模型；留空由连接器选择。'; }
 function optionsRenderAutomation() { const automation=optionsAutomation?.automation||optionsState.settings.automation||{allSites:false,sites:[],videoSites:false};optionsEls.automationAllSites.checked=Boolean(automation.allSites);optionsEls.automationVideoSites.checked=Boolean(automation.videoSites);optionsEls.automationSiteList.replaceChildren();for(const site of automation.sites||[]){const row=document.createElement('div');row.className='automation-site-item';const code=document.createElement('code');code.textContent=site.origin;const toggle=document.createElement('button');toggle.type='button';toggle.textContent=site.enabled?'已启用':'已停用';toggle.addEventListener('click',()=>void optionsToggleSite(site,!site.enabled));const remove=document.createElement('button');remove.className='delete-button';remove.type='button';remove.textContent='移除';remove.addEventListener('click',()=>void optionsToggleSite(site,null));row.append(code,toggle,remove);optionsEls.automationSiteList.append(row);}optionsEls.automationSiteEmpty.hidden=Boolean(automation.sites?.length); }
 function optionsDetectionSettings(){return optionsState.settings.domainDetection||{mode:'local',subscriptionModel:'',apiModel:'',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevProvider:'requesty',jevModel:'typesafe/jev-1.13.0',jevApiKey:'',jevBaseUrl:'https://router.requesty.ai/v1'};}
-const JUDGMENT_PROVIDER_IDS=['requesty','siliconflow-systemone'];
+const JUDGMENT_PROVIDER_IDS=API_PROVIDERS.filter(provider=>JUDGMENT_PROTOCOLS.includes(provider.protocol)).map(provider=>provider.id);
 function judgmentProviderDefaults(providerId){const provider=getApiProvider(providerId)||getApiProvider('requesty');return {baseUrl:provider.baseUrl,model:provider.defaultModel};}
 function optionsSyncJudgmentProvider(providerId){const defaults=judgmentProviderDefaults(providerId),urls=JUDGMENT_PROVIDER_IDS.map(id=>judgmentProviderDefaults(id).baseUrl),models=JUDGMENT_PROVIDER_IDS.map(id=>judgmentProviderDefaults(id).model);const url=optionsEls.detectionJevUrl.value.trim(),model=optionsEls.detectionJevModel.value.trim();if(!url||urls.includes(url))optionsEls.detectionJevUrl.value=defaults.baseUrl;if(!model||models.includes(model))optionsEls.detectionJevModel.value=defaults.model;optionsEls.detectionJevProviderNote.hidden=providerId!=='siliconflow-systemone';}
 function optionsRenderDetection(){const value=optionsDetectionSettings();const radio=document.querySelector(`input[name="domain-detection-mode"][value="${value.mode}"]`);if(radio)radio.checked=true;optionsEls.detectionChatgpt.hidden=value.mode!=='chatgpt';optionsEls.detectionApi.hidden=value.mode!=='api';optionsEls.detectionJev.hidden=value.mode!=='jev';optionsEls.detectionUseTranslationApi.checked=value.useTranslationApi!==false;optionsEls.detectionApiFields.hidden=optionsEls.detectionUseTranslationApi.checked;optionsRenderModels(optionsEls.detectionSubscriptionModel,value.subscriptionModel||'',optionsEls.detectionModelNote);if(!optionsDetectionDirty){optionsEls.detectionApiModel.value=value.apiModel||'';optionsEls.detectionApiUrl.value=value.api?.baseUrl||'https://api.openai.com/v1';optionsEls.detectionApiKey.value='';}const hasKey=Boolean(value.api?.apiKey);optionsEls.detectionApiKey.placeholder=hasKey?'已保存；同源留空保持':'输入单独的 API Key';optionsEls.detectionKeyState.textContent=hasKey?'单独的识别密钥已保存在本机。':'留空不会复制辅助 API 密钥。';optionsEls.clearDetectionKey.disabled=!hasKey;
@@ -182,7 +182,7 @@ async function optionsRefreshRoutingStats(){try{const result=await request('ROUT
 function optionsRenderRouting(){
   const routing=optionsState.settings.routing||{enabled:false,premiumServiceId:'',operations:{},minConfidence:0.7,cacheTtlMinutes:1440};
   optionsEls.routingEnabled.checked=routing.enabled===true;optionsEls.routingFields.hidden=!routing.enabled;
-  const services=optionsState.settings.apiServices||[];
+  const services=(optionsState.settings.apiServices||[]).filter(service=>!JUDGMENT_PROTOCOLS.includes(getApiProvider(service.providerId)?.protocol));
   optionsEls.routingPremium.replaceChildren(new Option('不升级（仅记录判断）',''),new Option('ChatGPT 订阅（已登录通道）','subscription'),...services.map(service=>new Option(service.name+' · '+service.model,service.id)));
   optionsEls.routingPremium.value=services.some(service=>service.id===routing.premiumServiceId)||routing.premiumServiceId==='subscription'?routing.premiumServiceId:'';
   for(const input of document.querySelectorAll('input[name="routing-operation"]'))input.checked=routing.operations?.[input.value]===true;
@@ -237,7 +237,7 @@ function optionsRenderProvider(selectedServiceId = null){
   optionsRenderSubscription();
   const services=optionsState.settings.apiServices||[],active=activeApiProvider(optionsState.settings);
   const displayed=(optionsDraftServiceId?null:(services.find(s=>s.id===optionsDisplayedServiceId)||active||services[0]))||null;
-  optionsEls.providerFallback.replaceChildren(new Option('不切换',''),...services.filter(service=>service.id!==displayed?.id).map(service=>new Option(service.name+' · '+service.model,service.id)));
+  optionsEls.providerFallback.replaceChildren(new Option('不切换',''),...services.filter(service=>service.id!==displayed?.id&&!JUDGMENT_PROTOCOLS.includes(getApiProvider(service.providerId)?.protocol)).map(service=>new Option(service.name+' · '+service.model,service.id)));
   optionsEls.providerFallback.disabled=!optionsEls.providerFallback.options.length||optionsEls.providerFallback.options.length<2;
   const isActiveDisplayed=Boolean(displayed&&active&&displayed.id===active.id);
   const provider=optionsDraftServiceId?{id:optionsDraftServiceId,name:'',providerId:optionsEls.providerId.value||'openai',baseUrl:'',model:'',apiKey:'',options:{}}:displayed;
@@ -359,7 +359,7 @@ async function optionsSetSentenceDensity(density){
 async function optionsToggleSite(site,enabled){const sites=optionsAutomation.automation.sites.filter(item=>item.origin!==site.origin);if(enabled!==null)sites.push({...site,enabled});await optionsPatchAutomation({sites},enabled===null?'网站已移除':'网站设置已保存');}
 function optionsParseProviderURL(value){const baseUrl=value.trim();if(!baseUrl||baseUrl.length>2048)throw new Error('请输入有效的 API 地址。');let url;try{url=new URL(baseUrl);}catch{throw new Error('请输入有效的 API 地址。');}const loopback=['localhost','127.0.0.1','[::1]'].includes(url.hostname);if(!url.hostname||(url.protocol!=='https:'&&!(url.protocol==='http:'&&loopback)))throw new Error('API 地址必须使用 HTTPS；仅本机地址可使用 HTTP。');if(url.username||url.password||url.search||url.hash)throw new Error('API 地址不能包含用户名、密码、查询参数或片段。');return{baseUrl:baseUrl.replace(/\/+$/,''),url};}
 function optionsOriginPattern(baseUrl){try{return baseUrl?`${new URL(baseUrl).origin}/*`:'';}catch{return'';}}
-function optionsCredentialPatterns(settings){const patterns=new Set();for(const service of settings.apiServices||[])if(service.baseUrl)patterns.add(optionsOriginPattern(service.baseUrl));const detection=settings.domainDetection;if(detection?.mode==='api'&&!detection.useTranslationApi&&detection.api?.apiKey&&detection.api?.baseUrl)patterns.add(optionsOriginPattern(detection.api.baseUrl));if(detection?.mode==='jev'&&detection.jevApiKey&&detection.jevBaseUrl)patterns.add(optionsOriginPattern(detection.jevBaseUrl));for(const site of settings.automation?.sites||[])if(site.enabled)patterns.add(site.origin+'/*');patterns.delete('');return patterns;}
+function optionsCredentialPatterns(settings){const patterns=new Set();for(const service of settings.apiServices||[])if(service.baseUrl)patterns.add(optionsOriginPattern(service.baseUrl));const detection=settings.domainDetection;if(detection?.mode==='api'&&!detection.useTranslationApi&&detection.api?.apiKey&&detection.api?.baseUrl)patterns.add(optionsOriginPattern(detection.api.baseUrl));if(detection?.jevApiKey&&(detection.mode==='jev'||settings.routing?.enabled))patterns.add(optionsOriginPattern(detection.jevBaseUrl||judgmentProviderDefaults(detection.jevProvider).baseUrl));for(const site of settings.automation?.sites||[])if(site.enabled)patterns.add(site.origin+'/*');patterns.delete('');return patterns;}
 async function optionsRemoveUnusedPermissions(before,after){if(after.automation?.allSites||after.automation?.sentenceGroupsAllSites)return;const needed=optionsCredentialPatterns(after);for(const pattern of optionsCredentialPatterns(before))if(!needed.has(pattern))await chrome.permissions.remove({origins:[pattern]});}
 async function optionsEnsurePermission(pattern,needed){if(!needed)return false;const had=await chrome.permissions.contains({origins:[pattern]});const granted=had||await chrome.permissions.request({origins:[pattern]});if(!granted)throw new Error('未获得该服务域名的访问权限，配置尚未保存。');return !had;}
 function optionsCurrentProviderService({allowEmptyModel=false}={}){
@@ -408,7 +408,7 @@ async function optionsSaveDetection(){const mode=document.querySelector('input[n
       jevParsed=optionsParseProviderURL(optionsEls.detectionJevUrl.value.trim()||jevDefaults.baseUrl);
       const entered=optionsEls.detectionJevKey.value.trim();
       if(entered.length>4096)throw new Error('Jev API Key 过长。');
-      jevBaseUrl=jevParsed.baseUrl;jevApiKey=entered||(optionsOriginPattern(current.jevBaseUrl)===`${jevParsed.url.origin}/*`?current.jevApiKey||'':'');
+      jevBaseUrl=jevParsed.baseUrl;jevApiKey=entered||(current.jevProvider===jevProvider&&optionsOriginPattern(current.jevBaseUrl)===`${jevParsed.url.origin}/*`?current.jevApiKey||'':'');
       jevGranted=await optionsEnsurePermission(`${jevParsed.url.origin}/*`,Boolean(jevApiKey));
     }
     const saved=await optionsSavePatch({domainDetection:{mode,subscriptionModel:optionsEls.detectionSubscriptionModel.value,apiModel:optionsEls.detectionApiModel.value.trim(),useTranslationApi,api,jevProvider,jevModel,jevBaseUrl,jevApiKey}},'领域识别设置已保存');if(!saved)return;optionsDetectionDirty=false;await optionsRemoveUnusedPermissions(before,optionsState.settings);optionsRenderDetection();}catch(error){optionsShowError(error);}finally{const needed=optionsCredentialPatterns(optionsState.settings);if(granted&&parsed&&!needed.has(`${parsed.url.origin}/*`))await chrome.permissions.remove({origins:[`${parsed.url.origin}/*`]}).catch(()=>{});if(jevGranted&&jevParsed&&!needed.has(`${jevParsed.url.origin}/*`))await chrome.permissions.remove({origins:[`${jevParsed.url.origin}/*`]}).catch(()=>{});}}
@@ -526,7 +526,10 @@ for(const tab of optionsAppearanceTabs){
 }
 optionsEls.readingDomain.addEventListener('change',()=>void optionsSavePatch({domain:optionsEls.readingDomain.value}));
 optionsEls.lookupKey.addEventListener('change',()=>{const lookupKey=optionsEls.lookupKey.value;void optionsSavePatch({lookupKey},'查词按键已设为 '+lookupKey);});
-optionsEls.routingEnabled.addEventListener('change',async()=>{const enabled=optionsEls.routingEnabled.checked;optionsEls.routingFields.hidden=!enabled;await optionsSavePatch({routing:{enabled}},'模型路由已'+(enabled?'开启':'关闭'));if(enabled)void optionsRefreshRoutingStats();});
+optionsEls.routingEnabled.addEventListener('change',async()=>{const enabled=optionsEls.routingEnabled.checked;optionsEls.routingFields.hidden=!enabled;
+  const before=structuredClone(optionsState.settings);
+  if(enabled){const detection=optionsDetectionSettings(),judgeOrigin=optionsOriginPattern(detection.jevBaseUrl||judgmentProviderDefaults(detection.jevProvider).baseUrl);try{if(detection.jevApiKey&&judgeOrigin)await optionsEnsurePermission(judgeOrigin,true);}catch(error){optionsEls.routingEnabled.checked=false;optionsEls.routingFields.hidden=true;optionsShowError(error);return;}}
+  if(await optionsSavePatch({routing:{enabled}},'模型路由已'+(enabled?'开启':'关闭'))){if(!enabled)await optionsRemoveUnusedPermissions(before,optionsState.settings);else void optionsRefreshRoutingStats();}});
 optionsEls.routingPremium.addEventListener('change',()=>void optionsSavePatch({routing:{premiumServiceId:optionsEls.routingPremium.value}},'升级目标已保存'));
 optionsEls.routingConfidence.addEventListener('change',()=>void optionsSavePatch({routing:{minConfidence:Number(optionsEls.routingConfidence.value)}},'最低把握度已保存'));
 optionsEls.routingTtl.addEventListener('change',()=>void optionsSavePatch({routing:{cacheTtlMinutes:Number(optionsEls.routingTtl.value)}},'缓存时长已保存'));
