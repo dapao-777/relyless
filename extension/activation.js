@@ -19,6 +19,11 @@ export function sitePattern(origin) {
 
 export const DEFAULT_KEYWORD_HINTS = {badge:false,keywords:['docs','developer','developers','learn','wiki'],dismissed:[]};
 export const KEYWORD_PATTERN = /^(?=.*[a-z])[a-z0-9]{2,32}$/;
+// 「不再提示」是有界的最近优先列表：达到上限时回收最早的忽略项，新一次忽略总是生效。
+export const KEYWORD_HINT_DISMISS_LIMIT = 500;
+export function dismissKeywordOrigin(dismissed,origin) {
+  return [...(Array.isArray(dismissed)?dismissed:[]).filter(entry=>entry!==origin),origin].slice(-KEYWORD_HINT_DISMISS_LIMIT);
+}
 
 export function hostKeyword(hostname, keywords) {
   const segments = String(hostname || '').toLowerCase().split(/[.-]/);
@@ -29,7 +34,7 @@ export function normalizeKeywordHints(value) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const keywords = Array.isArray(source.keywords) ? [...new Set(source.keywords.map(entry => typeof entry === 'string' ? entry.trim().toLowerCase() : '').filter(entry => KEYWORD_PATTERN.test(entry)))].slice(0,20) : [...DEFAULT_KEYWORD_HINTS.keywords];
   const seen = new Set();
-  const dismissed = (Array.isArray(source.dismissed) ? source.dismissed : []).filter(entry => typeof entry === 'string' && pageOrigin(entry) === entry && !seen.has(entry) && seen.add(entry)).slice(0,500);
+  const dismissed = (Array.isArray(source.dismissed) ? source.dismissed : []).filter(entry => typeof entry === 'string' && pageOrigin(entry) === entry && !seen.has(entry) && seen.add(entry)).slice(-KEYWORD_HINT_DISMISS_LIMIT);
   return {badge:source.badge === true,keywords,dismissed};
 }
 
@@ -68,7 +73,7 @@ export function validateAutomation(value, base) {
     if (keys.length !== 3 || keys.some(key => !['badge','keywords','dismissed'].includes(key))) throw new Error('无效的域名关键词提示设置。');
     if (typeof hints.badge !== 'boolean') throw new Error('无效的域名关键词提示设置。');
     if (!Array.isArray(hints.keywords) || hints.keywords.length > 20 || new Set(hints.keywords).size !== hints.keywords.length || hints.keywords.some(keyword => typeof keyword !== 'string' || !KEYWORD_PATTERN.test(keyword))) throw new Error('关键词只能包含 2–32 个小写字母或数字，且至少含一个字母，最多 20 个且不能重复。');
-    if (!Array.isArray(hints.dismissed) || hints.dismissed.length > 500 || new Set(hints.dismissed).size !== hints.dismissed.length || hints.dismissed.some(entry => typeof entry !== 'string' || pageOrigin(entry) !== entry)) throw new Error('忽略列表必须使用唯一且完整的 HTTP 或 HTTPS origin。');
+    if (!Array.isArray(hints.dismissed) || hints.dismissed.length > KEYWORD_HINT_DISMISS_LIMIT || new Set(hints.dismissed).size !== hints.dismissed.length || hints.dismissed.some(entry => typeof entry !== 'string' || pageOrigin(entry) !== entry)) throw new Error('忽略列表必须使用唯一且完整的 HTTP 或 HTTPS origin。');
     result.keywordHints = {badge:hints.badge,keywords:[...hints.keywords],dismissed:[...hints.dismissed]};
   }
   return result;

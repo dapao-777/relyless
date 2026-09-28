@@ -393,3 +393,36 @@ test('queued error and hint refresh resolve deterministically to !',async()=>{
   expect(session['keywordHint:'+tab.id]).toBeUndefined();
   delete session['tabError:'+tab.id];
 });
+
+test('keyword hint dismissal evicts the oldest entry at the cap and stays session-only in incognito',async()=>{
+  const hintsBefore=stored.settings.automation.keywordHints;
+  stored.settings.automation.keywordHints={badge:true,keywords:['docs','learn'],dismissed:Array.from({length:500},(_v,i)=>'https://old-'+i+'.example')};
+  try{
+    // 普通窗口：持久化忽略，满 500 条时回收最早条目，最新点击必然生效。
+    const result=await send({type:'KEYWORD_HINT_DISMISS',tabId:tab.id});
+    expect(result.keywordHint).toBe(null);
+    const dismissed=stored.settings.automation.keywordHints.dismissed;
+    expect(dismissed).toHaveLength(500);
+    expect(dismissed[0]).toBe('https://old-1.example');
+    expect(dismissed.at(-1)).toBe('https://docs.example');
+    const persisted=JSON.stringify(dismissed);
+
+    // 无痕窗口：只写会话存储，本机设置不携带无痕站点 origin。
+    const privateTab={id:13,windowId:9,url:'https://learn.private.example/page',incognito:true,active:true};
+    const privateSender={id:'activation-fixture',url:'chrome-extension://activation-fixture/ui/popup.html',tab:privateTab};
+    const incognitoResult=await send({type:'KEYWORD_HINT_DISMISS'},privateSender);
+    expect(incognitoResult.keywordHint).toBe(null);
+    expect(session['keywordHintDismissed']).toEqual(['https://learn.private.example']);
+    expect(JSON.stringify(stored.settings.automation.keywordHints.dismissed)).toBe(persisted);
+
+    // 会话忽略只作用于无痕上下文：普通窗口访问同站点仍收到提示，无痕浏览不泄漏到常规判定。
+    const realUrl=tab.url;
+    tab.url='https://learn.private.example/page';
+    const regularResult=await send({type:'AUTOMATION_GET',tabId:tab.id});
+    tab.url=realUrl;
+    expect(regularResult.keywordHint).toBe('learn');
+  }finally{
+    stored.settings.automation.keywordHints=hintsBefore;
+    delete session['keywordHintDismissed'];
+  }
+});

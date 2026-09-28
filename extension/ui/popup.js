@@ -114,10 +114,10 @@ async function popupToggleSite(){
 }
 async function popupDismissSiteHint(){
   if(!popupSupported()||popupBusy||!popupAutomation?.keywordHint)return;
-  const hints=popupAutomation.automation.keywordHints,origin=popupOrigin();
   popupBusy=true;popupClearError(popupEls.siteAutoError);popupRender();
   try{
-    popupAutomation=await request('AUTOMATION_PATCH',{patch:{keywordHints:{...hints,dismissed:[...hints.dismissed.filter(entry=>entry!==origin),origin]}},tabId:popupTab.id});
+    // 由后台统一处理容量回收与无痕窗口的会话级忽略。
+    popupAutomation=await request('KEYWORD_HINT_DISMISS',{tabId:popupTab.id});
   }catch(error){popupShowError(popupEls.siteAutoError,error);}
   finally{popupBusy=false;popupRender();if(popupEls.siteHintDismiss.hidden)popupEls.siteAuto.focus?.();}
 }

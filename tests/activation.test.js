@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {ALL_HOSTS,DEFAULT_KEYWORD_HINTS,KEYWORD_PATTERN,hostKeyword,normalizeKeywordHints,registrationMatches,requiredPermissionOrigins,resolveAutomation,validateAutomation,validateVideo} from '../extension/activation.js';
+import {ALL_HOSTS,DEFAULT_KEYWORD_HINTS,KEYWORD_HINT_DISMISS_LIMIT,KEYWORD_PATTERN,dismissKeywordOrigin,hostKeyword,normalizeKeywordHints,registrationMatches,requiredPermissionOrigins,resolveAutomation,validateAutomation,validateVideo} from '../extension/activation.js';
 import {normalizeSettings} from '../extension/shared.js';
 
 const activationDefaults={allSites:false,sentenceGroupsAllSites:false,sites:[],videoSites:false};
@@ -173,6 +173,23 @@ test('keywordHints validation enforces exact shape, keyword format, and origin l
   expect(()=>validateAutomation({keywordHints:{badge:true,keywords:['docs'],dismissed:Array(501).fill(0).map((_v,i)=>'https://d'+i+'.example')}},base)).toThrow('忽略列表');
 });
 
+test('dismissKeywordOrigin dedupes, keeps recency order, and evicts the oldest at the cap',()=>{
+  const base=Array.from({length:KEYWORD_HINT_DISMISS_LIMIT},(_v,i)=>'https://d'+i+'.example');
+  const full=dismissKeywordOrigin(base,'https://new.example');
+  expect(full).toHaveLength(KEYWORD_HINT_DISMISS_LIMIT);
+  expect(full[0]).toBe('https://d1.example');
+  expect(full.at(-1)).toBe('https://new.example');
+  const moved=dismissKeywordOrigin(base,'https://d0.example');
+  expect(moved).toHaveLength(KEYWORD_HINT_DISMISS_LIMIT);
+  expect(moved.at(-1)).toBe('https://d0.example');
+  expect(new Set(moved).size).toBe(KEYWORD_HINT_DISMISS_LIMIT);
+  // 归一化保留最近条目，丢弃最早条目，与回收方向一致。
+  const over=normalizeKeywordHints({keywords:['docs'],dismissed:[...base,'https://new.example']});
+  expect(over.dismissed).toHaveLength(KEYWORD_HINT_DISMISS_LIMIT);
+  expect(over.dismissed.at(-1)).toBe('https://new.example');
+  expect(over.dismissed.includes('https://d0.example')).toBe(false);
+});
+
 test('keyword hints never broaden permission or registration requirements',()=>{
   const automation=validateAutomation({keywordHints:{badge:true,keywords:['docs'],dismissed:[]}},activationDefaults);
   expect(registrationMatches(automation)).toEqual([]);
@@ -195,13 +212,13 @@ test('popup shows the keyword hint note and dismisses the origin through an auto
     if(!elements.has(id))elements.set(id,{checked:false,disabled:true,hidden:true,textContent:'',handlers:{},classList:{toggle(){},add(){},remove(){}},addEventListener(type,handler){this.handlers[type]=handler;}});
     return elements.get(id);
   };
-  const patches=[];
+  const dismissals=[];
   const hints={badge:false,keywords:['docs'],dismissed:[]};
   const automation={allSites:false,sites:[],videoSites:false,keywordHints:hints};
   globalThis.document={querySelector:element,querySelectorAll:()=>[]};
   globalThis.chrome={runtime:{async sendMessage(message){
     if(message.type==='STATE_GET')return{ok:true,data:{settings:{assistanceMode:'on-demand'},providerConfigured:true}};
-    if(message.type==='AUTOMATION_PATCH'){patches.push(message.patch);return{ok:true,data:{automation:{...automation,keywordHints:message.patch.keywordHints},siteRule:null,keywordHint:null}};}
+    if(message.type==='KEYWORD_HINT_DISMISS'){dismissals.push(message);return{ok:true,data:{automation:{...automation,keywordHints:{...hints,dismissed:['https://docs.example']}},siteRule:null,keywordHint:null}};}
     return{ok:true,data:{automation,siteRule:null,keywordHint:'docs'}};
   }},storage:{onChanged:{addListener(){}}},tabs:{query:async()=>[{id:7,url:'https://docs.example/read'}],sendMessage:async()=>({ok:true,data:{enabled:false}})},permissions:{request:async()=>true}};
   try{
@@ -211,7 +228,8 @@ test('popup shows the keyword hint note and dismisses the origin through an auto
     expect(element('#site-hint-dismiss').hidden).toBe(false);
     element('#site-hint-dismiss').handlers.click();
     await new Promise(resolve=>setTimeout(resolve,0));
-    expect(patches).toEqual([{keywordHints:{badge:false,keywords:['docs'],dismissed:['https://docs.example']}}]);
+    // 容量回收与无痕语义由后台统一处理，弹窗只声明意图。
+    expect(dismissals).toEqual([{type:'KEYWORD_HINT_DISMISS',tabId:7}]);
     expect(element('#site-hint-dismiss').hidden).toBe(true);
   }finally{
     if(previousChrome===undefined)delete globalThis.chrome;else globalThis.chrome=previousChrome;
