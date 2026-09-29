@@ -343,6 +343,18 @@ test('StepFun reasoning models request the lowest effort instead of a thinking s
   expect(sent.at(-1).reasoning_effort).toBeUndefined();
 });
 
+test('always-reasoning chat has enough headroom to return a readable answer',async()=>{
+  const sent=[];globalThis.fetch=async(_url,init)=>{
+    const body=requestBody(init);sent.push(body);
+    if(body.max_tokens<32768)return Response.json({choices:[{finish_reason:'length',message:{content:''}}]});
+    return Response.json({choices:[{finish_reason:'stop',message:{content:'{"value":"ok"}'}}]});
+  };
+  expect(await performProviderRequest(service('stepfun','https://api.stepfun.com/v1','step-3.5-flash'),{},'Explain.',schema)).toEqual({value:'ok'});
+  expect(sent.at(-1).max_tokens).toBe(32768);
+  await expect(performProviderRequest(service('stepfun','https://api.stepfun.com/v1','step-1-flash'),{},'Explain.',schema)).rejects.toMatchObject({code:'OUTPUT_LIMIT'});
+  expect(sent.at(-1).max_tokens).toBe(8192);
+});
+
 test('always-reasoning chat models skip the strict-schema probe and request json_object directly',async()=>{
   const bodies=[];rawFetch(async(_url,init)=>{const body=requestBody(init);bodies.push(body);return Response.json({choices:[{finish_reason:'stop',message:{content:'{"value":"ok"}'}}]});});
   const result=await performProviderRequest(service('stepfun','https://api.stepfun.com/v1','step-3.5-flash'),{},'Explain.',schema);
