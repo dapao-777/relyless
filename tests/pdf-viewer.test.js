@@ -1,10 +1,11 @@
 import {expect,test} from 'bun:test';
-import {isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
+import {event,isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
 
 // PDF 阅读页是扩展页：sender.tab.url 为 chrome-extension://…pdf-viewer.html?src=<文档>，
 // readingSource 应把它放行并把文档地址作为身份来源，其余扩展页仍被拒绝。
 const chromeBefore=globalThis.chrome;
 const fixture=isolatedChrome({});
+fixture.api.webNavigation.onBeforeNavigate=event();
 const viewerUrl='chrome-extension://'+fixture.id+'/pdf-viewer.html?src='+encodeURIComponent('https://docs.example/paper.pdf');
 fixture.api.tabs.get=async()=>({id:91,url:viewerUrl,active:true,title:'RelyLess PDF 阅读'});
 globalThis.chrome=fixture.api;
@@ -49,6 +50,22 @@ test('pdfReader defaults off and only an explicit true enables it',async()=>{
   expect(normalizeSettings({}).pdfReader).toBe(false);
   expect(normalizeSettings({pdfReader:true}).pdfReader).toBe(true);
   expect(normalizeSettings({pdfReader:'yes'}).pdfReader).toBe(false);
+});
+
+test('a delayed PDF interception cannot overwrite a newer main-frame navigation',async()=>{
+  const originalGet=fixture.api.tabs.get,originalUpdate=fixture.api.tabs.update;
+  const updates=[];let release,signal;
+  const waiting=new Promise(resolve=>{release=resolve;}),entered=new Promise(resolve=>{signal=resolve;});
+  try{
+    await isolatedSend(fixture,{type:'STATE_PATCH',patch:{pdfReader:true}},{id:fixture.id,url:'chrome-extension://'+fixture.id+'/ui/options.html'});
+    fixture.api.tabs.get=async id=>{signal();await waiting;return originalGet(id);};
+    fixture.api.tabs.update=async(_id,options)=>{updates.push(options.url);};
+    const dispatch=url=>fixture.api.webNavigation.onBeforeNavigate.listeners.forEach(listener=>listener({tabId:91,frameId:0,url}));
+    dispatch('https://docs.example/old.pdf');await entered;
+    dispatch('https://docs.example/article');release();
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(updates).toEqual([]);
+  }finally{release();fixture.api.tabs.get=originalGet;fixture.api.tabs.update=originalUpdate;}
 });
 
 test.afterAll?.(()=>{globalThis.chrome=chromeBefore;});

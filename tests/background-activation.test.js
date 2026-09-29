@@ -7,8 +7,11 @@ const session = {};
 const granted = new Set();
 const registrations = [];
 const tab = {id:11,windowId:7,url:'https://docs.example/article',title:'Fixture',active:true};
+const privateWindows=[];
 let tabGetBarrier = null;
 const tabMessages = [];
+const badgeCalls = [];
+let getFrameCalls = 0;
 const fetchBefore = globalThis.fetch;
 globalThis.fetch = async()=>{throw new Error('unexpected model call');};
 const pick = (source,keys) => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).filter(key => Object.hasOwn(source,key)).map(key => [key,source[key]]));
@@ -35,14 +38,16 @@ globalThis.chrome = {
     onRemoved:event(),onUpdated:event(),query:async query=>query?.active ? [tab] : [tab],get:async id=>{if(tabGetBarrier) await tabGetBarrier;return id === tab.id ? tab : null;},
     sendMessage:async (tabId,message)=>{tabMessages.push({tabId,message});return {ok:true,data:{enabled:false}};},
   },
+  windows:{getAll:async()=>[{id:7,incognito:false},...privateWindows],onRemoved:event()},
   scripting:{
     executeScript:async options=>options.func ? [{result:true}] : [],
     getRegisteredContentScripts:async()=>registrations.map(value=>({...value})),
     unregisterContentScripts:async ({ids})=>{for (const id of ids) {const index=registrations.findIndex(item=>item.id===id);if(index>=0) registrations.splice(index,1);}},
     registerContentScripts:async scripts=>{registrations.push(...scripts);},
   },
+  webNavigation:{onCommitted:event(),getFrame:async({tabId})=>{getFrameCalls++;return tabId===tab.id?{documentId:'activation-document',url:tab.url}:null;}},
   contextMenus:{onClicked:event(),removeAll:async()=>{},create:(_options,callback)=>callback()},
-  commands:{onCommand:event()},action:{setBadgeText:async()=>{},setTitle:async()=>{},setBadgeBackgroundColor:async()=>{}},
+  commands:{onCommand:event()},action:{setBadgeText:async options=>{badgeCalls.push({call:'text',...options});},setTitle:async options=>{badgeCalls.push({call:'title',...options});},setBadgeBackgroundColor:async options=>{badgeCalls.push({call:'color',...options});}},
 };
 
 await import(`../extension/background.js?activation=${Date.now()}`);
@@ -57,7 +62,7 @@ afterAll(()=>{globalThis.chrome=chromeBefore;globalThis.fetch=fetchBefore;});
 
 test('automation is not persisted until its exact host permission exists',async()=>{
   await expect(send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{sites:[{origin:'https://docs.example',enabled:true}]}})).rejects.toThrow('权限');
-  expect(stored.settings.automation).toEqual({allSites:false,sentenceGroupsAllSites:false,sites:[],videoSites:false});
+  expect(stored.settings.automation).toEqual({allSites:false,sentenceGroupsAllSites:false,sites:[],videoSites:false,keywordHints:{badge:false,keywords:['docs','developer','developers','learn','wiki'],dismissed:[]}});
 
   granted.add('https://docs.example/*');
   const result = await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{sites:[{origin:'https://docs.example',enabled:true}]}});
@@ -232,4 +237,213 @@ test('explicit reader translation remains available on a paused page',async()=>{
     expect(started.token).toBeTruthy();
     await send({type:'EMERGENCY_END',token:started.token},pageSender);
   }finally{await send({type:'PAGE_ACTIVITY_SET',enabled:true},pageSender);}
+});
+
+test('keyword hint badge appears on matching main-frame commits and clears on non-matches',async()=>{
+  badgeCalls.length=0;getFrameCalls=0;
+  await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{keywordHints:{badge:true,keywords:['docs'],dismissed:[]}}});
+  expect(getFrameCalls).toBeGreaterThan(0);
+  expect(badgeCalls).toContainEqual({call:'text',tabId:tab.id,text:'+'});
+  expect(badgeCalls.some(call=>call.call==='title'&&call.tabId===tab.id&&call.title.includes('docs'))).toBe(true);
+  expect(session['keywordHint:'+tab.id]).toBe(true);
+
+  badgeCalls.length=0;
+  globalThis.chrome.webNavigation.onCommitted.listeners.forEach(listener=>listener({tabId:tab.id,url:'https://wiki.example.org/p',frameId:1}));
+  await new Promise(resolve=>setTimeout(resolve,0));
+  expect(badgeCalls).toEqual([]);
+
+  globalThis.chrome.webNavigation.onCommitted.listeners.forEach(listener=>listener({tabId:tab.id,url:'https://example.com/',frameId:0}));
+  await new Promise(resolve=>setTimeout(resolve,0));
+  expect(badgeCalls).toContainEqual({call:'text',tabId:tab.id,text:''});
+  expect(session['keywordHint:'+tab.id]).toBeUndefined();
+
+  badgeCalls.length=0;
+  globalThis.chrome.webNavigation.onCommitted.listeners.forEach(listener=>listener({tabId:tab.id,url:'https://example.com/other',frameId:0}));
+  await new Promise(resolve=>setTimeout(resolve,0));
+  expect(badgeCalls.some(call=>call.call==='text')).toBe(false);
+});
+
+test('badge off: no badge writes, no getFrame reads, and stale markers clear without touching the url',async()=>{
+  session['keywordHint:'+tab.id]=true;
+  badgeCalls.length=0;getFrameCalls=0;
+  await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{keywordHints:{badge:false,keywords:['docs'],dismissed:[]}}});
+  await new Promise(resolve=>setTimeout(resolve,0));
+  expect(getFrameCalls).toBe(0);
+  expect(session['keywordHint:'+tab.id]).toBeUndefined();
+  expect(badgeCalls).toContainEqual({call:'text',tabId:tab.id,text:''});
+  badgeCalls.length=0;
+  globalThis.chrome.webNavigation.onCommitted.listeners.forEach(listener=>listener({tabId:tab.id,url:'https://docs.example.com/x',frameId:0}));
+  await new Promise(resolve=>setTimeout(resolve,0));
+  expect(badgeCalls).toEqual([]);
+});
+
+const flushBadgeQueue=async()=>{for(let i=0;i<5;i++)await new Promise(resolve=>setTimeout(resolve,0));};
+const commitMainFrame=(url)=>{globalThis.chrome.webNavigation.onCommitted.listeners.forEach(listener=>listener({tabId:tab.id,url,frameId:0}));};
+const clickMenu=(menuItemId,info={})=>{globalThis.chrome.contextMenus.onClicked.listeners.forEach(listener=>listener({menuItemId,frameId:0,...info},tab));};
+const failTabSend=()=>{const real=globalThis.chrome.tabs.sendMessage;globalThis.chrome.tabs.sendMessage=async()=>({ok:false,error:'fixture failure'});return()=>{globalThis.chrome.tabs.sendMessage=real;};};
+const lastText=()=>badgeCalls.filter(call=>call.call==='text'&&call.tabId===tab.id).at(-1)?.text;
+const enableDocsBadge=()=>send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{keywordHints:{badge:true,keywords:['docs'],dismissed:[]}}});
+
+test('error badge wins over hint: matching reconcile keeps ! and skips +',async()=>{
+  badgeCalls.length=0;
+  const restore=failTabSend();
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  restore();
+  expect(lastText()).toBe('!');
+  expect(session['tabError:'+tab.id]).toBe(true);
+  badgeCalls.length=0;
+  await enableDocsBadge();
+  await flushBadgeQueue();
+  expect(badgeCalls.some(call=>call.call==='text'&&call.text==='+')).toBe(false);
+  expect(session['keywordHint:'+tab.id]).toBeUndefined();
+  expect(session['tabError:'+tab.id]).toBe(true);
+  delete session['tabError:'+tab.id];
+});
+
+test('hint then error then non-matching reconcile: ! persists, no clear call',async()=>{
+  await enableDocsBadge();
+  badgeCalls.length=0;
+  commitMainFrame('https://docs.example.com/x');
+  await flushBadgeQueue();
+  expect(lastText()).toBe('+');
+  const restore=failTabSend();
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  restore();
+  expect(lastText()).toBe('!');
+  expect(session['keywordHint:'+tab.id]).toBeUndefined();
+  badgeCalls.length=0;
+  await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{keywordHints:{badge:true,keywords:['wiki'],dismissed:[]}}});
+  await flushBadgeQueue();
+  expect(badgeCalls.some(call=>call.call==='text'&&call.text==='')).toBe(false);
+  expect(lastText()).toBeUndefined();
+  expect(session['tabError:'+tab.id]).toBe(true);
+  delete session['tabError:'+tab.id];
+  await enableDocsBadge();
+});
+
+test('successful action after error restores + on matching tab, plain clear when badge off',async()=>{
+  await enableDocsBadge();
+  const restore=failTabSend();
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  restore();
+  expect(lastText()).toBe('!');
+  badgeCalls.length=0;
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  expect(session['tabError:'+tab.id]).toBeUndefined();
+  expect(session['keywordHint:'+tab.id]).toBe(true);
+  expect(lastText()).toBe('+');
+
+  session['keywordHint:'+tab.id]=undefined;delete session['keywordHint:'+tab.id];
+  await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{keywordHints:{badge:false,keywords:['docs'],dismissed:[]}}});
+  await flushBadgeQueue();
+  badgeCalls.length=0;getFrameCalls=0;
+  const restore2=failTabSend();
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  restore2();
+  expect(lastText()).toBe('!');
+  badgeCalls.length=0;
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  expect(lastText()).toBe('');
+  expect(getFrameCalls).toBe(0);
+  expect(session['tabError:'+tab.id]).toBeUndefined();
+  expect(session['keywordHint:'+tab.id]).toBeUndefined();
+});
+
+test('successful action with no prior error leaves + untouched',async()=>{
+  await enableDocsBadge();
+  badgeCalls.length=0;
+  commitMainFrame('https://docs.example.com/x');
+  await flushBadgeQueue();
+  expect(lastText()).toBe('+');
+  badgeCalls.length=0;
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  expect(badgeCalls.some(call=>call.call==='text')).toBe(false);
+  expect(session['keywordHint:'+tab.id]).toBe(true);
+});
+
+test('main-frame commit clears error state and applies matching hint',async()=>{
+  await enableDocsBadge();
+  const restore=failTabSend();
+  clickMenu('ss-toggle-reading');
+  await flushBadgeQueue();
+  restore();
+  expect(session['tabError:'+tab.id]).toBe(true);
+  badgeCalls.length=0;
+  commitMainFrame('https://docs.example.com/x');
+  await flushBadgeQueue();
+  expect(session['tabError:'+tab.id]).toBeUndefined();
+  expect(lastText()).toBe('+');
+  expect(session['keywordHint:'+tab.id]).toBe(true);
+});
+
+test('queued error and hint refresh resolve deterministically to !',async()=>{
+  await enableDocsBadge();
+  badgeCalls.length=0;
+  const restore=failTabSend();
+  clickMenu('ss-toggle-reading');
+  commitMainFrame('https://docs.example.com/x');
+  await flushBadgeQueue();
+  restore();
+  expect(lastText()).toBe('!');
+  expect(session['keywordHint:'+tab.id]).toBeUndefined();
+  delete session['tabError:'+tab.id];
+});
+
+test('dismissal removes the current + badge and title immediately',async()=>{
+  await enableDocsBadge();badgeCalls.length=0;
+  commitMainFrame(tab.url);await flushBadgeQueue();
+  expect(lastText()).toBe('+');
+  const result=await send({type:'KEYWORD_HINT_DISMISS',tabId:tab.id});
+  expect(result.keywordHint).toBe(null);
+  expect(lastText()).toBe('');
+  expect(badgeCalls.some(call=>call.call==='title'&&call.tabId===tab.id&&call.title==='RelyLess')).toBe(true);
+  expect(session['keywordHint:'+tab.id]).toBeUndefined();
+});
+test('keyword hint dismissal evicts the oldest entry at the cap and stays session-only in incognito',async()=>{
+  const hintsBefore=stored.settings.automation.keywordHints;
+  stored.settings.automation.keywordHints={badge:true,keywords:['docs','learn'],dismissed:Array.from({length:500},(_v,i)=>'https://old-'+i+'.example')};
+  try{
+    // 普通窗口：持久化忽略，满 500 条时回收最早条目，最新点击必然生效。
+    const result=await send({type:'KEYWORD_HINT_DISMISS',tabId:tab.id});
+    expect(result.keywordHint).toBe(null);
+    const dismissed=stored.settings.automation.keywordHints.dismissed;
+    expect(dismissed).toHaveLength(500);
+    expect(dismissed[0]).toBe('https://old-1.example');
+    expect(dismissed.at(-1)).toBe('https://docs.example');
+    const persisted=JSON.stringify(dismissed);
+
+    // 无痕窗口：只写会话存储，本机设置不携带无痕站点 origin。
+    const privateTab={id:13,windowId:9,url:'https://learn.private.example/page',incognito:true,active:true};
+    privateWindows.push({id:9,incognito:true},{id:10,incognito:true});
+    const privateSender={id:'activation-fixture',url:'chrome-extension://activation-fixture/ui/popup.html',tab:privateTab};
+    const incognitoResult=await send({type:'KEYWORD_HINT_DISMISS'},privateSender);
+    expect(incognitoResult.keywordHint).toBe(null);
+    expect(session['keywordHintDismissed']).toEqual(['https://learn.private.example']);
+    expect(JSON.stringify(stored.settings.automation.keywordHints.dismissed)).toBe(persisted);
+
+    // 会话忽略只作用于无痕上下文：普通窗口访问同站点仍收到提示，无痕浏览不泄漏到常规判定。
+    const realUrl=tab.url;
+    tab.url='https://learn.private.example/page';
+    const regularResult=await send({type:'AUTOMATION_GET',tabId:tab.id});
+    tab.url=realUrl;
+    expect(regularResult.keywordHint).toBe('learn');
+    privateWindows.shift();globalThis.chrome.windows.onRemoved.listeners.forEach(listener=>listener(9));
+    await flushBadgeQueue();expect(session['keywordHintDismissed']).toEqual(['https://learn.private.example']);
+    privateWindows.shift();globalThis.chrome.windows.onRemoved.listeners.forEach(listener=>listener(10));
+    await flushBadgeQueue();expect(session['keywordHintDismissed']).toBeUndefined();
+    privateWindows.push({id:11,incognito:true});
+    const reopened=await send({type:'AUTOMATION_GET'},privateSender);
+    expect(reopened.keywordHint).toBe('learn');
+  }finally{
+    stored.settings.automation.keywordHints=hintsBefore;
+    privateWindows.length=0;
+    delete session['keywordHintDismissed'];
+  }
 });

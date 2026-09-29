@@ -4,6 +4,11 @@ const azureFields = [
   {key:'apiVersion',label:'API 版本',type:'text',placeholder:'v1',defaultValue:'v1'},
 ];
 const bedrockFields = [{key:'region',label:'区域',type:'text',placeholder:'us-east-1',defaultValue:'us-east-1'}];
+const stepfunFields = [{key:'plan',label:'接入方式',type:'select',defaultValue:'api',options:[{value:'api',label:'按量付费 API'},{value:'step_plan',label:'Step Plan 订阅套餐'}]}];
+
+// 思考模式经 per-service options 下发；replicate 预测与 jev 判定通道没有对应参数，不提供该选项。
+const THINKING_FIELD = {key:'thinking',label:'思考模式',type:'select',defaultValue:'auto',hint:'开启思考会增加响应延迟与计费 token；「自动」保持现状。',options:[{value:'auto',label:'自动'},{value:'off',label:'关闭'},{value:'low',label:'低'},{value:'medium',label:'中'},{value:'high',label:'高'}]};
+const THINKING_PROTOCOLS = new Set(['chat','responses','anthropic','google','bedrock','cohere','ollama']);
 
 // Provider names and ordering follow the supported service catalog. Hosted defaults are
 // selected independently for general reading, explanation, and structured JSON without
@@ -22,6 +27,7 @@ export const API_PROVIDERS = [
   {id:'openrouter',name:'OpenRouter',protocol:'chat',baseUrl:'https://openrouter.ai/api/v1',defaultModel:'google/gemma-4-31b-it:free',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'minimax',name:'MiniMax',protocol:'chat',baseUrl:'https://api.minimax.io/v1',defaultModel:'MiniMax-M3',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'siliconflow',name:'SiliconFlow',protocol:'chat',baseUrl:'https://api.siliconflow.cn/v1',defaultModel:'Qwen/Qwen3-Next-80B-A3B-Instruct',apiKeyUrl:'',keyOptional:false,fields:[]},
+  {id:'siliconflow-systemone',name:'SiliconFlow · 快速决策',protocol:'systemone',baseUrl:'https://api.siliconflow.cn/v1',defaultModel:'diffusiongemma',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'tensdaq',name:'Tensdaq',protocol:'chat',baseUrl:'https://tensdaq-api.x-aio.com/v1',defaultModel:'Qwen3-30B-A3B-Instruct-2507',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'azure',name:'Azure OpenAI',protocol:'responses',baseUrl:'',defaultModel:'gpt-5.6-luna',apiKeyUrl:'',keyOptional:false,fields:azureFields},
   {id:'bedrock',name:'Amazon Bedrock',protocol:'bedrock',baseUrl:'',defaultModel:'us.amazon.nova-micro-v1:0',apiKeyUrl:'',keyOptional:false,fields:bedrockFields},
@@ -39,14 +45,23 @@ export const API_PROVIDERS = [
   {id:'volcengine',name:'Volcengine',protocol:'chat',baseUrl:'https://ark.cn-beijing.volces.com/api/v3',defaultModel:'doubao-seed-1-6-flash-250828',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'alibaba',name:'Alibaba Cloud',protocol:'chat',baseUrl:'https://dashscope.aliyuncs.com/compatible-mode/v1',defaultModel:'qwen3.8-flash',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'moonshotai',name:'Moonshot AI',protocol:'chat',baseUrl:'https://api.moonshot.ai/v1',defaultModel:'kimi-k2.6',apiKeyUrl:'',keyOptional:false,fields:[]},
-  {id:'stepfun',name:'StepFun (阶跃星辰)',protocol:'chat',baseUrl:'https://api.stepfun.com/v1',defaultModel:'step-1-flash',apiKeyUrl:'',keyOptional:false,fields:[]},
+  {id:'stepfun',name:'StepFun (阶跃星辰)',protocol:'chat',baseUrl:'https://api.stepfun.com/v1',defaultModel:'step-1-flash',apiKeyUrl:'',keyOptional:false,fields:stepfunFields},
   {id:'huggingface',name:'Hugging Face',protocol:'chat',baseUrl:'https://router.huggingface.co/v1',defaultModel:'Qwen/Qwen2.5-7B-Instruct-1M',apiKeyUrl:'',keyOptional:false,fields:[]},
-];
+].map(provider => THINKING_PROTOCOLS.has(provider.protocol) ? {...provider,fields:[...provider.fields,THINKING_FIELD]} : provider);
 
 const providersById = new Map(API_PROVIDERS.map(provider => [provider.id,provider]));
 
+// 判定协议只应答 {state, questions} 载荷，不能当普通翻译/查词服务使用；
+// apiServices 保存、回落与升级目标都必须排除这些服务商（正确入口是领域识别的判定接入字段）。
+export const JUDGMENT_PROTOCOLS = ['jev','systemone'];
+
 export function getApiProvider(id) {
   return providersById.get(id) || null;
+}
+
+export function isJudgmentProvider(providerId) {
+  const provider = getApiProvider(providerId);
+  return Boolean(provider && JUDGMENT_PROTOCOLS.includes(provider.protocol));
 }
 
 function cleanOption(value,key) {
@@ -85,7 +100,20 @@ export function apiProviderBaseUrl(providerId,options={}) {
     if (!/^[a-z]{2}(?:-gov)?-[a-z]+-\d+$/.test(region)) throw new Error('Bedrock 区域无效。');
     return `https://bedrock-runtime.${region}.amazonaws.com`;
   }
+  if (providerId==='stepfun' && normalized.plan==='step_plan') return 'https://api.stepfun.com/step_plan/v1';
   return provider.baseUrl;
+}
+
+// Step Plan 订阅套餐不含 step-1-flash（实测返回 model_invalid），套餐端点的可用默认模型是 step-3.5-flash；
+// 返回该接入方式的默认模型，自定义模型始终保留不动。
+export function apiProviderDefaultModel(providerId,options={}) {
+  const provider=getApiProvider(providerId);
+  if (providerId==='stepfun') return normalizedOptions(provider,options).plan==='step_plan'?'step-3.5-flash':'step-1-flash';
+  return provider?.defaultModel || '';
+}
+// StepFun 各接入方式的默认模型集合，供切换接入方式时识别「仍是默认值、可以替换」的情形。
+export function apiProviderDefaultModels(providerId) {
+  return providerId==='stepfun'?new Set(['step-1-flash','step-3.5-flash']):new Set([getApiProvider(providerId)?.defaultModel||'']);
 }
 
 function normalizedBaseUrl(value) {

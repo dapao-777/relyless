@@ -10,13 +10,13 @@ function normItems(items) {
       && Number.isFinite(item.w) && item.w >= 0 && Number.isFinite(item.h) && item.h > 0);
 }
 
-// x 投影上的净空竖缝：按 x0 排序后，若某处的 gap = next.x0 - max（之前所有 x1) 足够大，
-// 则该处没有文本区间跨越，可作为栏间切点。取最大可用缝；两侧各需 ≥2 项且宽度 >10% 总宽。
+// 在 x 投影中寻找左右有实质宽度的净空缝；稀疏页左右各一行时也不能把两栏混译。
+// 对少于四片段的区域要求更宽缝隙，宁可拆开而不把远距离文本串成一行。
 function columnCut(items) {
-  if (items.length < 4) return null;
+  if (items.length < 2) return null;
   const byX = [...items].sort((a, b) => a.x - b.x || a.y - b.y);
   const heights = items.map(item => item.h).sort((a, b) => a - b);
-  const minGap = Math.max(12, heights[Math.floor(heights.length / 2)] * 1.5);
+  const minGap = Math.max(items.length<4?40:12, heights[Math.floor(heights.length / 2)] * (items.length<4?3:1.5));
   const n = byX.length;
   const rightEdge = new Array(n);
   let run = 0;
@@ -28,7 +28,7 @@ function columnCut(items) {
   let edge = byX[0].x + byX[0].w, cut = -1, widest = minGap;
   for (let i = 1; i < n; i++) {
     const gap = byX[i].x - edge;
-    if (gap > widest && i >= 2 && n - i >= 2 && edge - left > totalW * 0.1 && rightEdge[i] - byX[i].x > totalW * 0.1) {
+    if (gap > widest && i >= (n<4?1:2) && n - i >= (n<4?1:2) && edge - left > totalW * 0.1 && rightEdge[i] - byX[i].x > totalW * 0.1) {
       widest = gap;
       cut = i;
     }
@@ -49,7 +49,7 @@ function splitBands(items) {
   const isWide = item => item.w >= totalW * 0.6;
   if (!items.some(isWide)) return [items];
   const rest = items.filter(item => !isWide(item));
-  if (rest.length < 4 || splitColumns(rest).length < 2) return [items];
+  if (rest.length < 2 || splitColumns(rest).length < 2) return [items];
   const bands = [];
   let band = [];
   for (const item of [...items].sort((a, b) => a.y - b.y || a.x - b.x)) {

@@ -1,15 +1,21 @@
 import {expect,test} from 'bun:test';
 import {CATALOG_TEMPLATES,CATALOG_CATEGORIES,iconUrlFor} from '../extension/ui/options-service-catalog.js';
-import {API_PROVIDERS} from '../extension/api-providers.mjs';
+import {API_PROVIDERS, JUDGMENT_PROTOCOLS} from '../extension/api-providers.mjs';
 import {SUBSCRIPTION_KINDS,isSubscriptionKind} from '../extension/subscription.js';
 
-test('every api provider appears exactly once in the catalog', () => {
+test('every non-judgment api provider appears exactly once in the catalog', () => {
+  // 判定协议服务（jev/systemone）只能应答判定载荷，不是翻译服务：目录不提供它们的模板，
+  // 配置入口在领域识别的判定接入字段（Issue #41）。
+  const serviceProviders = API_PROVIDERS.filter(provider => !JUDGMENT_PROTOCOLS.includes(provider.protocol));
   const apiEntries = CATALOG_TEMPLATES.filter(item => API_PROVIDERS.some(provider => provider.id === item.id));
-  expect(apiEntries).toHaveLength(API_PROVIDERS.length);
-  for (const provider of API_PROVIDERS) {
+  expect(apiEntries).toHaveLength(serviceProviders.length);
+  for (const provider of serviceProviders) {
     const entry = CATALOG_TEMPLATES.find(item => item.id === provider.id);
     expect(entry.name).toBe(provider.name);
     expect(entry.keyOptional).toBe(provider.keyOptional === true);
+  }
+  for (const provider of API_PROVIDERS.filter(item => JUDGMENT_PROTOCOLS.includes(item.protocol))) {
+    expect(CATALOG_TEMPLATES.some(item => item.id === provider.id)).toBe(false);
   }
 });
 

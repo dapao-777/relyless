@@ -1,8 +1,8 @@
 # ADR 0005：扩展自有 PDF 阅读表面
 
-- 状态：proposed
+- 状态：accepted
 - 日期：2026-09-26
-- 参与讨论：无（未开独立 Issue）
+- 参与讨论：Issue #39（默认保留原生查看器，用户明确开启后才接管）
 - 取代：无
 - 被取代：无
 
@@ -44,6 +44,8 @@
 - `readingSource` 识别 viewer 页：文档哈希取自 `src` 地址；`tab.url` 对扩展页不可见时回落 `sender.url`，`emergencyBegin`/`tabPage` 同样回落，校验强度不变（仍要求 sender 断言当前文档地址）。
 - viewer 抓取远程 PDF：先尝试直接 `fetch`（兼容带 CORS 的站点），`TypeError` 后才在阅读器内显示授权按钮并 `chrome.permissions.request` 该站 origin。
 - 整页翻译走 `EMERGENCY_BEGIN`+`EMERGENCY_TRANSLATE`，译文显示在原文块下方，不移除原文；预算超支须页内二次确认。
+
+每次翻译当前页的待译块须重新估算预算并在超限时重新确认，不复用上一页的授权；导航异步接管按标签页主框架代次保护，迟到的旧 PDF 不能覆盖新页面。读取上限 64 MiB、最多 500 页、单页渲染最多 1600 万物理像素，超限直接提示返回原生查看器。
 
 ## 结果
 

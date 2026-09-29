@@ -96,6 +96,12 @@ test('a full-width title splits the page into bands so columns stay ordered',()=
   expect(blocks.map(block=>block.text)).toEqual(['Full Width Title','L0 L1 L2 L3','R0 R1 R2 R3']);
 });
 
+test('a full-width heading followed by one line in each column never combines their translations',()=>{
+  const spans=[span(50,20,540,16,'Full Width Title'),span(50,60,200,10,'Left paragraph.'),span(350,60,200,10,'Right paragraph.')];
+  expect(pdfBlocks(spans).map(block=>block.text)).toEqual(['Full Width Title','Left paragraph.','Right paragraph.']);
+  expect(pdfLines(spans).map(line=>line.text)).toEqual(['Full Width Title','Left paragraph.','Right paragraph.']);
+});
+
 // 单栏文档里撑满版心的长行不得被误判为分隔带。
 test('a single-column long line is not treated as a band separator',()=>{
   const blocks=pdfBlocks([

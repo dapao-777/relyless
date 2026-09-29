@@ -6,6 +6,7 @@ const pagesEl=$('pages'),statusEl=$('status'),zhPanel=$('zh-panel'),zhList=$('zh
 const ext=globalThis.chrome?.runtime?.id?globalThis.chrome:null;
 GlobalWorkerOptions.workerSrc=(ext?.runtime?.getURL?ext.runtime.getURL('vendor/pdfjs/pdf.worker.min.mjs'):'./vendor/pdfjs/pdf.worker.min.mjs');
 const state={src:'',doc:null,scale:1.15,pages:[],currentPage:1,domain:'',emergency:null,requestSeq:0,translateBusy:false,renderGen:0,observer:null,translations:new Map(),tabId:null,assistSeq:0};
+const MAX_PDF_BYTES=64*1024*1024,MAX_PDF_PAGES=500,MAX_RENDER_PIXELS=16_000_000;
 
 function setStatus(text){statusEl.textContent=text||'';}
 addEventListener('error',event=>{if(statusEl&&!statusEl.textContent)setStatus('脚本加载失败：'+(event.message||'未知错误'));});
@@ -34,13 +35,31 @@ async function resolveSrc(){
   try{const url=new URL(srcParam);if(!['http:','https:','file:'].includes(url.protocol))throw 0;return url;}catch{setStatus('缺少有效的文档地址。');return null;}
 }
 
+async function readPdfResponse(response){
+  const declared=Number(response.headers.get('content-length'));
+  if(declared>MAX_PDF_BYTES)throw new Error('PDF 超过 64 MiB，请使用原生查看器。');
+  if(!response.body?.getReader)throw new Error('文档没有可读取的数据流。');
+  const reader=response.body.getReader(),parts=[];let bytes=0;
+  try{
+    while(true){
+      const {done,value}=await reader.read();if(done)break;
+      bytes+=value.byteLength;
+      if(bytes>MAX_PDF_BYTES)throw new Error('PDF 超过 64 MiB，请使用原生查看器。');
+      parts.push(value);
+    }
+  }catch(error){await reader.cancel().catch(()=>{});throw error;}
+  const data=new Uint8Array(bytes);let offset=0;
+  for(const part of parts){data.set(part,offset);offset+=part.byteLength;}
+  return data;
+}
+
 async function fetchPdf(url){
   try{
     const response=await fetch(url.href,{credentials:'include'});
     if(!response.ok)throw new Error(response.status===401||response.status===403
       ?'该文档需要登录或授权（HTTP '+response.status+'）。请先在来源站点登录后重试，或改用原生查看器。'
       :'文档读取失败（HTTP '+response.status+'）。');
-    return await response.arrayBuffer();
+    return await readPdfResponse(response);
   }catch(error){
     if(!(error instanceof TypeError)&&error.message)throw error;
     if(ext&&['http:','https:'].includes(url.protocol)){
@@ -69,6 +88,7 @@ async function boot(){
   if(!data)return;
   setStatus('正在渲染…');
   try{state.doc=await getDocument({data}).promise;}catch{setStatus('文档解析失败：可能不是有效的 PDF，或已加密/损坏。');return;}
+  if(state.doc.numPages>MAX_PDF_PAGES){await state.doc.destroy();state.doc=null;setStatus('PDF 超过 500 页，请使用原生查看器。');return;}
   buildPlaceholders();
   $('page-info').textContent='1 / '+state.doc.numPages;
   setStatus('');
@@ -102,6 +122,7 @@ async function renderPage(pageNo,wrap,gen){
   const page=await state.doc.getPage(pageNo);
   if(gen!==state.renderGen)return;
   const viewport=page.getViewport({scale:state.scale});
+  if(viewport.width*viewport.height*devicePixelRatio**2>MAX_RENDER_PIXELS){setStatus('页面尺寸过大，请使用原生查看器。');return;}
   wrap.style.minHeight='';wrap.style.width=viewport.width+'px';wrap.style.height=viewport.height+'px';
   const canvas=document.createElement('canvas');canvas.className='pdf-canvas';
   canvas.width=Math.floor(viewport.width*devicePixelRatio);canvas.height=Math.floor(viewport.height*devicePixelRatio);
@@ -362,11 +383,13 @@ async function translateCurrentPage(){
   if(!ext){setStatus('翻译需要在扩展中运行。');return;}
   const sendable=page.blocks.filter(block=>block.text.length<=4000);
   const skipped=page.blocks.filter(block=>block.text.length>4000);
-  const chars=sendable.reduce((sum,block)=>sum+block.text.length,0);
+  const pending=sendable.filter(block=>!state.translations.get(pageNo+':'+block.id));
+  const chars=pending.reduce((sum,block)=>sum+block.text.length,0);
   state.translateBusy=true;$('translate-page').disabled=true;
   try{
     const tabId=await new Promise((resolve,reject)=>{chrome.tabs.getCurrent(tab=>resolve(tab?.id));setTimeout(()=>reject(new Error('无法定位当前标签页。')),3000);});
-    if(!state.emergency){
+    if(pending.length){
+      // 每页的新待译内容都需重新估算；旧页面授权不得覆盖后来更大的页面。
       const begun=await beginEmergency(tabId,chars);
       if(!begun)return;
       state.emergency={token:begun.token,tabId};
@@ -401,7 +424,7 @@ async function translateCurrentPage(){
       row.append(src,zh);zhList.append(row);
     }
     // 重试只补发尚未译出的块，已成功的块直接复用缓存译文。
-    const pending=sendable.filter(block=>!state.translations.get(pageNo+':'+block.id));
+    // 已验证的译文不重发；预算估算与此处的待译块集合完全相同。
     const batches=[];for(let i=0;i<pending.length;i+=4)batches.push(pending.slice(i,i+4));
     let done=0;setStatus(pending.length?'正在翻译本页（0/'+batches.length+' 批）…':'本页已全部翻译。');
     for(const batch of batches){

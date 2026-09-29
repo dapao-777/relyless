@@ -13,7 +13,7 @@ body{margin:0;font-family:var(--sans,-apple-system,"Segoe UI","PingFang SC","Mic
 #status:empty{display:none;}
 .viewer-body{display:flex;align-items:flex-start;}
 .pages{flex:1;display:flex;flex-direction:column;align-items:center;gap:18px;padding:18px 12px 40px;min-width:0;}
-.pdf-page{position:relative;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.35);}
+.pdf-page{position:relative;width:min(100%,720px);background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.35);}
 .pdf-page canvas{display:block;}
 /* pdf.js 文本层：透明、可选中、逐块绝对定位 */
 .textLayer{position:absolute;inset:0;overflow:hidden;line-height:1;text-align:initial;forced-color-adjust:none;transform-origin:0 0;caret-color:CanvasText;z-index:1;}

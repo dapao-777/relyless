@@ -1,5 +1,5 @@
 import { DEFAULT_SETTINGS, DOMAINS, wordId, normalizeSettings, activeApiProvider } from './shared.js';
-import {apiServiceOrigins,apiServiceReady,getApiProvider,normalizeApiService} from './api-providers.mjs';
+import {apiServiceOrigins,apiServiceReady,getApiProvider,isJudgmentProvider,JUDGMENT_PROTOCOLS,normalizeApiService} from './api-providers.mjs';
 import {listProviderModels,performProviderRequest,providerRequestTimeoutMs} from './api-transport.mjs';
 import {analyze,analyzeBatch,englishTokenStats,historyMatches,identifyPageLanguage,isKnownTerm,localReferenceFor,resolveCanonicalTerm} from './lexicon.js';
 import { encounter, interact, migrateSupportWord, normalizeKnownAt, normalizeSenseLabel, readingEvidence } from './reading.js';
@@ -9,7 +9,7 @@ import {normalizeRulePacks} from './rule-pack.js';
 import {classifyLocal,embedLocal,countTokensLocal,nanoStatus,nanoAssist} from './local-classifier.js';
 import {assistanceProgress,translationProgress,conversationProgress} from './assistance-stream.mjs';
 import {SOURCE_DATA_INSTRUCTIONS,SUPPORT_POLICY_VERSION,SUPPORT_INSTRUCTIONS,SUPPORT_SCHEMA,ASSISTANCE_INSTRUCTIONS,assistanceSchema,normalizeSupportItems,prepareSupportItems,inspectSupportResponse,requestSupportWithCorrection,SUPPORT_CORRECTION_INSTRUCTIONS,normalizeSupportResult,normalizeAssistanceCommand,normalizeAssistanceRequest,normalizeAssistanceResult,normalizePreparationContext,EMERGENCY_SCHEMA,EMERGENCY_INSTRUCTIONS,normalizeEmergencyItems,normalizeEmergencyResult,PAGE_TRANSLATION_INSTRUCTIONS,normalizePageTranslationItems,inspectPageTranslationResult,normalizePageTranslationResult,CONVERSATION_INSTRUCTIONS,conversationSchema,normalizeConversationRequest,normalizeConversationResult} from './gloss.mjs';
-import {AUTO_SCRIPT_ID,ALL_HOSTS,VIDEO_SUPPORT_ENABLED,pageOrigin,sitePattern,validateAutomation,validateVideo,resolveAutomation,registrationMatches,requiredPermissionOrigins} from './activation.js';
+import {AUTO_SCRIPT_ID,ALL_HOSTS,VIDEO_SUPPORT_ENABLED,pageOrigin,sitePattern,validateAutomation,validateVideo,resolveAutomation,registrationMatches,requiredPermissionOrigins,dismissKeywordOrigin} from './activation.js';
 import {createDiagnostics} from './diagnostic-service.js';
 import {createConversationStore} from './conversation-store.js';
 import {collectConversationMemory} from './conversation-memory.js';
@@ -144,9 +144,10 @@ const sentenceGroupCacheReady=chrome.storage.session.get('sentenceGroupCache').t
 function persistSentenceGroupCache(expectedProvider){sentenceGroupCacheWrites=sentenceGroupCacheWrites.catch(()=>{}).then(async()=>{if(expectedProvider!==providerGeneration)return;await chrome.storage.session.set({sentenceGroupCache:Object.fromEntries(sentenceGroupCache)});});return sentenceGroupCacheWrites;}
 function clearProviderState() {
   supportCache.clear();supportInFlight.clear();sentenceGroupCache.clear();sentenceGroupInFlight.clear();translationCache.clear();translationInFlight.clear();providerError='';providerGeneration++;void pruneBackgroundQueue();
+  routeCacheGeneration++;routeCache={};routeCacheLoaded=true;routeCacheWrite=routeCacheWrite.catch(()=>{}).then(()=>chrome.storage.local.remove(ROUTE_CACHE_KEY)).catch(()=>{});
   void chrome.storage.session.remove('supportCache').catch(()=>{});
   sentenceGroupCacheWrites=sentenceGroupCacheWrites.catch(()=>{}).then(()=>chrome.storage.session.remove('sentenceGroupCache'));void sentenceGroupCacheWrites.catch(()=>{});
-  return clearEmergencySessions();
+  return Promise.all([clearEmergencySessions(),routeCacheWrite]);
 }
 // providerKind 'local'：Gemini Nano 只接 brief 查词提示，其余操作回落到首个可用服务。
 let nanoAvailability='unknown';
@@ -212,6 +213,9 @@ function publicState(state,trusted) {
 function text(value,name,max,required=true) { if (typeof value !== 'string' || value.length > max || (required && !value.trim())) throw new Error(name+'不能为空，且不能超过 '+max+' 个字符。'); return value.trim(); }
 function domain(value) { if (!Object.hasOwn(DOMAINS,value)) throw new Error('不支持的领域。'); return value; }
 function customDetectionService(api,model='') { return {id:'domain-detection',name:'领域识别 API',providerId:'openai-compatible',baseUrl:api.baseUrl,model,apiKey:api.apiKey,options:{}}; }
+// 判定通道（领域识别 / 路由判卷）可在支持判定协议的服务商之间切换；缺省为 Requesty。
+function judgmentProvider(detection){const provider=getApiProvider(detection?.jevProvider);return provider&&JUDGMENT_PROTOCOLS.includes(provider.protocol)?provider:getApiProvider('requesty');}
+function judgmentService(detection,{id='domain-detection-jev',name='Jev 领域识别',apiKey}={}){const provider=judgmentProvider(detection),same=!detection?.jevProvider||detection.jevProvider===provider.id;return normalizeApiService({id,name,providerId:provider.id,baseUrl:((same?detection?.jevBaseUrl:'')||provider.baseUrl).trim(),model:((same?detection?.jevModel:'')||provider.defaultModel).trim(),apiKey:apiKey??(detection?.jevApiKey||''),options:{}});}
 function validatePatch(patch,currentSettings) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('无效设置。');
   const result={}; for (const key of Object.keys(patch)) if (!Object.hasOwn(DEFAULT_SETTINGS,key)) throw new Error('未知设置项。');
@@ -237,16 +241,18 @@ function validatePatch(patch,currentSettings) {
   if (patch.domainDetection !== undefined) {
     const d=patch.domainDetection; if (!d || !['local','chatgpt','grok','antigravity','api','jev'].includes(d.mode) || typeof d.useTranslationApi !== 'boolean') throw new Error('无效的领域识别配置。');
     const api={baseUrl:text(d.api?.baseUrl,'识别 API 地址',2048),apiKey:text(d.api?.apiKey ?? '','识别 API Key',4096,false)}; apiServiceOrigins(customDetectionService(api));
-    const jevBaseUrl=text(d.jevBaseUrl ?? 'https://router.requesty.ai/v1','Jev 接口地址',2048,false) || 'https://router.requesty.ai/v1';
-    const jevModel=text(d.jevModel ?? 'typesafe/jev-1.13.0','Jev 模型',150,d.mode==='jev');
+    const jevProviderId=text(d.jevProvider ?? 'requesty','判定接入',60,false)||'requesty',jevProvider=getApiProvider(jevProviderId);
+    if(!jevProvider||!JUDGMENT_PROTOCOLS.includes(jevProvider.protocol))throw new Error('无效的判定接入服务。');
+    const jevBaseUrl=text(d.jevBaseUrl ?? jevProvider.baseUrl,'Jev 接口地址',2048,false) || jevProvider.baseUrl;
+    const jevModel=text(d.jevModel ?? jevProvider.defaultModel,'Jev 模型',150,d.mode==='jev');
     const jevApiKey=text(d.jevApiKey ?? '','Jev API Key',4096,false);
-    if(d.mode==='jev'||jevApiKey)apiServiceOrigins(normalizeApiService({id:'domain-detection-jev',name:'Jev 领域识别',providerId:'requesty',baseUrl:jevBaseUrl,model:jevModel,apiKey:jevApiKey||'pending',options:{}}));
-    result.domainDetection={mode:d.mode,subscriptionModel:text(d.subscriptionModel ?? '','识别订阅模型',150,isSubscriptionKind(d.mode)),apiModel:text(d.apiModel ?? '','识别 API 模型',150,d.mode==='api'),useTranslationApi:d.useTranslationApi,api,jevModel,jevApiKey,jevBaseUrl};
+    if(d.mode==='jev'||jevApiKey)apiServiceOrigins(normalizeApiService({id:'domain-detection-jev',name:'Jev 领域识别',providerId:jevProvider.id,baseUrl:jevBaseUrl,model:jevModel,apiKey:jevApiKey||'pending',options:{}}));
+    result.domainDetection={mode:d.mode,subscriptionModel:text(d.subscriptionModel ?? '','识别订阅模型',150,isSubscriptionKind(d.mode)),apiModel:text(d.apiModel ?? '','识别 API 模型',150,d.mode==='api'),useTranslationApi:d.useTranslationApi,api,jevProvider:jevProvider.id,jevModel,jevApiKey,jevBaseUrl};
   }
   if (patch.providerKind !== undefined) { if (!['chatgpt','grok','antigravity','api','local'].includes(patch.providerKind)) throw new Error('不支持的服务类型。'); result.providerKind=patch.providerKind; }
   if (patch.apiServices !== undefined) {
     if (!Array.isArray(patch.apiServices) || patch.apiServices.length>20) throw new Error('API 服务最多保存 20 个。');
-    const ids=new Set();result.apiServices=patch.apiServices.map(value=>{const service=normalizeApiService(value);service.id=text(service.id,'服务编号',128);service.name=text(service.name,'服务名称',60);service.baseUrl=text(service.baseUrl,'API 地址',2048);service.model=text(service.model,'模型',150);service.apiKey=text(service.apiKey,'API Key',4096,false);if(!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(service.id)||ids.has(service.id))throw new Error('API 服务编号必须安全且唯一。');if(!getApiProvider(service.providerId).keyOptional&&!service.apiKey&&!currentSettings.apiServices?.some(item=>item.id===service.id))throw new Error('API Key 不能为空。');apiServiceOrigins(service);ids.add(service.id);return service;});
+    const ids=new Set();result.apiServices=patch.apiServices.map(value=>{const service=normalizeApiService(value);if(isJudgmentProvider(service.providerId))throw new Error('“'+service.name+'”是判定协议服务，只能应答判定载荷，不能保存为 API 服务；请在领域识别的判定接入中配置。');service.id=text(service.id,'服务编号',128);service.name=text(service.name,'服务名称',60);service.baseUrl=text(service.baseUrl,'API 地址',2048);service.model=text(service.model,'模型',150);service.apiKey=text(service.apiKey,'API Key',4096,false);if(!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(service.id)||ids.has(service.id))throw new Error('API 服务编号必须安全且唯一。');if(!getApiProvider(service.providerId).keyOptional&&!service.apiKey&&!currentSettings.apiServices?.some(item=>item.id===service.id))throw new Error('API Key 不能为空。');apiServiceOrigins(service);ids.add(service.id);return service;});
   }
   if (patch.activeApiServiceId !== undefined) result.activeApiServiceId=text(patch.activeApiServiceId,'当前 API 服务',128,false);
   const services=result.apiServices??currentSettings.apiServices,active=result.activeApiServiceId??currentSettings.activeApiServiceId;
@@ -355,7 +361,7 @@ async function classifyText(settings,source,title,{force = false,guard = async (
     if (detection.mode === 'jev') {
       if (!detection.jevApiKey) throw new Error('请先填写 Jev API Key，再使用 Jev 增强识别。');
       if (!detection.jevModel) throw new Error('请先填写 Jev 模型。');
-      const service=normalizeApiService({id:'domain-detection-jev',name:'Jev 领域识别',providerId:'requesty',baseUrl:detection.jevBaseUrl,model:detection.jevModel,apiKey:detection.jevApiKey,options:{}});
+      const service=judgmentService(detection);
       if (!apiServiceReady(service)) throw new Error('请先配置 Jev 领域识别的接口与模型。');
       const criteria={tech:'software and AI',data:'databases and data engineering',finance:'finance and business',medical:'medicine and life sciences',legal:'law',design:'design and products',general:'everyday text, mixed topics or insufficient evidence'};
       const value=await withBackgroundSlot(()=>apiRequest(service,{state:`Title: ${title}
@@ -433,7 +439,7 @@ async function apiRequest(provider,payload,instructions,schema,{onContent,trace,
   const resolveFallback=async primary=>{
     const id=primary.fallbackServiceId;if(!id)return null;
     const row=(settings.apiServices||[]).find(value=>value?.id===id);
-    if(!row||row.id===primary.id||!apiServiceReady(row))return null;
+    if(!row||row.id===primary.id||!apiServiceReady(row)||isJudgmentProvider(row.providerId))return null;
     try{const fallback=normalizeApiService(row);await requireApiPermission(fallback);return fallback;}catch{return null;}
   };
   const attempt=async current=>{
@@ -935,19 +941,22 @@ async function reviewFeedback(message){
 }
 // 模型路由：判卷凭据复用领域识别的 Jev 配置（一份 Key），判断结果按 操作+内容+设置版本 缓存。
 const ROUTE_CACHE_KEY = 'routeDecisions';
-let routeCache = null, routeCacheLoaded = false;
+let routeCache = null, routeCacheLoaded = false, routeCacheGeneration = 0;
 const routingStats = {judged: 0, escalated: 0, judgeFailed: 0, cacheHits: 0, skipped: 0};
 async function loadRouteCache() {
   if (routeCacheLoaded) return routeCache;
+  const generation=routeCacheGeneration;
   const data = await chrome.storage.local.get(ROUTE_CACHE_KEY);
+  if(generation!==routeCacheGeneration)return routeCache;
   const plan = data[ROUTE_CACHE_KEY];
   routeCache = plan && typeof plan === 'object' && !Array.isArray(plan) ? plan : {};
   routeCacheLoaded = true;
   return routeCache;
 }
 let routeCacheWrite = Promise.resolve();
-async function saveRouteCache() {
-  routeCacheWrite = routeCacheWrite.then(async () => { await chrome.storage.local.set({[ROUTE_CACHE_KEY]: routeCache}); }).catch(() => {});
+async function saveRouteCache(generation) {
+  const snapshot=routeCache;
+  routeCacheWrite = routeCacheWrite.catch(()=>{}).then(async () => {if(generation===routeCacheGeneration)await chrome.storage.local.set({[ROUTE_CACHE_KEY]:snapshot});}).catch(() => {});
   return routeCacheWrite;
 }
 // 模型用量统计：仅聚合 请求数/错误数/token 数（按天+服务+模型+操作），不存任何内容；本地保存，记忆清理时一并删除。
@@ -990,23 +999,21 @@ async function clearModelUsage() {
   return work;
 }
 function routingSettingsOf(settings) { return normalizeRouting(settings?.routing || {}, DEFAULT_SETTINGS.routing); }
-function routingVersion(settings) {
+async function routingVersion(settings, judge) {
   const routing = routingSettingsOf(settings);
-  return JSON.stringify([routing.enabled, routing.premiumServiceId, routing.minConfidence, routing.operations]);
+  const judgeIdentity = judge ? [judge.providerId, judge.baseUrl, judge.model, await hashValue(judge.apiKey || '')] : null;
+  return JSON.stringify([routing.enabled, routing.premiumServiceId, routing.minConfidence, routing.operations, judgeIdentity]);
 }
 function judgeService(settings) {
   const detection = settings?.domainDetection || {};
-  const baseUrl = (detection.jevBaseUrl || 'https://router.requesty.ai/v1').trim();
-  const model = (detection.jevModel || 'typesafe/jev-1.13.0').trim();
-  const apiKey = detection.jevApiKey || '';
-  if (!apiKey || !model) return null;
-  try { return normalizeApiService({id: 'route-judge', name: '路由判定', providerId: 'requesty', baseUrl, model, apiKey, options: {}}); } catch { return null; }
+  if (!detection.jevApiKey || !(detection.jevModel || judgmentProvider(detection).defaultModel)) return null;
+  try { return judgmentService(detection,{id: 'route-judge', name: '路由判定'}); } catch { return null; }
 }
 function premiumTarget(settings, routing, operation) {
   if (!routing.premiumServiceId) return null;
   if (routing.premiumServiceId === ROUTING_LIMITS.SUBSCRIPTION_TARGET) return operation!=='conversation'&&subscriptionStatus().authenticated ? {kind: 'subscription', service: null} : null;
   const found = (settings.apiServices || []).find(service => service.id === routing.premiumServiceId);
-  if (!found || !apiServiceReady(found)) return null;
+  if (!found || !apiServiceReady(found) || isJudgmentProvider(found.providerId)) return null;
   return {kind: 'api', service: found};
 }
 // 返回 {kind, service, reason}；任何失败都回落主路由，绝不阻塞请求。
@@ -1016,13 +1023,14 @@ async function chooseRoute(operation, summary, {settings, guard = async () => {}
   if (!routing.enabled || !routing.operations[operation]) { routingStats.skipped++; return primary; }
   const judge = judgeService(settings);
   if (!judge) { routingStats.skipped++; return {...primary, reason: 'judge-unconfigured'}; }
-  const cache = incognito ? {} : await loadRouteCache(), key = routeCacheKey(operation, summary, routingVersion(settings)), now = Date.now();
+  const generation=routeCacheGeneration,cache = incognito ? {} : await loadRouteCache(), key = routeCacheKey(operation, summary, await routingVersion(settings, judge)), now = Date.now();
   const remember = async (route, reason) => {
-    if (incognito) return;
+    if (incognito||generation!==routeCacheGeneration) return;
     cache[key] = {at: now, route, reason};
     routeCache = pruneRouteCache(cache, now, routing.cacheTtlMinutes);
-    await saveRouteCache();
+    await saveRouteCache(generation);
   };
+  if(generation!==routeCacheGeneration)return {...primary,reason:'judge-invalidated'};
   const hit = cache[key];
   if (hit && now - hit.at < routing.cacheTtlMinutes * 60000) {
     routingStats.cacheHits++;
@@ -1034,9 +1042,11 @@ async function chooseRoute(operation, summary, {settings, guard = async () => {}
   }
   let answers = null;
   try {
-    const value = await withBackgroundSlot(() => apiRequest(judge, {state: summary, questions: routingQuestions()}, undefined, undefined, {trace, beforeRequest: guard}), guard);
+    const value = await withBackgroundSlot(() => apiRequest(judge, {state: summary, questions: routingQuestions(getApiProvider(judge.providerId)?.protocol)}, undefined, undefined, {trace, beforeRequest: guard}), guard);
     answers = value?.answers || null;
+    if(generation!==routeCacheGeneration)return {...primary,reason:'judge-invalidated'};
   } catch { routingStats.judgeFailed++; }
+  if(generation!==routeCacheGeneration)return {...primary,reason:'judge-invalidated'};
   if (!answers) {
     await remember('primary', 'judge-failed');
     return {...primary, reason: 'judge-failed'};
@@ -1336,8 +1346,34 @@ async function clearAutomaticSentenceModes(tabId=null) {
 }
 
 
+// 无痕窗口的「不再提示」只写入会话存储，绝不落入本机设置；会话忽略仅作用于无痕上下文，
+// 不并入普通窗口的判定，避免无痕浏览痕迹影响常规页面。
+const keywordHintDismissedKey = 'keywordHintDismissed';
+let keywordHintDismissedWrites=Promise.resolve();
+function clearPrivateKeywordHintsIfClosed(){
+  keywordHintDismissedWrites=keywordHintDismissedWrites.catch(()=>{}).then(async()=>{
+    const windows=await chrome.windows.getAll();
+    if(!windows.some(window=>window.incognito))await chrome.storage.session.remove(keywordHintDismissedKey);
+  });
+  return keywordHintDismissedWrites;
+}
+const keywordHintPrivateReady=chrome.windows?.getAll?clearPrivateKeywordHintsIfClosed():Promise.resolve();
+chrome.windows?.onRemoved?.addListener(()=>{void clearPrivateKeywordHintsIfClosed().catch(()=>{});});
+async function keywordHintDismissedSession() {
+  await keywordHintPrivateReady;
+  const stored = (await chrome.storage.session.get(keywordHintDismissedKey))[keywordHintDismissedKey];
+  return Array.isArray(stored) ? stored.filter(entry => typeof entry === 'string') : [];
+}
+async function automationWithSessionDismissed(automation,incognito=false) {
+  if (!incognito) return automation;
+  const session = await keywordHintDismissedSession();
+  if (!session.length) return automation;
+  const hints = automation.keywordHints;
+  return {...automation, keywordHints: {...hints, dismissed: [...new Set([...hints.dismissed, ...session])]}};
+}
+
 async function automationResult(settings,tab,paused,authorizeSentenceGroups=false) {
-  const resolved = resolveAutomation(settings.automation,tab?.url || '',paused);
+  const resolved = resolveAutomation(await automationWithSessionDismissed(settings.automation,tab?.incognito===true),tab?.url || '',paused);
   const pattern = resolved.origin ? sitePattern(resolved.origin) : null;
   const authorized = !pattern || await chrome.permissions.contains({origins:[pattern]});
   const sentenceGroups=await effectiveSentenceGroupsMode(settings,tab,paused,authorizeSentenceGroups);
@@ -1355,7 +1391,9 @@ function providerPermissionPatterns(settings) {
   const add = service => { try { for(const origin of apiServiceOrigins(service))patterns.add(origin+'/*'); } catch {} };
   for (const service of settings.apiServices) add(service);
   if (settings.domainDetection.mode === 'api' && settings.domainDetection.api.apiKey) add(customDetectionService(settings.domainDetection.api,settings.domainDetection.apiModel));
-  if (settings.domainDetection.mode === 'jev' && settings.domainDetection.jevApiKey) add(normalizeApiService({id:'domain-detection-jev',name:'Jev 领域识别',providerId:'requesty',baseUrl:settings.domainDetection.jevBaseUrl,model:settings.domainDetection.jevModel,apiKey:settings.domainDetection.jevApiKey,options:{}}));
+  // 判定接入同时服务领域识别与模型路由判卷：任一使用者在用就保留主机权限，关闭最后一个使用者才回收。
+  const judgeInUse = settings.domainDetection.mode === 'jev' || routingSettingsOf(settings).enabled;
+  if (judgeInUse && settings.domainDetection.jevApiKey) add(judgmentService(settings.domainDetection));
   return patterns;
 }
 
@@ -1429,12 +1467,60 @@ async function activateTab(tab) {
   await chrome.tabs.sendMessage(tabId,{type:'SS_AUTO_START',origin:expectedOrigin,reading,video,sentenceGroups,paused:status.paused,assistanceMode:settings.assistanceMode},{frameId:0}).catch(() => {});
 }
 let automationReconciliation = Promise.resolve();
+const keywordHintKey=tabId=>'keywordHint:'+tabId;
+const tabErrorKey=tabId=>'tabError:'+tabId;
+const tabStatusQueues=new Map();
+function withTabStatus(tabId,fn) {
+  const run=(tabStatusQueues.get(tabId)||Promise.resolve()).catch(()=>{}).then(fn);
+  tabStatusQueues.set(tabId,run);
+  void run.finally(()=>{if(tabStatusQueues.get(tabId)===run)tabStatusQueues.delete(tabId);});
+  return run;
+}
+function resetBadge(tabId) {
+  return Promise.all([
+    chrome.action.setBadgeText({tabId,text:''}),
+    chrome.action.setTitle({tabId,title:'RelyLess'})
+  ]);
+}
+async function applyKeywordHint(tabId,url) {
+  if (!Number.isInteger(tabId)) return;
+  const key=keywordHintKey(tabId);
+  const {settings:raw}=await chrome.storage.local.get('settings');
+  const incognito=await chrome.tabs.get(tabId).then(value=>value?.incognito===true).catch(()=>false);
+  const automation=await automationWithSessionDismissed(normalizeSettings(raw).automation,incognito);
+  if (automation.keywordHints.badge&&url===undefined) url=await chrome.webNavigation.getFrame({tabId,frameId:0}).then(frame=>frame?.url||'').catch(()=>null);
+  if (url===null) return;
+  const keyword=automation.keywordHints.badge&&url?resolveAutomation(automation,url).keywordHint:null;
+  if (keyword) {
+    if ((await chrome.storage.session.get(tabErrorKey(tabId)))[tabErrorKey(tabId)]) return;
+    await Promise.allSettled([
+      chrome.action.setBadgeBackgroundColor({tabId,color:'#70509c'}),
+      chrome.action.setBadgeText({tabId,text:'+'}),
+      chrome.action.setTitle({tabId,title:`RelyLess：域名含“${keyword}”，可在弹窗中为此网站开启自动辅助`}),
+      chrome.storage.session.set({[key]:true})
+    ]);
+    return;
+  }
+  if (!(await chrome.storage.session.get(key))[key]) return;
+  await Promise.allSettled([resetBadge(tabId),chrome.storage.session.remove(key)]);
+}
+function refreshKeywordHint(tabId,url) {
+  return withTabStatus(tabId,()=>applyKeywordHint(tabId,url));
+}
+chrome.webNavigation.onCommitted.addListener(details => {
+  if (details.frameId !== 0) return;
+  void withTabStatus(details.tabId,async()=>{
+    await chrome.storage.session.remove(tabErrorKey(details.tabId));
+    await applyKeywordHint(details.tabId,details.url);
+  }).catch(error => console.error('更新文档类网站提示失败',error));
+},{url:[{schemes:['http','https']}]});
 function reconcileAutomation() {
   const work = automationReconciliation.catch(() => {}).then(async () => {
     const {settings}=await load(false);
     await reconcileAutoScript(settings);
     const tabs = await chrome.tabs.query({});
     await Promise.allSettled(tabs.map(activateTab));
+    await Promise.allSettled(tabs.map(tab=>refreshKeywordHint(tab.id)));
   });
   automationReconciliation = work;
   return work;
@@ -1485,6 +1571,15 @@ async function handle(message,sender) {
     case 'AUTO_BOOTSTRAP_CHECK':if(!Number.isInteger(sender.tab?.id)||sender.frameId!==0)throw new Error('自动开启只能由网页主框架检查。');await activateTab({...sender.tab,url:sender.url||sender.tab.url});return{};
     case 'AUTOMATION_GET':{const [{settings},tab]=await Promise.all([load(false),requestedTab(message,sender)]);return automationResult(settings,tab,Boolean(tab?.id&&await tabPaused(tab.id)));}
     case 'AUTOMATION_PATCH':{const settings=await patchAutomation(message.patch);await reconcileAutomation();const tab=await requestedTab(message,sender);return automationResult(settings,tab,Boolean(tab?.id&&await tabPaused(tab.id)));}
+    // 无痕窗口的「不再提示」只保留到会话结束；普通窗口持久化且有界回收最早条目。
+    case 'KEYWORD_HINT_DISMISS':{const [{settings},tab]=await Promise.all([load(false),requestedTab(message,sender)]);
+      const origin=pageOrigin(tab?.url||'');
+      if(!origin)throw new Error('当前页面不能设置网站提示。');
+      const paused=Boolean(tab?.id&&await tabPaused(tab.id));
+      if(tab?.incognito===true){await keywordHintPrivateReady;keywordHintDismissedWrites=keywordHintDismissedWrites.catch(()=>{}).then(async()=>chrome.storage.session.set({[keywordHintDismissedKey]:dismissKeywordOrigin(await keywordHintDismissedSession(),origin)}));await keywordHintDismissedWrites;await refreshKeywordHint(tab.id);return automationResult(settings,tab,paused);}
+      const hints=settings.automation.keywordHints;
+      const updated=await patchAutomation({keywordHints:{...hints,dismissed:dismissKeywordOrigin(hints.dismissed,origin)}});
+      await refreshKeywordHint(tab.id);return automationResult(updated,tab,paused);}
     case 'PAGE_ACTIVITY_SET':if(!Number.isInteger(sender.tab?.id)||sender.frameId!==0||typeof message.enabled!=='boolean')throw new Error('无效的页面活动状态。');await setTabPaused(sender.tab.id,!message.enabled);return{paused:!message.enabled};
     case 'VIDEO_SETTINGS_PATCH':{if(!trusted&&(!Number.isInteger(sender.tab?.id)||sender.frameId!==0))throw new Error('视频设置只能由网页主框架更新。');const video=await mutate(state=>{const next=validateVideo(message.patch,state.settings.video);state.settings={...state.settings,video:next};return next;},false,false);await broadcastVideoSettings(video);return{video};}
     case 'YOUTUBE_CAPTIONS_BRIDGE':{if(!VIDEO_SUPPORT_ENABLED)throw new Error('视频字幕功能暂未开放。');if(!Number.isInteger(sender.tab?.id)||sender.frameId!==0)throw new Error('字幕桥只能由当前网页主框架启用。');const {url}=await tabPage(sender.tab.id,sender.url);if(url.protocol!=='https:'||!['www.youtube.com','m.youtube.com'].includes(url.hostname))throw new Error('字幕桥仅适用于 YouTube。');await chrome.scripting.executeScript({target:{tabId:sender.tab.id,frameIds:[0]},world:'MAIN',files:['youtube-captions-bridge.js']});return{};}
@@ -1542,7 +1637,7 @@ async function handle(message,sender) {
     case 'INTERACT':return interactOffered(message,sender);
     case 'READING_DATA_EXPORT':return readingExport();
     case 'MEMORY_CLEAR':return clearReadingData('memory');
-    case 'CACHE_CLEAR':clearProviderState();await clearResultCaches();await clearSupportSessions();return {cleared:true};
+    case 'CACHE_CLEAR':await clearProviderState();await clearResultCaches();await clearSupportSessions();return {cleared:true};
     case 'OPEN_OPTIONS':await chrome.runtime.openOptionsPage();return{};
     default:throw new Error('未知请求。');
   }
@@ -1590,7 +1685,7 @@ chrome.runtime.onInstalled.addListener(registerContextMenus);
 chrome.runtime.onStartup.addListener(registerContextMenus);
 void registerContextMenus();
 async function forgetTabAutomation(tabId) {
-  await chrome.storage.session.remove([tabPauseKey(tabId),offeredKey(tabId),pendingKey(tabId),assistCacheKey(tabId),'pageDomain:'+tabId]);
+  await chrome.storage.session.remove([tabPauseKey(tabId),offeredKey(tabId),pendingKey(tabId),assistCacheKey(tabId),'pageDomain:'+tabId,keywordHintKey(tabId),tabErrorKey(tabId)]);
   for(const key of assistQueues.keys())if(key.startsWith(tabId+':')){assistQueues.delete(key);commitFlights.delete(key);}
 }
 
@@ -1616,34 +1711,44 @@ chrome.tabs.onRemoved.addListener(tabId => {
   void forgetTabAutomation(tabId);
 });
 // PDF 主框架导航重定向到自带阅读页；#relyless-native 是“在原生查看器打开”的逃逸标记。
+const pdfNavigationGenerations=new Map();
+chrome.tabs.onRemoved.addListener(tabId=>pdfNavigationGenerations.delete(tabId));
 chrome.webNavigation?.onBeforeNavigate?.addListener(details=>{
   if(details.frameId!==0||details.tabId<0)return;
+  const generation=(pdfNavigationGenerations.get(details.tabId)||0)+1;
+  pdfNavigationGenerations.set(details.tabId,generation);
   let url;try{url=new URL(details.url);}catch{return;}
-  if(!['http:','https:'].includes(url.protocol)||url.hash==='#relyless-native')return;
-  if(!url.pathname.toLowerCase().endsWith('.pdf'))return;
-  void load(false).then(({settings})=>{
-    if(!settings.pdfReader)return;
-    void chrome.tabs.update(details.tabId,{url:pdfViewerPrefix()+encodeURIComponent(url.href)}).catch(()=>{});
+  if(!['http:','https:'].includes(url.protocol)||url.hash==='#relyless-native'||!url.pathname.toLowerCase().endsWith('.pdf'))return;
+  void load(false).then(async({settings})=>{
+    if(!settings.pdfReader||pdfNavigationGenerations.get(details.tabId)!==generation)return;
+    const tab=await chrome.tabs.get(details.tabId).catch(()=>null);
+    if(!tab||pdfNavigationGenerations.get(details.tabId)!==generation)return;
+    await chrome.tabs.update(details.tabId,{url:pdfViewerPrefix()+encodeURIComponent(url.href)}).catch(()=>{});
   }).catch(()=>{});
 });
 void reconcileAutomation().catch(error => console.error('初始化自动开启策略失败',error));
 
 
-async function clearTabStatus(tabId) {
-  await Promise.all([
-    chrome.action.setBadgeText({tabId,text:''}),
-    chrome.action.setTitle({tabId,title:'RelyLess'})
-  ]);
+function clearTabStatus(tabId) {
+  return withTabStatus(tabId,async()=>{
+    if (!(await chrome.storage.session.get(tabErrorKey(tabId)))[tabErrorKey(tabId)]) return;
+    await Promise.allSettled([resetBadge(tabId),chrome.storage.session.remove(tabErrorKey(tabId))]);
+    await applyKeywordHint(tabId);
+  });
 }
 
-async function showTabError(tabId,error,fallback) {
+function showTabError(tabId,error,fallback) {
   const message = error instanceof Error && error.message ? error.message : fallback;
   console.error(fallback,error);
-  await Promise.allSettled([
-    chrome.action.setBadgeBackgroundColor({tabId,color:'#B42318'}),
-    chrome.action.setBadgeText({tabId,text:'!'}),
-    chrome.action.setTitle({tabId,title:`RelyLess：${message}`})
-  ]);
+  return withTabStatus(tabId,async()=>{
+    await Promise.allSettled([
+      chrome.action.setBadgeBackgroundColor({tabId,color:'#B42318'}),
+      chrome.action.setBadgeText({tabId,text:'!'}),
+      chrome.action.setTitle({tabId,title:`RelyLess：${message}`}),
+      chrome.storage.session.set({[tabErrorKey(tabId)]:true}),
+      chrome.storage.session.remove(keywordHintKey(tabId))
+    ]);
+  });
 }
 
 async function toggleReading(tab) {
