@@ -257,6 +257,18 @@ test('OpenAI reasoning models and explicit effort omit temperature on both proto
   expect(sent.at(-1).reasoning_effort).toBe('medium');expect(sent.at(-1).temperature).toBeUndefined();
 });
 
+test('o-series Chat probe and answer use max_completion_tokens, not the rejected max_tokens',async()=>{
+  const sent=[];rawFetch(async(_url,init)=>{
+    const body=requestBody(init);sent.push(body);
+    if('max_tokens' in body)return new Response('',{status:400});
+    return capabilityFormat(body)?capabilitySuccess(body):Response.json({choices:[{finish_reason:'stop',message:{content:'{"value":"ok"}'}}]});
+  });
+  const configured={...service('openai-compatible','https://api.openai.com/v1','o3-mini'),apiKey:'o-series-probe',options:{thinking:'medium'}};
+  expect(await performProviderRequest(configured,{},'Explain.',schema)).toEqual({value:'ok'});
+  expect(sent.map(body=>body.max_completion_tokens)).toEqual([128,8192]);
+  expect(sent.every(body=>!('max_tokens' in body))).toBe(true);
+});
+
 test('Gemini reports billed thought tokens as output usage',async()=>{
   let usage;globalThis.fetch=async()=>Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:'{"value":"ok"}'}]}}],usageMetadata:{promptTokenCount:11,candidatesTokenCount:5,thoughtsTokenCount:40}});
   await performProviderRequest({...service('google','https://generativelanguage.googleapis.com/v1beta','gemini-2.5-flash'),options:{thinking:'low'}},{},'Explain.',schema,{onUsage:value=>{usage=value;}});
@@ -432,6 +444,18 @@ test('StepFun reasoning models request the lowest effort instead of a thinking s
   expect(sent[0].reasoning_effort).toBe('low');expect(sent[0].thinking).toBeUndefined();
   await performProviderRequest(service('stepfun','https://api.stepfun.com/v1','step-1-flash'),{},'Explain.',schema);
   expect(sent.at(-1).reasoning_effort).toBeUndefined();
+});
+
+test('always-reasoning chat has enough headroom to return a readable answer',async()=>{
+  const sent=[];globalThis.fetch=async(_url,init)=>{
+    const body=requestBody(init);sent.push(body);
+    if(body.max_tokens<32768)return Response.json({choices:[{finish_reason:'length',message:{content:''}}]});
+    return Response.json({choices:[{finish_reason:'stop',message:{content:'{"value":"ok"}'}}]});
+  };
+  expect(await performProviderRequest(service('stepfun','https://api.stepfun.com/v1','step-3.5-flash'),{},'Explain.',schema)).toEqual({value:'ok'});
+  expect(sent.at(-1).max_tokens).toBe(32768);
+  await expect(performProviderRequest(service('stepfun','https://api.stepfun.com/v1','step-1-flash'),{},'Explain.',schema)).rejects.toMatchObject({code:'OUTPUT_LIMIT'});
+  expect(sent.at(-1).max_tokens).toBe(8192);
 });
 
 test('always-reasoning chat models skip the strict-schema probe and request json_object directly',async()=>{
