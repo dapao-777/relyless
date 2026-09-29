@@ -1,5 +1,5 @@
 import {afterEach,beforeEach,expect,test} from 'bun:test';
-import {performProviderRequest,providerRequestTimeoutMs} from '../extension/api-transport.mjs';
+import {performProviderRequest,listProviderModels,providerRequestTimeoutMs} from '../extension/api-transport.mjs';
 import {translationProgress} from '../extension/assistance-stream.mjs';
 import {EMERGENCY_SCHEMA} from '../extension/gloss.mjs';
 
@@ -97,6 +97,11 @@ test('HTTP failures do not read or expose a provider body that may echo secrets'
   expect(error.message).not.toContain('secret-key');
   expect(error.message).not.toContain('private prompt');
   expect(bodyRead).toBe(false);
+});
+
+test('HTTP 402 maps to a quota error instead of a misleading endpoint message',async()=>{
+  globalThis.fetch=async()=>({ok:false,status:402,json:async()=>({code:30001,message:'Sorry, your account balance is insufficient'})});
+  await expect(performProviderRequest(service('siliconflow-systemone','https://api.siliconflow.cn/v1','diffusiongemma'),{state:'s',questions:{q:{type:'choice',instructions:'i'}}},undefined,undefined,{})).rejects.toMatchObject({code:'QUOTA',detail:{httpStatus:402}});
 });
 
 
@@ -438,6 +443,47 @@ test('the jev protocol rejects empty state, malformed questions, and invalid ans
   await expect(performProviderRequest(jevService(), {state: 'text', questions: {domain: {type: 'noul', instructions: 'x'}}}, undefined, undefined, {})).rejects.toMatchObject({code: 'JEV_ANSWER'});
 });
 
+const systemoneService = (overrides = {}) => ({
+  id: 'domain-detection-jev', name: 'Jev 领域识别', providerId: 'siliconflow-systemone',
+  baseUrl: 'https://api.siliconflow.cn/v1', model: 'diffusiongemma', apiKey: 'sf-key', ...overrides,
+});
+
+test('the systemone protocol posts state and questions to /systemone and normalizes the answers map', async () => {
+  let url = '', body = null;
+  const usage = [];
+  globalThis.fetch = async (requestUrl, init) => { url = String(requestUrl); body = JSON.parse(init.body); return Response.json({answers: {domain: {selected: 'tech', probabilities: {tech: 0.9, general: 0.1}}, tone: {score: '6.5'}, enough: {probability: 0.7}}, usage: {input_tokens: 120, output_tokens: 30}}); };
+  const questions = {
+    domain: {type: 'choice', instructions: 'Pick one domain.', criteria: {tech: 'software and AI', general: 'everything else'}},
+    tone: {type: 'score', instructions: 'Rate the tone.'},
+    enough: {type: 'noul', instructions: 'Is there enough context?'},
+  };
+  const result = await performProviderRequest(systemoneService(), {state: 'Title: T\n\nPassage:\nThe query uses an index.', questions}, undefined, undefined, {onUsage: value => usage.push(value)});
+  expect(url).toBe('https://api.siliconflow.cn/v1/systemone');
+  expect(body).toEqual({model: 'diffusiongemma', state: 'Title: T\n\nPassage:\nThe query uses an index.', questions});
+  expect(result.answers.domain).toEqual({kind: 'choice', selected: 'tech', confidence: null, probabilities: {tech: 0.9, general: 0.1}});
+  expect(result.answers.tone).toEqual({kind: 'score', score: 6.5});
+  expect(result.answers.enough).toEqual({kind: 'noul', probability: 0.7});
+  expect(usage).toEqual([{input: 120, output: 30}]);
+});
+
+test('the systemone usage extractor accepts the openai token field names too', async () => {
+  const usage = [];
+  globalThis.fetch = async () => Response.json({answers: {domain: {selected: 'tech'}}, usage: {prompt_tokens: 9, completion_tokens: 4}});
+  const questions = {domain: {type: 'choice', instructions: 'Pick one.', criteria: {tech: 'software and AI'}}};
+  await performProviderRequest(systemoneService(), {state: 'text', questions}, undefined, undefined, {onUsage: value => usage.push(value)});
+  expect(usage).toEqual([{input: 9, output: 4}]);
+});
+
+test('the systemone protocol rejects malformed envelopes and invalid answers', async () => {
+  const questions = {domain: {type: 'choice', instructions: 'Pick one.'}};
+  globalThis.fetch = async () => Response.json({choices: []});
+  await expect(performProviderRequest(systemoneService(), {state: 'text', questions}, undefined, undefined, {})).rejects.toMatchObject({code: 'JEV_FORMAT'});
+  globalThis.fetch = async () => Response.json({answers: {domain: {selected: ' '}}});
+  await expect(performProviderRequest(systemoneService(), {state: 'text', questions}, undefined, undefined, {})).rejects.toMatchObject({code: 'JEV_ANSWER'});
+  globalThis.fetch = async () => Response.json({answers: {domain: {score: 'abc'}}});
+  await expect(performProviderRequest(systemoneService(), {state: 'text', questions: {domain: {type: 'score', instructions: 'x'}}}, undefined, undefined, {})).rejects.toMatchObject({code: 'JEV_ANSWER'});
+});
+
 test('StepFun reasoning models request the lowest effort instead of a thinking switch',async()=>{
   const sent=[];globalThis.fetch=async(_url,init)=>{sent.push(requestBody(init));return Response.json({choices:[{finish_reason:'stop',message:{content:'{"value":"ok"}'}}]});};
   await performProviderRequest(service('stepfun','https://api.stepfun.com/v1','step-3.7-flash'),{},'Explain.',schema);
@@ -475,4 +521,11 @@ test('a truncated capability probe falls back to json_object instead of failing'
 test('a probe aborted by content filtering still fails the capability check',async()=>{
   rawFetch(async()=>Response.json({choices:[{finish_reason:'content_filter',message:{content:''}}]}));
   await expect(performProviderRequest(service('mistral','https://api.example.test/v1','filtered-probe-model'),{},'Explain.',schema)).rejects.toMatchObject({code:'INVALID_RESPONSE'});
+});
+
+test('judgment-protocol services do not offer a model catalog',async()=>{
+  let fetched=false;rawFetch(async()=>{fetched=true;return Response.json({data:[]});});
+  await expect(listProviderModels(service('requesty','https://router.requesty.ai/v1','typesafe/jev-1.13.0'))).rejects.toMatchObject({code:'MODELS_UNSUPPORTED'});
+  await expect(listProviderModels(service('siliconflow-systemone','https://api.siliconflow.cn/v1','diffusiongemma'))).rejects.toMatchObject({code:'MODELS_UNSUPPORTED'});
+  expect(fetched).toBe(false);
 });

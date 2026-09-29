@@ -1,5 +1,5 @@
 import {afterAll,beforeAll,expect,test} from 'bun:test';
-import {normalizeSettings,wordId} from '../extension/shared.js';
+import {normalizeSettings,activeApiProvider,wordId} from '../extension/shared.js';
 
 import {event,pick,remove,isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
 import {createConversationStore} from '../extension/conversation-store.js';
@@ -65,6 +65,14 @@ afterAll(()=>{globalThis.chrome=chromeBefore;globalThis.fetch=fetchBefore;});
 test('lookup key normalization migrates lowercase and rejects unsafe stored values',()=>{
   expect(normalizeSettings({lookupKey:'q'}).lookupKey).toBe('Q');
   expect(normalizeSettings({lookupKey:'ß'}).lookupKey).toBe('D');
+});
+test('legacy judgment connection remains recoverable but cannot act as primary translation service',()=>{
+  const legacy={id:'old-judge',name:'旧判定',providerId:'requesty',baseUrl:'https://router.requesty.ai/v1',model:'typesafe/jev-1.13.0',apiKey:'legacy-key',options:{}};
+  const settings=normalizeSettings({providerKind:'api',apiServices:[legacy],activeApiServiceId:'old-judge'});
+  expect(settings.apiServices[0].apiKey).toBe('legacy-key');
+  expect(settings.activeApiServiceId).toBe('');
+  expect(activeApiProvider(settings)).toBeNull();
+  expect(activeApiProvider({...settings,activeApiServiceId:'old-judge'})).toBeNull();
 });
 test('legacy API settings migrate once and named services remain independent and private',async()=>{
   expect(stored.settings.provider).toBeUndefined();
@@ -1304,7 +1312,11 @@ test('domain detection accepts a jev mode with bounded fields', async () => {
   await import(`../extension/background.js?jev-settings=${Date.now()}`);
   const send=(message,sender=pageSender)=>new Promise((resolve,reject)=>runtimeMessage.listeners[0](message,sender,response=>response.ok?resolve(response.data):reject(new Error(response.error))));
   const saved=await send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevModel:'typesafe/jev-1.13.0',jevApiKey:'jev-secret',jevBaseUrl:'https://router.requesty.ai/v1'}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'});
-  expect(saved.settings.domainDetection).toMatchObject({mode:'jev',jevModel:'typesafe/jev-1.13.0',jevApiKey:'jev-secret',jevBaseUrl:'https://router.requesty.ai/v1'});
+  expect(saved.settings.domainDetection).toMatchObject({mode:'jev',jevProvider:'requesty',jevModel:'typesafe/jev-1.13.0',jevApiKey:'jev-secret',jevBaseUrl:'https://router.requesty.ai/v1'});
+  const switched=await send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevProvider:'siliconflow-systemone',jevModel:'diffusiongemma',jevApiKey:'sf-secret',jevBaseUrl:'https://api.siliconflow.cn/v1'}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'});
+  expect(switched.settings.domainDetection).toMatchObject({jevProvider:'siliconflow-systemone',jevModel:'diffusiongemma',jevBaseUrl:'https://api.siliconflow.cn/v1'});
+  await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevProvider:'openai'}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('无效的判定接入');
+  await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevProvider:'bogus'}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('无效的判定接入');
   await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevApiKey:'x'.repeat(4097)}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('Jev API Key');
   await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'nope',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''}}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('无效的领域识别配置');
   globalThis.chrome=chromeBefore;

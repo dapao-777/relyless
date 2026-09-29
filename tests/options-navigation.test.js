@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {serviceCatalog} from '../extension/ui/options-service-catalog.js';
 
-let window, document, settings, patches;
+let window, document, settings, patches, removedOrigins;
 
 beforeAll(async () => {
   const html = readFileSync(path.resolve('extension/ui/options.html'), 'utf8');
@@ -27,6 +27,7 @@ beforeAll(async () => {
   const service=(id,providerId,apiKey)=>({id,name:id,providerId,baseUrl:providerId==='deepseek'?'https://api.deepseek.com/v1':'https://api.openai.com/v1',model:'fixture-model',apiKey,apiKeys:[apiKey],options:{}});
   settings={providerKind:'api',activeApiServiceId:'first',apiServices:[service('first','openai','first-key'),service('second','deepseek','second-key')]};
   patches=[];
+  removedOrigins=[];
 
   // Mock chrome API for options page
   window.chrome = {
@@ -65,7 +66,7 @@ beforeAll(async () => {
     permissions: {
       contains: (p, cb) => { if (cb) cb(true); return Promise.resolve(true); },
       request: (p, cb) => { if (cb) cb(true); return Promise.resolve(true); },
-      remove: (p, cb) => { if (cb) cb(true); return Promise.resolve(true); }
+      remove: (p, cb) => { removedOrigins.push(...(p?.origins || [])); if (cb) cb(true); return Promise.resolve(true); }
     },
     tabs: {
       create: () => {}
@@ -210,4 +211,62 @@ test('a low-confidence domain test suggests a manual site rule only in settings'
   expect(result).toContain('本机识别不确定');
   expect(result).toContain('网站规则');
   expect(result).toContain('数据工程');
+});
+
+// 判定接入的权限生命周期：路由开启时把领域识别切回本地不得回收判官主机权限；
+// 关闭最后一个使用者才允许回收；跨接入方切换（即使同源）不得沿用旧密钥。
+test('detection mode switch keeps the judge origin while routing still uses it', async () => {
+  settings.domainDetection={mode:'jev',subscriptionModel:'',apiModel:'',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevProvider:'requesty',jevModel:'typesafe/jev-1.13.0',jevApiKey:'judge-key',jevBaseUrl:'https://router.requesty.ai/v1'};
+  settings.routing={enabled:true,premiumServiceId:'',operations:{assist:true,passage:true,emergency:true,conversation:true,sentenceGroups:false},minConfidence:0.7,cacheTtlMinutes:1440};
+  const local=document.querySelector('input[name="domain-detection-mode"][value="local"]');
+  local.checked=true;
+  local.dispatchEvent(new window.Event('change',{bubbles:true}));
+  document.getElementById('save-recognition').click();
+  await new Promise(resolve=>setTimeout(resolve,30));
+  expect(settings.domainDetection.mode).toBe('local');
+  expect(settings.domainDetection.jevApiKey).toBe('judge-key');
+  expect(removedOrigins.includes('https://router.requesty.ai/*')).toBe(false);
+});
+
+test('disabling routing revokes the judge origin once detection no longer uses it', async () => {
+  const toggle=document.getElementById('routing-enabled');
+  toggle.checked=false;
+  toggle.dispatchEvent(new window.Event('change',{bubbles:true}));
+  await new Promise(resolve=>setTimeout(resolve,30));
+  expect(settings.routing?.enabled).toBe(false);
+  expect(removedOrigins.includes('https://router.requesty.ai/*')).toBe(true);
+});
+
+test('switching judgment provider never carries the old key across', async () => {
+  settings.domainDetection={...settings.domainDetection,mode:'jev',jevProvider:'requesty',jevModel:'typesafe/jev-1.13.0',jevApiKey:'judge-key',jevBaseUrl:'https://proxy.example/v1'};
+  const jevRadio=document.querySelector('input[name="domain-detection-mode"][value="jev"]');
+  jevRadio.checked=true;
+  jevRadio.dispatchEvent(new window.Event('change',{bubbles:true}));
+  const providerSelect=document.getElementById('detection-jev-provider');
+  providerSelect.value='requesty';
+  document.getElementById('detection-jev-url').value='https://proxy.example/v1';
+  document.getElementById('detection-jev-key').value='';
+  document.getElementById('save-recognition').click();
+  await new Promise(resolve=>setTimeout(resolve,30));
+  // 同接入方 + 同源接口：留空密钥沿用已保存值。
+  expect(patches.at(-1).domainDetection.jevApiKey).toBe('judge-key');
+  providerSelect.value='siliconflow-systemone';
+  providerSelect.dispatchEvent(new window.Event('change',{bubbles:true}));
+  await new Promise(resolve=>setTimeout(resolve,30));
+  // 跨接入方即使同源也必须重新填写密钥。
+  expect(patches.at(-1).domainDetection.jevProvider).toBe('siliconflow-systemone');
+  expect(patches.at(-1).domainDetection.jevApiKey).toBe('');
+});
+
+test('switching judgment provider discards an unsaved key before saving the new provider',async()=>{
+  settings.domainDetection={...settings.domainDetection,mode:'jev',jevProvider:'requesty',jevModel:'typesafe/jev-1.13.0',jevApiKey:'',jevBaseUrl:'https://router.requesty.ai/v1'};
+  const provider=document.getElementById('detection-jev-provider'),key=document.getElementById('detection-jev-key');
+  provider.value='requesty';
+  key.value='unsaved-requesty-secret';
+  provider.value='siliconflow-systemone';
+  provider.dispatchEvent(new window.Event('change',{bubbles:true}));
+  await new Promise(resolve=>setTimeout(resolve,30));
+  expect(key.value).toBe('');
+  expect(patches.at(-1).domainDetection.jevProvider).toBe('siliconflow-systemone');
+  expect(patches.at(-1).domainDetection.jevApiKey).toBe('');
 });

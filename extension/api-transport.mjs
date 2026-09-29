@@ -1,4 +1,4 @@
-import {apiProviderBaseUrl,getApiProvider} from './api-providers.mjs';
+import {apiProviderBaseUrl,getApiProvider,JUDGMENT_PROTOCOLS} from './api-providers.mjs';
 
 const CONTENT_LIMIT=24_000;
 const STREAM_BUFFER_LIMIT=64*1024;
@@ -99,6 +99,7 @@ const usageExtractors={
   cohere:value=>{const units=value?.usage?.billed_units||value?.usage?.tokens||value?.usage;return units?{input:units.input_tokens,output:units.output_tokens}:null;},
   ollama:value=>value&&(value.prompt_eval_count!=null||value.eval_count!=null)?{input:value.prompt_eval_count,output:value.eval_count}:null,
   jev:value=>value?.usage?{input:value.usage.prompt_tokens,output:value.usage.completion_tokens}:null,
+  systemone:value=>{const usage=value?.usage;return usage?{input:usage.input_tokens??usage.prompt_tokens??null,output:usage.output_tokens??usage.completion_tokens??null}:null;},
 };
 function unsupportedModels(){throw transportError('此服务不提供可安全使用的模型目录，请手动填写模型 ID。','MODELS_UNSUPPORTED');}
 function providerFor(service){const provider=getApiProvider(service?.providerId);if(!provider)throw transportError('不支持的 API 服务商。','PROVIDER_UNSUPPORTED');return provider;}
@@ -142,8 +143,8 @@ async function checkedFetch(url,init,service,protocol,detectSchemaSupport=false)
   if(response.ok)return response;
   if(detectSchemaSupport&&await rejectsSchemaFormat(response))throw transportError('此服务或模型不支持严格 JSON Schema。','SCHEMA_UNSUPPORTED');
   const incompatible=[400,404,405,422].includes(response.status);
-  const message=[401,403].includes(response.status)?'服务拒绝访问，请检查 API Key、模型权限与账户状态。':response.status===429?'服务额度不足或请求过快，请稍后重试或检查账户。':incompatible?'服务或模型不兼容无思考模式、结构化输出或当前原生协议，已停止且不会删除参数重试。':`服务返回 HTTP ${response.status}，请检查 API 地址和模型。`;
-  throw transportError(message,[401,403].includes(response.status)?'AUTH':response.status===429?'RATE_LIMIT':incompatible?'INCOMPATIBLE_REQUEST':'HTTP',{httpStatus:response.status});
+  const message=[401,403].includes(response.status)?'服务拒绝访问，请检查 API Key、模型权限与账户状态。':response.status===402?'服务账户余额不足，请充值或检查服务商账户状态。':response.status===429?'服务额度不足或请求过快，请稍后重试或检查账户。':incompatible?'服务或模型不兼容无思考模式、结构化输出或当前原生协议，已停止且不会删除参数重试。':`服务返回 HTTP ${response.status}，请检查 API 地址和模型。`;
+  throw transportError(message,[401,403].includes(response.status)?'AUTH':response.status===402?'QUOTA':response.status===429?'RATE_LIMIT':incompatible?'INCOMPATIBLE_REQUEST':'HTTP',{httpStatus:response.status});
 }
 function systemPrompt(instructions,schema){return instructions+JSON_SUFFIX+JSON.stringify(schema);}
 function isHybridChatModel(model){return /(?:deepseek-(?:v3|v4)|glm-5\.2|kimi-k2\.6|kimi-k3|qwen3\.(?:5|6|8)|minimax-m3|gemini-2\.5-(?:flash|flash-lite)|grok-4\.3)/i.test(model||'');}
@@ -252,7 +253,7 @@ function jevNumber(value){const n=typeof value==='string'&&value.trim()?Number(v
 function normalizeJevAnswer(name,question,raw){
   const kind=question.type;
   if(kind==='noul'){
-    const p=raw&&typeof raw==='object'&&!Array.isArray(raw)?jevNumber(raw.probability??raw.p??raw.value??raw.score):jevNumber(raw);
+    const p=raw&&typeof raw==='object'&&!Array.isArray(raw)?jevNumber(raw.noul??raw.probability??raw.p??raw.value??raw.score):jevNumber(raw);
     if(p===null||p<0||p>1)throw transportError(`判定 ${name} 未返回有效概率。`,'JEV_ANSWER');
     return {kind,probability:p};
   }
@@ -273,9 +274,8 @@ function normalizeJevAnswer(name,question,raw){
   if(!selected)throw transportError(`判定 ${name} 未返回有效选项。`,'JEV_ANSWER');
   return {kind,selected,confidence,probabilities};
 }
-// Jev（Requesty）判定协议：一次请求带 1–16 个问题，回答为 {问题名: 答案}；答案形状按问题类型校验。
-async function performJev(service,payload,options={}){
-  const {signal}=options;
+// 判定请求校验：state 为非空字符串，questions 为 1–16 个 {类型,instructions} 映射；jev 与 systemone 共用同一份入参契约。
+function jevPayload(payload){
   const state=typeof payload?.state==='string'?payload.state:'';
   const questions=payload?.questions;
   if(!state.trim())throw transportError('判定上下文不能为空。','JEV_EMPTY');
@@ -283,6 +283,18 @@ async function performJev(service,payload,options={}){
   const names=Object.keys(questions);
   if(!names.length||names.length>16)throw transportError('判定问题须为 1–16 个。','JEV_QUESTIONS');
   for(const name of names){const q=questions[name];if(!q||typeof q!=='object'||Array.isArray(q)||!['choice','score','noul'].includes(q.type)||typeof q.instructions!=='string'||!q.instructions.trim())throw transportError(`判定问题 ${name} 无效。`,'JEV_QUESTIONS');}
+  return {state,questions,names};
+}
+function jevAnswers(names,questions,raw){
+  if(!raw||typeof raw!=='object'||Array.isArray(raw))throw transportError('判定服务返回结构无效。','JEV_FORMAT');
+  const answers={};
+  for(const name of names)answers[name]=normalizeJevAnswer(name,questions[name],raw[name]);
+  return {answers};
+}
+// Jev（Requesty）判定协议：一次请求带 1–16 个问题，回答为 {问题名: 答案}；答案形状按问题类型校验。
+async function performJev(service,payload,options={}){
+  const {signal}=options;
+  const {state,questions,names}=jevPayload(payload);
   const body={model:service.model,messages:[{role:'user',content:state}],response_format:{type:'questions',questions},stream:false};
   const url=appendPath(serviceBase(service),'chat/completions');
   const response=await checkedFetch(url,{method:'POST',signal,body:JSON.stringify(body)},service,'jev');
@@ -292,15 +304,24 @@ async function performJev(service,payload,options={}){
   const text=typeof content==='string'?content:Array.isArray(content)?content.map(part=>typeof part==='string'?part:part?.text||'').join(''):'';
   let parsed;try{parsed=JSON.parse(text);}catch{throw transportError('判定服务返回了无效 JSON。','JEV_FORMAT');}
   if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw transportError('判定服务返回结构无效。','JEV_FORMAT');
-  const answers={};
-  for(const name of names)answers[name]=normalizeJevAnswer(name,questions[name],parsed[name]);
-  return {answers};
+  return jevAnswers(names,questions,parsed);
 }
-export async function performProviderRequest(service,payload,instructions,schema,{signal,onContent,beforeRequest,onUsage}={}){const provider=providerFor(service);if(!service?.model?.trim())throw transportError('模型 ID 不能为空。','MODEL_REQUIRED');const thinking=thinkingLevel(service);if(thinking==='off'&&alwaysReasoningChat(service))throw transportError('该模型始终使用推理，无法关闭思考；请选择支持无思考模式的模型。','THINKING_REQUIRED');if(thinking==='auto'||thinking==='off')ensureNoForcedReasoning(service);const options={signal,onContent,onUsage,thinking};const protocol=service.providerId==='azure'?(service.options?.apiMode==='chat'?'chat':'responses'):provider.protocol;if(protocol==='chat'||protocol==='responses'){await beforeRequest?.();aborted(signal);options.outputMode=await outputMode(service,protocol,signal,onUsage,thinking);}await beforeRequest?.();aborted(signal);switch(protocol){case 'chat':return performChat(service,payload,instructions,schema,options);case 'responses':return performResponses(service,payload,instructions,schema,options);case 'anthropic':return performAnthropic(service,payload,instructions,schema,options);case 'google':return performGoogle(service,payload,instructions,schema,options);case 'bedrock':return performBedrock(service,payload,instructions,schema,options);case 'cohere':return performCohere(service,payload,instructions,schema,options);case 'ollama':return performOllama(service,payload,instructions,schema,options);case 'replicate':return performReplicate(service,payload,instructions,schema,options);case 'jev':return performJev(service,payload,options);default:throw transportError('不支持的 API 协议。','PROVIDER_UNSUPPORTED');}}
+// System One（SiliconFlow）判定端点：TypeSafe 原生形状，state 直传、answers 按键回填类型化结果。
+async function performSystemOne(service,payload,options={}){
+  const {signal}=options;
+  const {state,questions,names}=jevPayload(payload);
+  const body={model:service.model,state,questions};
+  const url=appendPath(serviceBase(service),'systemone');
+  const response=await checkedFetch(url,{method:'POST',signal,body:JSON.stringify(body)},service,'systemone');
+  const value=await jsonResponse(response);responseError(value);
+  emitUsage(options,usageExtractors.systemone(value));
+  return jevAnswers(names,questions,value?.answers);
+}
+export async function performProviderRequest(service,payload,instructions,schema,{signal,onContent,beforeRequest,onUsage}={}){const provider=providerFor(service);if(!service?.model?.trim())throw transportError('模型 ID 不能为空。','MODEL_REQUIRED');const thinking=thinkingLevel(service);if(thinking==='off'&&alwaysReasoningChat(service))throw transportError('该模型始终使用推理，无法关闭思考；请选择支持无思考模式的模型。','THINKING_REQUIRED');if(thinking==='auto'||thinking==='off')ensureNoForcedReasoning(service);const options={signal,onContent,onUsage,thinking};const protocol=service.providerId==='azure'?(service.options?.apiMode==='chat'?'chat':'responses'):provider.protocol;if(protocol==='chat'||protocol==='responses'){await beforeRequest?.();aborted(signal);options.outputMode=await outputMode(service,protocol,signal,onUsage,thinking);}await beforeRequest?.();aborted(signal);switch(protocol){case 'chat':return performChat(service,payload,instructions,schema,options);case 'responses':return performResponses(service,payload,instructions,schema,options);case 'anthropic':return performAnthropic(service,payload,instructions,schema,options);case 'google':return performGoogle(service,payload,instructions,schema,options);case 'bedrock':return performBedrock(service,payload,instructions,schema,options);case 'cohere':return performCohere(service,payload,instructions,schema,options);case 'ollama':return performOllama(service,payload,instructions,schema,options);case 'replicate':return performReplicate(service,payload,instructions,schema,options);case 'jev':return performJev(service,payload,options);case 'systemone':return performSystemOne(service,payload,options);default:throw transportError('不支持的 API 协议。','PROVIDER_UNSUPPORTED');}}
 
 function modelsBase(service){const base=serviceBase(service),url=new URL(base.href);url.search='';url.hash='';url.pathname=cleanPath(url.pathname).replace(/\/(?:chat\/completions|responses|messages|v2\/chat|api\/chat)$/i,'');return url;}
 function normalizedModels(items,idOf,nameOf=idOf){const seen=new Set(),models=[];for(const item of items||[]){const id=idOf(item);if(typeof id!=='string'||!id.trim()||seen.has(id))continue;seen.add(id);const name=nameOf(item);models.push({id,name:typeof name==='string'&&name.trim()?name:id});}return models.sort((a,b)=>a.name.localeCompare(b.name));}
-export async function listProviderModels(service,{signal}={}){const provider=providerFor(service),protocol=service.providerId==='azure'?(service.options?.apiMode==='chat'?'chat':'responses'):provider.protocol;if(service.providerId==='azure'||protocol==='bedrock'||protocol==='responses'&&service.providerId==='open-responses')unsupportedModels();let url,parse;
+export async function listProviderModels(service,{signal}={}){const provider=providerFor(service),protocol=service.providerId==='azure'?(service.options?.apiMode==='chat'?'chat':'responses'):provider.protocol;if(service.providerId==='azure'||protocol==='bedrock'||JUDGMENT_PROTOCOLS.includes(protocol)||protocol==='responses'&&service.providerId==='open-responses')unsupportedModels();let url,parse;
   if(protocol==='google'){url=appendPath(modelsBase(service),'models');parse=value=>normalizedModels(value.models,item=>(item.name||'').replace(/^models\//,''),item=>item.displayName||item.name);}
   else if(protocol==='anthropic'){url=appendPath(modelsBase(service),'models');parse=value=>normalizedModels(value.data,item=>item.id,item=>item.display_name||item.id);}
   else if(protocol==='cohere'){url=new URL('/v1/models',serviceBase(service));parse=value=>normalizedModels(value.models,item=>item.name,item=>item.name);}

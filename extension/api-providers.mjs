@@ -27,6 +27,7 @@ export const API_PROVIDERS = [
   {id:'openrouter',name:'OpenRouter',protocol:'chat',baseUrl:'https://openrouter.ai/api/v1',defaultModel:'google/gemma-4-31b-it:free',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'minimax',name:'MiniMax',protocol:'chat',baseUrl:'https://api.minimax.io/v1',defaultModel:'MiniMax-M3',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'siliconflow',name:'SiliconFlow',protocol:'chat',baseUrl:'https://api.siliconflow.cn/v1',defaultModel:'Qwen/Qwen3-Next-80B-A3B-Instruct',apiKeyUrl:'',keyOptional:false,fields:[]},
+  {id:'siliconflow-systemone',name:'SiliconFlow · 快速决策',protocol:'systemone',baseUrl:'https://api.siliconflow.cn/v1',defaultModel:'diffusiongemma',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'tensdaq',name:'Tensdaq',protocol:'chat',baseUrl:'https://tensdaq-api.x-aio.com/v1',defaultModel:'Qwen3-30B-A3B-Instruct-2507',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'azure',name:'Azure OpenAI',protocol:'responses',baseUrl:'',defaultModel:'gpt-5.6-luna',apiKeyUrl:'',keyOptional:false,fields:azureFields},
   {id:'bedrock',name:'Amazon Bedrock',protocol:'bedrock',baseUrl:'',defaultModel:'us.amazon.nova-micro-v1:0',apiKeyUrl:'',keyOptional:false,fields:bedrockFields},
@@ -50,8 +51,17 @@ export const API_PROVIDERS = [
 
 const providersById = new Map(API_PROVIDERS.map(provider => [provider.id,provider]));
 
+// 判定协议只应答 {state, questions} 载荷，不能当普通翻译/查词服务使用；
+// apiServices 保存、回落与升级目标都必须排除这些服务商（正确入口是领域识别的判定接入字段）。
+export const JUDGMENT_PROTOCOLS = ['jev','systemone'];
+
 export function getApiProvider(id) {
   return providersById.get(id) || null;
+}
+
+export function isJudgmentProvider(providerId) {
+  const provider = getApiProvider(providerId);
+  return Boolean(provider && JUDGMENT_PROTOCOLS.includes(provider.protocol));
 }
 
 function cleanOption(value,key) {
