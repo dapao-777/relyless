@@ -310,3 +310,27 @@ test('a stored judgment service is never used as the premium route target', asyn
     expect(stats.routing.escalated).toBe(0);
   } finally { globalThis.chrome = chromeBefore; }
 });
+
+test('clearing cache during a pending judgment cannot restore or reuse its old verdict',async()=>{
+  const fixture=routingFixture();globalThis.chrome=fixture.api;
+  let releaseJudge,signalJudge;const judgeStarted=new Promise(resolve=>{signalJudge=resolve;});
+  const pendingJudge=new Promise(resolve=>{releaseJudge=resolve;});let judgeCalls=0;
+  globalThis.fetch=withCapabilityProbe(async(url,init)=>{
+    if(String(url).includes('router.requesty.ai')){
+      judgeCalls++;if(judgeCalls===1){signalJudge();await pendingJudge;}
+      return judgeReply('premium',0.9);
+    }
+    return assistReply(init);
+  });
+  try{
+    await import('../extension/background.js?route-clear-inflight='+Date.now());
+    const assist=id=>isolatedSend(fixture,{type:'ASSIST',requestId:id,bypassCache:true,text:'index',context:'The database query uses an index.',domain:'tech',kind:'word',level:'hint',detail:'full'},pageSender);
+    const first=assist('old-judge').catch(()=>null);
+    await judgeStarted;
+    await isolatedSend(fixture,{type:'CACHE_CLEAR'},{id:'routing-fixture',url:'chrome-extension://routing-fixture/ui/options.html'});
+    releaseJudge();await first;
+    expect(fixture.local.routeDecisions).toBeUndefined();
+    await assist('new-judge');
+    expect(judgeCalls).toBe(2);
+  }finally{globalThis.chrome=chromeBefore;releaseJudge();}
+});

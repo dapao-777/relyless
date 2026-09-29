@@ -1,6 +1,6 @@
 import {DOMAINS, request, activeApiProvider, errorText, setResult, parseOrigin, downloadJson, upsertSiteEntry} from '../shared.js';
 import {parseRulePack} from '../rule-pack.js';
-import {API_PROVIDERS, getApiProvider, apiProviderBaseUrl, normalizeApiService, apiServiceOrigins, JUDGMENT_PROTOCOLS} from '../api-providers.mjs';
+import {API_PROVIDERS, getApiProvider, apiProviderBaseUrl, apiProviderDefaultModel, apiProviderDefaultModels, normalizeApiService, apiServiceOrigins, JUDGMENT_PROTOCOLS} from '../api-providers.mjs';
 import {createProviderPicker} from './provider-picker.js';
 import {serviceCatalog} from './options-service-catalog.js';
 import {VIDEO_SUPPORT_ENABLED} from '../activation.js';
@@ -226,7 +226,7 @@ function optionsDiscardProviderDraft(){
 function optionsProviderOptions(){return Object.fromEntries([...optionsEls.providerFields.querySelectorAll('[data-provider-option]')].map(input=>[input.dataset.providerOption,input.value.trim()]));}
 function optionsRenderProviderFields(meta,values={}){
   optionsEls.providerFields.replaceChildren();
-  for(const field of meta.fields||[]){const label=document.createElement('label');label.className='field';const title=document.createElement('span');title.textContent=field.label;let input;if(field.type==='select'){input=document.createElement('select');for(const choice of field.options||[])input.append(new Option(choice.label,choice.value));}else{input=document.createElement('input');input.type='text';input.autocomplete='off';input.spellcheck=false;if(field.placeholder)input.placeholder=field.placeholder;}input.dataset.providerOption=field.key;input.value=values[field.key]??field.defaultValue??'';input.required=true;input.addEventListener('input',()=>{optionsProviderDirty=true;if(meta.id==='azure'&&(field.key==='resourceName'||field.key==='apiMode'))optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());});input.addEventListener('change',()=>{optionsProviderDirty=true;if(meta.id==='azure'||meta.id==='bedrock')optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());});label.append(title,input);optionsEls.providerFields.append(label);}
+  for(const field of meta.fields||[]){const label=document.createElement('label');label.className='field';const title=document.createElement('span');title.textContent=field.label;let input;if(field.type==='select'){input=document.createElement('select');for(const choice of field.options||[])input.append(new Option(choice.label,choice.value));}else{input=document.createElement('input');input.type='text';input.autocomplete='off';input.spellcheck=false;if(field.placeholder)input.placeholder=field.placeholder;}input.dataset.providerOption=field.key;input.value=values[field.key]??field.defaultValue??'';input.required=true;input.addEventListener('input',()=>{optionsProviderDirty=true;if(meta.id==='azure'&&(field.key==='resourceName'||field.key==='apiMode'))optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());});input.addEventListener('change',()=>{optionsProviderDirty=true;if(meta.id==='azure'||meta.id==='bedrock'||meta.id==='stepfun')optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());if(meta.id==='stepfun'&&field.key==='plan'){const model=optionsEls.providerModel.value.trim();if(!model||apiProviderDefaultModels('stepfun').has(model))optionsEls.providerModel.value=apiProviderDefaultModel('stepfun',optionsProviderOptions());}});label.append(title,input);if(field.hint){const hint=document.createElement('small');hint.textContent=field.hint;label.append(hint);}optionsEls.providerFields.append(label);}
 }
 function optionsRenderProvider(selectedServiceId = null){
   if(selectedServiceId!==null)optionsDisplayedServiceId=selectedServiceId;
@@ -241,7 +241,7 @@ function optionsRenderProvider(selectedServiceId = null){
   optionsEls.providerFallback.disabled=!optionsEls.providerFallback.options.length||optionsEls.providerFallback.options.length<2;
   const isActiveDisplayed=Boolean(displayed&&active&&displayed.id===active.id);
   const provider=optionsDraftServiceId?{id:optionsDraftServiceId,name:'',providerId:optionsEls.providerId.value||'openai',baseUrl:'',model:'',apiKey:'',options:{}}:displayed;
-  optionsEls.apiServiceSelect.replaceChildren(...services.map(service=>new Option(service.name+' · '+service.model,service.id)));
+  optionsEls.apiServiceSelect.replaceChildren(...services.map(service=>new Option((JUDGMENT_PROTOCOLS.includes(getApiProvider(service.providerId)?.protocol)?'旧判定连接（请迁至领域识别） · ':'')+service.name+' · '+service.model,service.id)));
   if(!services.length)optionsEls.apiServiceSelect.append(new Option('尚未保存 API 服务',''));
   optionsEls.apiServiceSelect.value=displayed?.id||optionsState.settings.activeApiServiceId||'';
   optionsEls.apiServiceSelect.disabled=!services.length;
@@ -251,7 +251,7 @@ function optionsRenderProvider(selectedServiceId = null){
     optionsRenderProviderFields(meta,provider?.options||{});
     optionsEls.providerName.value=provider?.name||meta.name;
     optionsEls.providerUrl.value=provider?.baseUrl||apiProviderBaseUrl(meta.id,provider?.options||{});
-    optionsEls.providerModel.value=provider?.model||meta.defaultModel||'';
+    optionsEls.providerModel.value=provider?.model||apiProviderDefaultModel(meta.id,provider?.options||{});
     optionsEls.providerKeys.value=(provider?.apiKeys||[]).join('\n');
     optionsEls.providerFallback.value=provider?.fallbackServiceId||'';
     optionsProviderModels=[];
@@ -263,6 +263,7 @@ function optionsRenderProvider(selectedServiceId = null){
   const keyCount=(provider?.apiKeys||[]).length;
   optionsEls.providerKeys.placeholder=meta?.keyOptional?'可选；本地服务可不填密钥':('每行一个密钥，最多 8 个'+(hasKey?'；当前已保存 '+keyCount+' 个':''));
   optionsEls.keyState.textContent=meta?.keyOptional?'本地服务可不填密钥；填写后也只用于此服务。':keyCount>1?'已保存 '+keyCount+' 个密钥；请求按权重轮询，失败自动切换，约 1 分钟后恢复。':hasKey?'密钥保存在本机；更换服务商或域名不会带入。':'密钥只用于此服务，不会复制到其他服务。';
+  if(displayed&&JUDGMENT_PROTOCOLS.includes(getApiProvider(displayed.providerId)?.protocol))optionsEls.keyState.textContent='旧判定连接不能用于翻译；请在高级设置 → 领域识别重新配置判定密钥，再删除此旧连接。';
   optionsEls.providerModelList.replaceChildren(new Option(optionsProviderModels.length?'选择已获取的模型':'获取后选择',''),...optionsProviderModels.map(model=>new Option(model.name||model.id,model.id)));
   optionsEls.providerModelNote.textContent=optionsProviderModels.length?'已获取 '+optionsProviderModels.length+' 个模型；仍可手动填写模型 ID。':'也可直接填写模型 ID。';
   optionsEls.testProvider.disabled=!isActiveDisplayed||!displayed?.apiKey||Boolean(optionsDraftServiceId)||optionsProviderDirty;
@@ -458,7 +459,7 @@ optionsEls.cancelApiService.addEventListener('click',async()=>{if(!optionsDiscar
 optionsEls.apiServiceSelect.addEventListener('change',async()=>{const id=optionsEls.apiServiceSelect.value;if(!optionsDiscardProviderDraft()){optionsEls.apiServiceSelect.value=optionsDisplayedServiceId||optionsState.settings.activeApiServiceId||'';return;}const service=optionsState.settings.apiServices.find(item=>item.id===id);if(!service)return;try{await optionsCleanupDraftPermissions();await optionsEnsurePermission(optionsOriginPattern(service.baseUrl),true);optionsDraftServiceId=null;optionsDisplayedServiceId=id;optionsProviderDirty=false;optionsProviderModels=[];await optionsSavePatch({providerKind:'api',activeApiServiceId:id},'已切换到 '+service.name);if(serviceCatalog){serviceCatalog.userSelected=false;serviceCatalog.selectedKey=service.providerId||`saved:${service.id}`;serviceCatalog.sync();}optionsRenderProvider();}catch(error){optionsShowError(error);optionsRenderProvider();}});
 optionsEls.deleteApiService.addEventListener('click',async()=>{const services=optionsState.settings.apiServices||[];const target=services.find(s=>s.id===optionsDisplayedServiceId)||activeApiProvider(optionsState.settings);if(!target)return;const before=structuredClone(optionsState.settings),apiServices=before.apiServices.filter(service=>service.id!==target.id),next=apiServices[0];if(!confirm('删除“'+target.name+'”及其密钥？'+(next?'当前服务将切换到“'+next.name+'”。':'将不再使用任何 API 服务。')+'其他服务配置不会删除。'))return;const activeApiServiceId=optionsState.settings.activeApiServiceId===target.id?(next?.id||''):optionsState.settings.activeApiServiceId;if(await optionsSavePatch({apiServices,activeApiServiceId},'服务已删除')){optionsDisplayedServiceId=next?.id||null;optionsProviderDirty=false;await optionsRemoveUnusedPermissions(before,optionsState.settings);if(serviceCatalog){serviceCatalog.userSelected=false;serviceCatalog.sync();}optionsRenderProvider();}});
 optionsEls.providerName.addEventListener('input',()=>{optionsProviderDirty=true;});
-optionsEls.providerId.addEventListener('change',async()=>{if(!optionsDiscardProviderDraft()){optionsProviderDirty=false;optionsRenderProvider();return;}await optionsCleanupDraftPermissions();const meta=getApiProvider(optionsEls.providerId.value);optionsRenderProviderFields(meta);optionsEls.providerName.value=meta.name;optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());optionsEls.providerModel.value=meta.defaultModel||'';optionsEls.providerKeys.value='';optionsProviderModels=[];optionsProviderDirty=false;optionsRenderProvider();setResult(optionsEls.providerResult,'服务商已更改；密钥不会从原服务带入。');});
+optionsEls.providerId.addEventListener('change',async()=>{if(!optionsDiscardProviderDraft()){optionsProviderDirty=false;optionsRenderProvider();return;}await optionsCleanupDraftPermissions();const meta=getApiProvider(optionsEls.providerId.value);optionsRenderProviderFields(meta);optionsEls.providerName.value=meta.name;optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());optionsEls.providerModel.value=apiProviderDefaultModel(meta.id,optionsProviderOptions());optionsEls.providerKeys.value='';optionsProviderModels=[];optionsProviderDirty=false;optionsRenderProvider();setResult(optionsEls.providerResult,'服务商已更改；密钥不会从原服务带入。');});
 
 const optionsSearchIndex={};
 let optionsSearchReady=false,optionsSearchHits=[];
@@ -566,7 +567,7 @@ document.querySelectorAll('input[name="domain-detection-mode"]').forEach(input=>
 optionsEls.detectionUseTranslationApi.addEventListener('change',()=>{optionsDetectionDirty=true;optionsEls.detectionApiFields.hidden=optionsEls.detectionUseTranslationApi.checked;});
 optionsEls.saveRecognition.addEventListener('click',()=>void optionsSaveDetection());
 optionsEls.clearDetectionKey.addEventListener('click',async()=>{const current=optionsDetectionSettings();if(!current.api?.apiKey||!confirm('确定清除单独保存的识别 API Key 吗？'))return;const before=structuredClone(optionsState.settings);if(await optionsSavePatch({domainDetection:{...current,api:{...current.api,apiKey:''}}},'识别密钥已清除'))await optionsRemoveUnusedPermissions(before,optionsState.settings);});
-optionsEls.detectionJevProvider.addEventListener('change',()=>{optionsDetectionDirty=true;optionsSyncJudgmentProvider(optionsEls.detectionJevProvider.value);void optionsSaveDetection();});
+optionsEls.detectionJevProvider.addEventListener('change',()=>{optionsDetectionDirty=true;optionsEls.detectionJevKey.value='';optionsSyncJudgmentProvider(optionsEls.detectionJevProvider.value);void optionsSaveDetection();});
 optionsEls.detectionJevModel.addEventListener('change',()=>void optionsSaveDetection());
 optionsEls.detectionJevUrl.addEventListener('change',()=>void optionsSaveDetection());
 optionsEls.detectionJevKey.addEventListener('change',()=>void optionsSaveDetection());
@@ -662,7 +663,7 @@ globalThis.optionsStartDraftProvider = providerId => {
   optionsRenderProviderFields(meta);
   optionsEls.providerName.value = meta.name;
   optionsEls.providerUrl.value = apiProviderBaseUrl(meta.id, optionsProviderOptions());
-  optionsEls.providerModel.value = meta.defaultModel || '';
+  optionsEls.providerModel.value = apiProviderDefaultModel(meta.id, optionsProviderOptions());
   optionsEls.providerKeys.value = '';
   optionsRenderProvider();
   setResult(optionsEls.providerResult, '请填写此服务的 API Key；保存后生效。');

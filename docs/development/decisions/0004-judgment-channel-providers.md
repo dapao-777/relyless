@@ -40,9 +40,9 @@
 
 - `api-providers.mjs` 新增 `siliconflow-systemone`（`protocol: 'systemone'`），与现有 `siliconflow`（普通 Chat）严格区分；
 - `api-transport.mjs` 新增 `performSystemOne`：`POST {baseUrl}/systemone`，body `{model, state, questions}`，响应 `answers` 映射走同一套答案归一化与错误类别（`JEV_*`）；
-- `shared.js` 默认 `jevProvider: 'requesty'`，存量设置无需迁移；
+- `shared.js` 默认 `jevProvider: 'requesty'`。历史上误存为普通 API 服务的 Requesty 判定连接保留原记录与凭据，但不再能成为当前翻译服务；用户可在设置中找到旧连接，在「高级 → 领域识别」重新配置判定后手动删除，绝不自动把旧密钥转给新服务。
 - `background.js` 的四处判定服务构建点（领域识别运行时、路由判卷、凭据模式、设置校验）统一经 `judgmentService()`，补丁校验拒绝非判定协议的服务商；
-- 设置页「Jev 判定」新增「判定接入」下拉（Requesty / SiliconFlow · System One），切换时把仍等于某接入方默认值的地址/模型自动换成新接入方默认值，自定义值保留；跨接入方切换按既有同源规则丢弃已存密钥，需重新填写。
+- 设置页「Jev 判定」新增「判定接入」下拉（Requesty / SiliconFlow · System One），切换时把仍等于某接入方默认值的地址/模型自动换成新接入方默认值，自定义值保留；切换接入方时清除尚未保存的密钥草稿，已存密钥也不沿用，需重新填写。
 
 ## 结果
 
@@ -57,7 +57,7 @@
 
 - `domainDetection` 新增一个持久化字段，需要与地址/模型保持配套一致性（经补丁校验保证）；
 - System One 端点处于 Alpha 期，模型目录、报文形状或可用性可能变化，需要跟随官方文档维护；
-- 判定结果缓存按设置版本失效，切换接入方后旧缓存不适用，属预期行为；
+- 判定结果缓存按接入方、端点、模型与凭据隔离；清除或切换时撤销在途判卷对旧缓存的回写，属预期行为。
 - 「判定接入」依赖下拉与默认值替换逻辑，切换行为需要按验证清单人工核对。
 
 ## 实施与验证

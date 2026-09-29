@@ -144,10 +144,10 @@ const sentenceGroupCacheReady=chrome.storage.session.get('sentenceGroupCache').t
 function persistSentenceGroupCache(expectedProvider){sentenceGroupCacheWrites=sentenceGroupCacheWrites.catch(()=>{}).then(async()=>{if(expectedProvider!==providerGeneration)return;await chrome.storage.session.set({sentenceGroupCache:Object.fromEntries(sentenceGroupCache)});});return sentenceGroupCacheWrites;}
 function clearProviderState() {
   supportCache.clear();supportInFlight.clear();sentenceGroupCache.clear();sentenceGroupInFlight.clear();translationCache.clear();translationInFlight.clear();providerError='';providerGeneration++;void pruneBackgroundQueue();
-  routeCache={};routeCacheLoaded=true;routeCacheWrite=routeCacheWrite.catch(()=>{}).then(()=>chrome.storage.local.remove(ROUTE_CACHE_KEY)).catch(()=>{});
+  routeCacheGeneration++;routeCache={};routeCacheLoaded=true;routeCacheWrite=routeCacheWrite.catch(()=>{}).then(()=>chrome.storage.local.remove(ROUTE_CACHE_KEY)).catch(()=>{});
   void chrome.storage.session.remove('supportCache').catch(()=>{});
   sentenceGroupCacheWrites=sentenceGroupCacheWrites.catch(()=>{}).then(()=>chrome.storage.session.remove('sentenceGroupCache'));void sentenceGroupCacheWrites.catch(()=>{});
-  return clearEmergencySessions();
+  return Promise.all([clearEmergencySessions(),routeCacheWrite]);
 }
 // providerKind 'local'：Gemini Nano 只接 brief 查词提示，其余操作回落到首个可用服务。
 let nanoAvailability='unknown';
@@ -912,19 +912,22 @@ async function reviewFeedback(message){
 }
 // 模型路由：判卷凭据复用领域识别的 Jev 配置（一份 Key），判断结果按 操作+内容+设置版本 缓存。
 const ROUTE_CACHE_KEY = 'routeDecisions';
-let routeCache = null, routeCacheLoaded = false;
+let routeCache = null, routeCacheLoaded = false, routeCacheGeneration = 0;
 const routingStats = {judged: 0, escalated: 0, judgeFailed: 0, cacheHits: 0, skipped: 0};
 async function loadRouteCache() {
   if (routeCacheLoaded) return routeCache;
+  const generation=routeCacheGeneration;
   const data = await chrome.storage.local.get(ROUTE_CACHE_KEY);
+  if(generation!==routeCacheGeneration)return routeCache;
   const plan = data[ROUTE_CACHE_KEY];
   routeCache = plan && typeof plan === 'object' && !Array.isArray(plan) ? plan : {};
   routeCacheLoaded = true;
   return routeCache;
 }
 let routeCacheWrite = Promise.resolve();
-async function saveRouteCache() {
-  routeCacheWrite = routeCacheWrite.then(async () => { await chrome.storage.local.set({[ROUTE_CACHE_KEY]: routeCache}); }).catch(() => {});
+async function saveRouteCache(generation) {
+  const snapshot=routeCache;
+  routeCacheWrite = routeCacheWrite.catch(()=>{}).then(async () => {if(generation===routeCacheGeneration)await chrome.storage.local.set({[ROUTE_CACHE_KEY]:snapshot});}).catch(() => {});
   return routeCacheWrite;
 }
 // 模型用量统计：仅聚合 请求数/错误数/token 数（按天+服务+模型+操作），不存任何内容；本地保存，记忆清理时一并删除。
@@ -991,13 +994,14 @@ async function chooseRoute(operation, summary, {settings, guard = async () => {}
   if (!routing.enabled || !routing.operations[operation]) { routingStats.skipped++; return primary; }
   const judge = judgeService(settings);
   if (!judge) { routingStats.skipped++; return {...primary, reason: 'judge-unconfigured'}; }
-  const cache = incognito ? {} : await loadRouteCache(), key = routeCacheKey(operation, summary, await routingVersion(settings, judge)), now = Date.now();
+  const generation=routeCacheGeneration,cache = incognito ? {} : await loadRouteCache(), key = routeCacheKey(operation, summary, await routingVersion(settings, judge)), now = Date.now();
   const remember = async (route, reason) => {
-    if (incognito) return;
+    if (incognito||generation!==routeCacheGeneration) return;
     cache[key] = {at: now, route, reason};
     routeCache = pruneRouteCache(cache, now, routing.cacheTtlMinutes);
-    await saveRouteCache();
+    await saveRouteCache(generation);
   };
+  if(generation!==routeCacheGeneration)return {...primary,reason:'judge-invalidated'};
   const hit = cache[key];
   if (hit && now - hit.at < routing.cacheTtlMinutes * 60000) {
     routingStats.cacheHits++;
@@ -1011,7 +1015,9 @@ async function chooseRoute(operation, summary, {settings, guard = async () => {}
   try {
     const value = await withBackgroundSlot(() => apiRequest(judge, {state: summary, questions: routingQuestions(getApiProvider(judge.providerId)?.protocol)}, undefined, undefined, {trace, beforeRequest: guard}), guard);
     answers = value?.answers || null;
+    if(generation!==routeCacheGeneration)return {...primary,reason:'judge-invalidated'};
   } catch { routingStats.judgeFailed++; }
+  if(generation!==routeCacheGeneration)return {...primary,reason:'judge-invalidated'};
   if (!answers) {
     await remember('primary', 'judge-failed');
     return {...primary, reason: 'judge-failed'};
@@ -1519,7 +1525,7 @@ async function handle(message,sender) {
     case 'INTERACT':return interactOffered(message,sender);
     case 'READING_DATA_EXPORT':return readingExport();
     case 'MEMORY_CLEAR':return clearReadingData('memory');
-    case 'CACHE_CLEAR':clearProviderState();await clearResultCaches();await clearSupportSessions();return {cleared:true};
+    case 'CACHE_CLEAR':await clearProviderState();await clearResultCaches();await clearSupportSessions();return {cleared:true};
     case 'OPEN_OPTIONS':await chrome.runtime.openOptionsPage();return{};
     default:throw new Error('未知请求。');
   }

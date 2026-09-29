@@ -257,3 +257,16 @@ test('switching judgment provider never carries the old key across', async () =>
   expect(patches.at(-1).domainDetection.jevProvider).toBe('siliconflow-systemone');
   expect(patches.at(-1).domainDetection.jevApiKey).toBe('');
 });
+
+test('switching judgment provider discards an unsaved key before saving the new provider',async()=>{
+  settings.domainDetection={...settings.domainDetection,mode:'jev',jevProvider:'requesty',jevModel:'typesafe/jev-1.13.0',jevApiKey:'',jevBaseUrl:'https://router.requesty.ai/v1'};
+  const provider=document.getElementById('detection-jev-provider'),key=document.getElementById('detection-jev-key');
+  provider.value='requesty';
+  key.value='unsaved-requesty-secret';
+  provider.value='siliconflow-systemone';
+  provider.dispatchEvent(new window.Event('change',{bubbles:true}));
+  await new Promise(resolve=>setTimeout(resolve,30));
+  expect(key.value).toBe('');
+  expect(patches.at(-1).domainDetection.jevProvider).toBe('siliconflow-systemone');
+  expect(patches.at(-1).domainDetection.jevApiKey).toBe('');
+});

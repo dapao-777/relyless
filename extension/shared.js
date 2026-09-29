@@ -1,5 +1,5 @@
 import './reading-style.js';
-import {normalizeApiService} from './api-providers.mjs';
+import {normalizeApiService,isJudgmentProvider} from './api-providers.mjs';
 import {normalizeRulePacks} from './rule-pack.js';
 import {normalizeRouting} from './routing.js';
 
@@ -21,7 +21,7 @@ export function normalizeSettings(value = {}) {
   const legacyProvider = !Array.isArray(value.apiServices) && Object.hasOwn(value,'provider');
   const rows = Array.isArray(value.apiServices) ? value.apiServices : (legacyProvider ? [{id:'legacy-api',name:'原有 API 服务',baseUrl:value.provider?.baseUrl,model:value.provider?.model,apiKey:value.provider?.apiKey}] : []);
   const seen=new Set();settings.apiServices=rows.flatMap(row=>{try{const service=normalizeApiService(row);if(!service.id||seen.has(service.id))return [];seen.add(service.id);return [service];}catch{return [];}});
-  settings.activeApiServiceId = settings.apiServices.some(service=>service.id===value.activeApiServiceId) ? value.activeApiServiceId : (legacyProvider&&settings.apiServices.some(service=>service.id==='legacy-api')?'legacy-api':'');
+  settings.activeApiServiceId = settings.apiServices.some(service=>service.id===value.activeApiServiceId&&!isJudgmentProvider(service.providerId)) ? value.activeApiServiceId : (legacyProvider&&settings.apiServices.some(service=>service.id==='legacy-api'&&!isJudgmentProvider(service.providerId))?'legacy-api':'');
   settings.domainDetection = pick(DEFAULT_SETTINGS.domainDetection,value.domainDetection);
   settings.domainDetection.api = pick(DEFAULT_SETTINGS.domainDetection.api,value.domainDetection?.api);
   settings.automation = pick(DEFAULT_SETTINGS.automation,value.automation);
@@ -36,7 +36,7 @@ export function normalizeSettings(value = {}) {
   settings.keyboardNav = {enabled:value.keyboardNav?.enabled===true};
   return settings;
 }
-export function activeApiProvider(settings) { return settings?.apiServices?.find(service=>service.id===settings.activeApiServiceId) || null; }
+export function activeApiProvider(settings) { return settings?.apiServices?.find(service=>service.id===settings.activeApiServiceId&&!isJudgmentProvider(service.providerId)) || null; }
 export const wordId = (term, domain = 'general') => `${domain}:${term.normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase()}`;
 export async function request(type, payload = {}) {
   const response = await chrome.runtime.sendMessage({type,...payload});
