@@ -1,5 +1,5 @@
 import {afterAll,beforeAll,expect,test} from 'bun:test';
-import {normalizeSettings,wordId} from '../extension/shared.js';
+import {normalizeSettings,activeApiProvider,wordId} from '../extension/shared.js';
 
 import {event,pick,remove,isolatedChrome,isolatedSend} from './helpers/chrome-fixture.js';
 import {createConversationStore} from '../extension/conversation-store.js';
@@ -66,12 +66,20 @@ test('lookup key normalization migrates lowercase and rejects unsafe stored valu
   expect(normalizeSettings({lookupKey:'q'}).lookupKey).toBe('Q');
   expect(normalizeSettings({lookupKey:'ß'}).lookupKey).toBe('D');
 });
+test('legacy judgment connection remains recoverable but cannot act as primary translation service',()=>{
+  const legacy={id:'old-judge',name:'旧判定',providerId:'requesty',baseUrl:'https://router.requesty.ai/v1',model:'typesafe/jev-1.13.0',apiKey:'legacy-key',options:{}};
+  const settings=normalizeSettings({providerKind:'api',apiServices:[legacy],activeApiServiceId:'old-judge'});
+  expect(settings.apiServices[0].apiKey).toBe('legacy-key');
+  expect(settings.activeApiServiceId).toBe('');
+  expect(activeApiProvider(settings)).toBeNull();
+  expect(activeApiProvider({...settings,activeApiServiceId:'old-judge'})).toBeNull();
+});
 test('legacy API settings migrate once and named services remain independent and private',async()=>{
   expect(stored.settings.provider).toBeUndefined();
-  expect(stored.settings.apiServices).toEqual([{id:'legacy-api',name:'原有 API 服务',providerId:'openai-compatible',baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key',apiKeys:['fixture-key'],options:{}}]);
+  expect(stored.settings.apiServices).toEqual([{id:'legacy-api',name:'原有 API 服务',providerId:'openai-compatible',baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key',apiKeys:['fixture-key'],options:{thinking:'auto'}}]);
   expect(stored.settings.activeApiServiceId).toBe('legacy-api');
   expect(stored.settings.lookupKey).toBe('D');
-  const services=[stored.settings.apiServices[0],{id:'second-api',name:'Second API',providerId:'openai-compatible',baseUrl:'https://second.example/v1',model:'second-model',apiKey:'second-key',apiKeys:['second-key'],options:{}}];
+  const services=[stored.settings.apiServices[0],{id:'second-api',name:'Second API',providerId:'openai-compatible',baseUrl:'https://second.example/v1',model:'second-model',apiKey:'second-key',apiKeys:['second-key'],options:{thinking:'auto'}}];
   await send({type:'STATE_PATCH',patch:{apiServices:services,activeApiServiceId:'second-api'}},extensionSender);
   expect(stored.settings.apiServices).toEqual(services);expect(stored.settings.activeApiServiceId).toBe('second-api');
   await send({type:'STATE_PATCH',patch:{activeApiServiceId:'legacy-api'}},extensionSender);
@@ -238,7 +246,7 @@ test('usage estimates prefer the warm local tokenizer over char fallback',async(
 });
 test('failing primary api service fails over to its configured fallback once',async()=>{
   const savedServices=structuredClone(stored.settings.apiServices),savedActive=stored.settings.activeApiServiceId,savedFailed=failedAssists;
-  const services=[...savedServices,{id:'primary-fail',name:'Primary',providerId:'openai-compatible',baseUrl:'https://primary.example/v1',model:'p-model',apiKey:'k1',apiKeys:['k1'],options:{},fallbackServiceId:'legacy-api'}];
+  const services=[...savedServices,{id:'primary-fail',name:'Primary',providerId:'openai-compatible',baseUrl:'https://primary.example/v1',model:'p-model',apiKey:'k1',apiKeys:['k1'],options:{thinking:'auto'},fallbackServiceId:'legacy-api'}];
   await send({type:'STATE_PATCH',patch:{apiServices:services,activeApiServiceId:'primary-fail'}},extensionSender);
   try{
     tab.incognito=true; // 无痕：跳过词档/缓存写入，避免异步落盘链污染后续测试
@@ -815,7 +823,8 @@ test('a repeated in-flight query receives the existing readable definition befor
     pending.push(settle(isolatedSend(fixture,{...command,requestId:'first-query'},page)));await firstProgress;
     pending.push(settle(isolatedSend(fixture,{...command,requestId:'latest-query'},page)));
     while(fixture.session['pendingAssists:91']?.['latest-query']?.status!=='running')await new Promise(resolve=>setTimeout(resolve,0));
-    await new Promise(resolve=>setTimeout(resolve,0));
+    // 进度重放隔着能力探测、哈希与多次存储读取，单个宏任务不可靠；等消息真实到达。
+    while(!messages.some(message=>message.requestId==='latest-query'))await new Promise(resolve=>setTimeout(resolve,0));
     expect(messages.find(message=>message.requestId==='latest-query')).toMatchObject({definition:'减轻；缓解',level:'rescue'});
     expect(calls).toBe(1);
     await expect(isolatedSend(fixture,{type:'ASSIST_COMMIT',requestId:'latest-query'},page)).rejects.toThrow();
@@ -1303,7 +1312,11 @@ test('domain detection accepts a jev mode with bounded fields', async () => {
   await import(`../extension/background.js?jev-settings=${Date.now()}`);
   const send=(message,sender=pageSender)=>new Promise((resolve,reject)=>runtimeMessage.listeners[0](message,sender,response=>response.ok?resolve(response.data):reject(new Error(response.error))));
   const saved=await send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevModel:'typesafe/jev-1.13.0',jevApiKey:'jev-secret',jevBaseUrl:'https://router.requesty.ai/v1'}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'});
-  expect(saved.settings.domainDetection).toMatchObject({mode:'jev',jevModel:'typesafe/jev-1.13.0',jevApiKey:'jev-secret',jevBaseUrl:'https://router.requesty.ai/v1'});
+  expect(saved.settings.domainDetection).toMatchObject({mode:'jev',jevProvider:'requesty',jevModel:'typesafe/jev-1.13.0',jevApiKey:'jev-secret',jevBaseUrl:'https://router.requesty.ai/v1'});
+  const switched=await send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevProvider:'siliconflow-systemone',jevModel:'diffusiongemma',jevApiKey:'sf-secret',jevBaseUrl:'https://api.siliconflow.cn/v1'}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'});
+  expect(switched.settings.domainDetection).toMatchObject({jevProvider:'siliconflow-systemone',jevModel:'diffusiongemma',jevBaseUrl:'https://api.siliconflow.cn/v1'});
+  await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevProvider:'openai'}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('无效的判定接入');
+  await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevProvider:'bogus'}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('无效的判定接入');
   await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'jev',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''},jevApiKey:'x'.repeat(4097)}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('Jev API Key');
   await expect(send({type:'STATE_PATCH',patch:{domainDetection:{mode:'nope',useTranslationApi:true,api:{baseUrl:'https://api.openai.com/v1',apiKey:''}}}},{id:'jev-settings',url:'chrome-extension://jev-settings/ui/options.html'})).rejects.toThrow('无效的领域识别配置');
   globalThis.chrome=chromeBefore;

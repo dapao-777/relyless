@@ -7,6 +7,7 @@ const session = {};
 const granted = new Set();
 const registrations = [];
 const tab = {id:11,windowId:7,url:'https://docs.example/article',title:'Fixture',active:true};
+const privateWindows=[];
 let tabGetBarrier = null;
 const tabMessages = [];
 const badgeCalls = [];
@@ -37,6 +38,7 @@ globalThis.chrome = {
     onRemoved:event(),onUpdated:event(),query:async query=>query?.active ? [tab] : [tab],get:async id=>{if(tabGetBarrier) await tabGetBarrier;return id === tab.id ? tab : null;},
     sendMessage:async (tabId,message)=>{tabMessages.push({tabId,message});return {ok:true,data:{enabled:false}};},
   },
+  windows:{getAll:async()=>[{id:7,incognito:false},...privateWindows],onRemoved:event()},
   scripting:{
     executeScript:async options=>options.func ? [{result:true}] : [],
     getRegisteredContentScripts:async()=>registrations.map(value=>({...value})),
@@ -394,6 +396,16 @@ test('queued error and hint refresh resolve deterministically to !',async()=>{
   delete session['tabError:'+tab.id];
 });
 
+test('dismissal removes the current + badge and title immediately',async()=>{
+  await enableDocsBadge();badgeCalls.length=0;
+  commitMainFrame(tab.url);await flushBadgeQueue();
+  expect(lastText()).toBe('+');
+  const result=await send({type:'KEYWORD_HINT_DISMISS',tabId:tab.id});
+  expect(result.keywordHint).toBe(null);
+  expect(lastText()).toBe('');
+  expect(badgeCalls.some(call=>call.call==='title'&&call.tabId===tab.id&&call.title==='RelyLess')).toBe(true);
+  expect(session['keywordHint:'+tab.id]).toBeUndefined();
+});
 test('keyword hint dismissal evicts the oldest entry at the cap and stays session-only in incognito',async()=>{
   const hintsBefore=stored.settings.automation.keywordHints;
   stored.settings.automation.keywordHints={badge:true,keywords:['docs','learn'],dismissed:Array.from({length:500},(_v,i)=>'https://old-'+i+'.example')};
@@ -409,6 +421,7 @@ test('keyword hint dismissal evicts the oldest entry at the cap and stays sessio
 
     // 无痕窗口：只写会话存储，本机设置不携带无痕站点 origin。
     const privateTab={id:13,windowId:9,url:'https://learn.private.example/page',incognito:true,active:true};
+    privateWindows.push({id:9,incognito:true},{id:10,incognito:true});
     const privateSender={id:'activation-fixture',url:'chrome-extension://activation-fixture/ui/popup.html',tab:privateTab};
     const incognitoResult=await send({type:'KEYWORD_HINT_DISMISS'},privateSender);
     expect(incognitoResult.keywordHint).toBe(null);
@@ -421,8 +434,16 @@ test('keyword hint dismissal evicts the oldest entry at the cap and stays sessio
     const regularResult=await send({type:'AUTOMATION_GET',tabId:tab.id});
     tab.url=realUrl;
     expect(regularResult.keywordHint).toBe('learn');
+    privateWindows.shift();globalThis.chrome.windows.onRemoved.listeners.forEach(listener=>listener(9));
+    await flushBadgeQueue();expect(session['keywordHintDismissed']).toEqual(['https://learn.private.example']);
+    privateWindows.shift();globalThis.chrome.windows.onRemoved.listeners.forEach(listener=>listener(10));
+    await flushBadgeQueue();expect(session['keywordHintDismissed']).toBeUndefined();
+    privateWindows.push({id:11,incognito:true});
+    const reopened=await send({type:'AUTOMATION_GET'},privateSender);
+    expect(reopened.keywordHint).toBe('learn');
   }finally{
     stored.settings.automation.keywordHints=hintsBefore;
+    privateWindows.length=0;
     delete session['keywordHintDismissed'];
   }
 });

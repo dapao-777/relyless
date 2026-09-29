@@ -40,6 +40,7 @@ export function classifyFailure(error) {
   const detail = diagnosticError(error);
   const kind = detail.code === 'AUTH' ? 'auth'
     : detail.code === 'RATE_LIMIT' ? 'rate-limit'
+      : detail.code === 'QUOTA' ? 'quota'
       : detail.code === 'NETWORK' || detail.code === 'TIMEOUT' ? (detail.code === 'TIMEOUT' ? 'transient' : 'network')
         : detail.code === 'HTTP' && Number(error?.httpStatus) >= 500 ? 'server'
           : detail.code === 'NOT_READY' || detail.code === 'STALE' ? 'config' : error instanceof TypeError ? 'network' : undefined;

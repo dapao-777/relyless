@@ -119,6 +119,39 @@ test('incognito routing does not retain a decision in shared local storage', asy
   } finally { globalThis.chrome = chromeBefore; }
 });
 
+test('a siliconflow systemone judge routes through the systemone endpoint', async () => {
+  const fixture = isolatedChrome({
+    wordSchemaVersion: 5, productSchemaVersion: 1, words: [],
+    settings: {
+      providerKind: 'api', apiServices: [primary, premium], activeApiServiceId: primary.id,
+      domainDetection: {mode: 'local', subscriptionModel: '', apiModel: '', useTranslationApi: true, api: {baseUrl: 'https://api.openai.com/v1', apiKey: ''}, jevProvider: 'siliconflow-systemone', jevModel: 'diffusiongemma', jevApiKey: 'judge-key', jevBaseUrl: 'https://api.siliconflow.cn/v1'},
+      routing: normalizeRouting({enabled: true, premiumServiceId: premium.id}),
+      rememberSupport: false,
+    },
+  }, {id: 'routing-systemone'});
+  globalThis.chrome = fixture.api;
+  const seen = [];
+  globalThis.fetch = withCapabilityProbe(async (url, init) => {
+    const body = JSON.parse(init.body);
+    seen.push({url: String(url), model: body.model, state: typeof body.state === 'string', confidenceType: body.questions?.confidence?.type});
+    if (String(url).includes('api.siliconflow.cn')) return Response.json({answers: {tier: {selected: 'premium'}, confidence: {noul: 0.4}}});
+    return assistReply(init);
+  });
+  await import(`../extension/background.js?routing-systemone=${Date.now()}`);
+  const result = await isolatedSend(fixture, {type: 'ASSIST', requestId: 'route-sf', text: 'index', context: 'The database query uses an index.', domain: 'tech', kind: 'word', level: 'hint', detail: 'full'}, pageSender);
+  expect(result.hint).toBe('a short gloss');
+  const judge = seen.find(entry => entry.url === 'https://api.siliconflow.cn/v1/systemone');
+  expect(judge).toBeTruthy();
+  expect(judge.model).toBe('diffusiongemma');
+  expect(judge.state).toBe(true);
+  expect(judge.confidenceType).toBe('noul');
+  const served = seen.filter(entry => !entry.url.includes('api.siliconflow.cn'));
+  expect(served.at(-1).url).toContain('premium.example');
+  const stats = await isolatedSend(fixture, {type: 'ROUTING_STATS'}, {id: 'routing-systemone', url: 'chrome-extension://routing-systemone/ui/options.html'});
+  expect(stats.routing.escalated).toBeGreaterThanOrEqual(1);
+  globalThis.chrome = chromeBefore;
+});
+
 test('a failing judge falls back to the primary service without breaking the request', async () => {
   const fixture = routingFixture();
   globalThis.chrome = fixture.api;
@@ -183,4 +216,121 @@ test('routing settings patch merges instead of resetting', async () => {
   const clamped = await isolatedSend(fixture, {type: 'STATE_PATCH', patch: {routing: {minConfidence: 2}}}, {id: 'routing-fixture', url: 'chrome-extension://routing-fixture/ui/options.html'});
   expect(clamped.settings.routing.minConfidence).toBe(0.7);
   globalThis.chrome = chromeBefore;
+});
+
+test('switching judge provider, model or credentials re-judges instead of reusing cached verdicts', async () => {
+  const fixture = routingFixture();
+  globalThis.chrome = fixture.api;
+  const seen = [];
+  globalThis.fetch = withCapabilityProbe(async (url, init) => {
+    const body = JSON.parse(init.body || '{}');
+    seen.push({url: String(url), model: body.model});
+    if (String(url).includes('router.requesty.ai')) return judgeReply('routine', 0.9);
+    if (String(url).includes('api.siliconflow.cn')) return Response.json({answers: {tier: {type: 'choice', selected: 'routine', confidence: 0.9}, confidence: {type: 'noul', noul: 0.9}}});
+    return assistReply(init);
+  });
+  try {
+    await import(`../extension/background.js?routing-judge-identity=${Date.now()}`);
+    // bypassCache 跳过按标签页的辅助结果缓存，确保每次都真实走到判卷。
+    const assist = requestId => isolatedSend(fixture, {type: 'ASSIST', requestId, bypassCache: true, text: 'index', context: 'The database query uses an index.', domain: 'tech', kind: 'word', level: 'hint', detail: 'full'}, pageSender);
+    const patchDetection = patch => isolatedSend(fixture, {type: 'STATE_PATCH', patch: {domainDetection: {mode: 'local', subscriptionModel: '', apiModel: '', useTranslationApi: true, api: {baseUrl: 'https://api.openai.com/v1', apiKey: ''}, ...patch}}}, {id: 'routing-fixture', url: 'chrome-extension://routing-fixture/ui/options.html'});
+    await assist('judge-a');
+    expect(seen.filter(entry => entry.url.includes('router.requesty.ai'))).toHaveLength(1);
+    // 接入方、端点、模型、凭据整体切换：同一摘要必须交给新判官重新判卷（此前命中 cached-primary，System One 调用数为 0）。
+    await patchDetection({jevProvider: 'siliconflow-systemone', jevModel: 'diffusiongemma', jevApiKey: 'sf-key', jevBaseUrl: 'https://api.siliconflow.cn/v1'});
+    await assist('judge-b');
+    expect(seen.filter(entry => entry.url.includes('api.siliconflow.cn'))).toHaveLength(1);
+    expect(seen.filter(entry => entry.url.includes('api.siliconflow.cn'))[0].model).toBe('diffusiongemma');
+    // 同接入方仅更换凭据，旧判卷同样不得复用。
+    await patchDetection({jevProvider: 'siliconflow-systemone', jevModel: 'diffusiongemma', jevApiKey: 'sf-key-2', jevBaseUrl: 'https://api.siliconflow.cn/v1'});
+    await assist('judge-c');
+    expect(seen.filter(entry => entry.url.includes('api.siliconflow.cn'))).toHaveLength(2);
+  } finally { globalThis.chrome = chromeBefore; }
+});
+
+test('a judge failure cached under one provider does not suppress the next judge', async () => {
+  const fixture = routingFixture();
+  globalThis.chrome = fixture.api;
+  const seen = [];
+  globalThis.fetch = withCapabilityProbe(async (url, init) => {
+    seen.push(String(url));
+    if (String(url).includes('router.requesty.ai')) throw new Error('judge down');
+    if (String(url).includes('api.siliconflow.cn')) return Response.json({answers: {tier: {type: 'choice', selected: 'routine', confidence: 0.9}, confidence: {type: 'noul', noul: 0.9}}});
+    return assistReply(init);
+  });
+  try {
+    await import(`../extension/background.js?routing-judge-failover=${Date.now()}`);
+    const assist = requestId => isolatedSend(fixture, {type: 'ASSIST', requestId, bypassCache: true, text: 'index', context: 'The database query uses an index.', domain: 'tech', kind: 'word', level: 'hint', detail: 'full'}, pageSender);
+    await assist('fail-a');
+    expect(seen.filter(url => url.includes('router.requesty.ai'))).toHaveLength(1);
+    await isolatedSend(fixture, {type: 'STATE_PATCH', patch: {domainDetection: {mode: 'local', subscriptionModel: '', apiModel: '', useTranslationApi: true, api: {baseUrl: 'https://api.openai.com/v1', apiKey: ''}, jevProvider: 'siliconflow-systemone', jevModel: 'diffusiongemma', jevApiKey: 'sf-key', jevBaseUrl: 'https://api.siliconflow.cn/v1'}}}, {id: 'routing-fixture', url: 'chrome-extension://routing-fixture/ui/options.html'});
+    await assist('fail-b');
+    expect(seen.filter(url => url.includes('api.siliconflow.cn'))).toHaveLength(1);
+  } finally { globalThis.chrome = chromeBefore; }
+});
+
+test('judgment-protocol providers cannot be saved as translation services', async () => {
+  const fixture = routingFixture();
+  globalThis.chrome = fixture.api;
+  try {
+    await import(`../extension/background.js?judgment-reject=${Date.now()}`);
+    const judge = {id: 'judge-svc', name: 'System One', providerId: 'siliconflow-systemone', baseUrl: 'https://api.siliconflow.cn/v1', model: 'diffusiongemma', apiKey: 'sf-key', apiKeys: ['sf-key'], options: {}};
+    await expect(isolatedSend(fixture, {type: 'STATE_PATCH', patch: {apiServices: [primary, judge]}})).rejects.toThrow('判定协议');
+    const stored = await isolatedSend(fixture, {type: 'STATE_GET'});
+    expect(stored.settings.apiServices.some(service => service.id === 'judge-svc')).toBe(false);
+  } finally { globalThis.chrome = chromeBefore; }
+});
+
+test('a stored judgment service is never used as the premium route target', async () => {
+  const legacyJudge = {id: 'legacy-judge', name: 'Requesty 判定', providerId: 'requesty', baseUrl: 'https://router.requesty.ai/v1', model: 'typesafe/jev-1.13.0', apiKey: 'jk', apiKeys: ['jk'], options: {}};
+  const fixture = isolatedChrome({
+    wordSchemaVersion: 5, productSchemaVersion: 1, words: [],
+    settings: {
+      providerKind: 'api', apiServices: [primary, legacyJudge], activeApiServiceId: primary.id,
+      domainDetection: {mode: 'local', subscriptionModel: '', apiModel: '', useTranslationApi: true, api: {baseUrl: 'https://api.openai.com/v1', apiKey: ''}, jevModel: 'typesafe/jev-1.13.0', jevApiKey: 'judge-key', jevBaseUrl: 'https://router.requesty.ai/v1'},
+      routing: normalizeRouting({enabled: true, premiumServiceId: 'legacy-judge'}),
+      rememberSupport: false,
+    },
+  }, {id: 'routing-judge-target'});
+  globalThis.chrome = fixture.api;
+  const seen = [];
+  globalThis.fetch = withCapabilityProbe(async (url, init) => {
+    seen.push(String(url));
+    if (String(url).includes('router.requesty.ai')) return judgeReply('premium', 0.9);
+    return assistReply(init);
+  });
+  try {
+    await import(`../extension/background.js?routing-judge-target=${Date.now()}`);
+    const result = await isolatedSend(fixture, {type: 'ASSIST', requestId: 'judge-target', text: 'index', context: 'The database query uses an index.', domain: 'tech', kind: 'word', level: 'hint', detail: 'full'}, pageSender);
+    expect(result.hint).toBe('a short gloss');
+    // 判定协议服务接到普通载荷必然失败；升级目标应被视为不可用而回落主服务。
+    expect(seen.filter(url => url.includes('router.requesty.ai'))).toHaveLength(1);
+    expect(seen.at(-1)).toContain('primary.example');
+    const stats = await isolatedSend(fixture, {type: 'ROUTING_STATS'}, {id: 'routing-judge-target', url: 'chrome-extension://routing-judge-target/ui/options.html'});
+    expect(stats.routing.escalated).toBe(0);
+  } finally { globalThis.chrome = chromeBefore; }
+});
+
+test('clearing cache during a pending judgment cannot restore or reuse its old verdict',async()=>{
+  const fixture=routingFixture();globalThis.chrome=fixture.api;
+  let releaseJudge,signalJudge;const judgeStarted=new Promise(resolve=>{signalJudge=resolve;});
+  const pendingJudge=new Promise(resolve=>{releaseJudge=resolve;});let judgeCalls=0;
+  globalThis.fetch=withCapabilityProbe(async(url,init)=>{
+    if(String(url).includes('router.requesty.ai')){
+      judgeCalls++;if(judgeCalls===1){signalJudge();await pendingJudge;}
+      return judgeReply('premium',0.9);
+    }
+    return assistReply(init);
+  });
+  try{
+    await import('../extension/background.js?route-clear-inflight='+Date.now());
+    const assist=id=>isolatedSend(fixture,{type:'ASSIST',requestId:id,bypassCache:true,text:'index',context:'The database query uses an index.',domain:'tech',kind:'word',level:'hint',detail:'full'},pageSender);
+    const first=assist('old-judge').catch(()=>null);
+    await judgeStarted;
+    await isolatedSend(fixture,{type:'CACHE_CLEAR'},{id:'routing-fixture',url:'chrome-extension://routing-fixture/ui/options.html'});
+    releaseJudge();await first;
+    expect(fixture.local.routeDecisions).toBeUndefined();
+    await assist('new-judge');
+    expect(judgeCalls).toBe(2);
+  }finally{globalThis.chrome=chromeBefore;releaseJudge();}
 });
