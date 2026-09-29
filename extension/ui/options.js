@@ -1,6 +1,6 @@
 import {DOMAINS, request, activeApiProvider, errorText, setResult, parseOrigin, downloadJson, upsertSiteEntry} from '../shared.js';
 import {parseRulePack} from '../rule-pack.js';
-import {API_PROVIDERS, getApiProvider, apiProviderBaseUrl, normalizeApiService, apiServiceOrigins} from '../api-providers.mjs';
+import {API_PROVIDERS, getApiProvider, apiProviderBaseUrl, apiProviderDefaultModel, apiProviderDefaultModels, normalizeApiService, apiServiceOrigins} from '../api-providers.mjs';
 import {createProviderPicker} from './provider-picker.js';
 import {serviceCatalog} from './options-service-catalog.js';
 import {VIDEO_SUPPORT_ENABLED} from '../activation.js';
@@ -220,7 +220,7 @@ function optionsDiscardProviderDraft(){
 function optionsProviderOptions(){return Object.fromEntries([...optionsEls.providerFields.querySelectorAll('[data-provider-option]')].map(input=>[input.dataset.providerOption,input.value.trim()]));}
 function optionsRenderProviderFields(meta,values={}){
   optionsEls.providerFields.replaceChildren();
-  for(const field of meta.fields||[]){const label=document.createElement('label');label.className='field';const title=document.createElement('span');title.textContent=field.label;let input;if(field.type==='select'){input=document.createElement('select');for(const choice of field.options||[])input.append(new Option(choice.label,choice.value));}else{input=document.createElement('input');input.type='text';input.autocomplete='off';input.spellcheck=false;if(field.placeholder)input.placeholder=field.placeholder;}input.dataset.providerOption=field.key;input.value=values[field.key]??field.defaultValue??'';input.required=true;input.addEventListener('input',()=>{optionsProviderDirty=true;if(meta.id==='azure'&&(field.key==='resourceName'||field.key==='apiMode'))optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());});input.addEventListener('change',()=>{optionsProviderDirty=true;if(meta.id==='azure'||meta.id==='bedrock')optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());});label.append(title,input);optionsEls.providerFields.append(label);}
+  for(const field of meta.fields||[]){const label=document.createElement('label');label.className='field';const title=document.createElement('span');title.textContent=field.label;let input;if(field.type==='select'){input=document.createElement('select');for(const choice of field.options||[])input.append(new Option(choice.label,choice.value));}else{input=document.createElement('input');input.type='text';input.autocomplete='off';input.spellcheck=false;if(field.placeholder)input.placeholder=field.placeholder;}input.dataset.providerOption=field.key;input.value=values[field.key]??field.defaultValue??'';input.required=true;input.addEventListener('input',()=>{optionsProviderDirty=true;if(meta.id==='azure'&&(field.key==='resourceName'||field.key==='apiMode'))optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());});input.addEventListener('change',()=>{optionsProviderDirty=true;if(meta.id==='azure'||meta.id==='bedrock'||meta.id==='stepfun')optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());if(meta.id==='stepfun'&&field.key==='plan'){const model=optionsEls.providerModel.value.trim();if(!model||apiProviderDefaultModels('stepfun').has(model))optionsEls.providerModel.value=apiProviderDefaultModel('stepfun',optionsProviderOptions());}});label.append(title,input);if(field.hint){const hint=document.createElement('small');hint.textContent=field.hint;label.append(hint);}optionsEls.providerFields.append(label);}
 }
 function optionsRenderProvider(selectedServiceId = null){
   if(selectedServiceId!==null)optionsDisplayedServiceId=selectedServiceId;
@@ -245,7 +245,7 @@ function optionsRenderProvider(selectedServiceId = null){
     optionsRenderProviderFields(meta,provider?.options||{});
     optionsEls.providerName.value=provider?.name||meta.name;
     optionsEls.providerUrl.value=provider?.baseUrl||apiProviderBaseUrl(meta.id,provider?.options||{});
-    optionsEls.providerModel.value=provider?.model||meta.defaultModel||'';
+    optionsEls.providerModel.value=provider?.model||apiProviderDefaultModel(meta.id,provider?.options||{});
     optionsEls.providerKeys.value=(provider?.apiKeys||[]).join('\n');
     optionsEls.providerFallback.value=provider?.fallbackServiceId||'';
     optionsProviderModels=[];
@@ -452,7 +452,7 @@ optionsEls.cancelApiService.addEventListener('click',async()=>{if(!optionsDiscar
 optionsEls.apiServiceSelect.addEventListener('change',async()=>{const id=optionsEls.apiServiceSelect.value;if(!optionsDiscardProviderDraft()){optionsEls.apiServiceSelect.value=optionsDisplayedServiceId||optionsState.settings.activeApiServiceId||'';return;}const service=optionsState.settings.apiServices.find(item=>item.id===id);if(!service)return;try{await optionsCleanupDraftPermissions();await optionsEnsurePermission(optionsOriginPattern(service.baseUrl),true);optionsDraftServiceId=null;optionsDisplayedServiceId=id;optionsProviderDirty=false;optionsProviderModels=[];await optionsSavePatch({providerKind:'api',activeApiServiceId:id},'已切换到 '+service.name);if(serviceCatalog){serviceCatalog.userSelected=false;serviceCatalog.selectedKey=service.providerId||`saved:${service.id}`;serviceCatalog.sync();}optionsRenderProvider();}catch(error){optionsShowError(error);optionsRenderProvider();}});
 optionsEls.deleteApiService.addEventListener('click',async()=>{const services=optionsState.settings.apiServices||[];const target=services.find(s=>s.id===optionsDisplayedServiceId)||activeApiProvider(optionsState.settings);if(!target)return;const before=structuredClone(optionsState.settings),apiServices=before.apiServices.filter(service=>service.id!==target.id),next=apiServices[0];if(!confirm('删除“'+target.name+'”及其密钥？'+(next?'当前服务将切换到“'+next.name+'”。':'将不再使用任何 API 服务。')+'其他服务配置不会删除。'))return;const activeApiServiceId=optionsState.settings.activeApiServiceId===target.id?(next?.id||''):optionsState.settings.activeApiServiceId;if(await optionsSavePatch({apiServices,activeApiServiceId},'服务已删除')){optionsDisplayedServiceId=next?.id||null;optionsProviderDirty=false;await optionsRemoveUnusedPermissions(before,optionsState.settings);if(serviceCatalog){serviceCatalog.userSelected=false;serviceCatalog.sync();}optionsRenderProvider();}});
 optionsEls.providerName.addEventListener('input',()=>{optionsProviderDirty=true;});
-optionsEls.providerId.addEventListener('change',async()=>{if(!optionsDiscardProviderDraft()){optionsProviderDirty=false;optionsRenderProvider();return;}await optionsCleanupDraftPermissions();const meta=getApiProvider(optionsEls.providerId.value);optionsRenderProviderFields(meta);optionsEls.providerName.value=meta.name;optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());optionsEls.providerModel.value=meta.defaultModel||'';optionsEls.providerKeys.value='';optionsProviderModels=[];optionsProviderDirty=false;optionsRenderProvider();setResult(optionsEls.providerResult,'服务商已更改；密钥不会从原服务带入。');});
+optionsEls.providerId.addEventListener('change',async()=>{if(!optionsDiscardProviderDraft()){optionsProviderDirty=false;optionsRenderProvider();return;}await optionsCleanupDraftPermissions();const meta=getApiProvider(optionsEls.providerId.value);optionsRenderProviderFields(meta);optionsEls.providerName.value=meta.name;optionsEls.providerUrl.value=apiProviderBaseUrl(meta.id,optionsProviderOptions());optionsEls.providerModel.value=apiProviderDefaultModel(meta.id,optionsProviderOptions());optionsEls.providerKeys.value='';optionsProviderModels=[];optionsProviderDirty=false;optionsRenderProvider();setResult(optionsEls.providerResult,'服务商已更改；密钥不会从原服务带入。');});
 
 const optionsSearchIndex={};
 let optionsSearchReady=false,optionsSearchHits=[];
@@ -652,7 +652,7 @@ globalThis.optionsStartDraftProvider = providerId => {
   optionsRenderProviderFields(meta);
   optionsEls.providerName.value = meta.name;
   optionsEls.providerUrl.value = apiProviderBaseUrl(meta.id, optionsProviderOptions());
-  optionsEls.providerModel.value = meta.defaultModel || '';
+  optionsEls.providerModel.value = apiProviderDefaultModel(meta.id, optionsProviderOptions());
   optionsEls.providerKeys.value = '';
   optionsRenderProvider();
   setResult(optionsEls.providerResult, '请填写此服务的 API Key；保存后生效。');
