@@ -9,7 +9,7 @@ import {normalizeRulePacks} from './rule-pack.js';
 import {classifyLocal,embedLocal,countTokensLocal,nanoStatus,nanoAssist} from './local-classifier.js';
 import {assistanceProgress,translationProgress,conversationProgress} from './assistance-stream.mjs';
 import {SOURCE_DATA_INSTRUCTIONS,SUPPORT_POLICY_VERSION,SUPPORT_INSTRUCTIONS,SUPPORT_SCHEMA,ASSISTANCE_INSTRUCTIONS,assistanceSchema,normalizeSupportItems,prepareSupportItems,inspectSupportResponse,requestSupportWithCorrection,SUPPORT_CORRECTION_INSTRUCTIONS,normalizeSupportResult,normalizeAssistanceCommand,normalizeAssistanceRequest,normalizeAssistanceResult,normalizePreparationContext,EMERGENCY_SCHEMA,EMERGENCY_INSTRUCTIONS,normalizeEmergencyItems,normalizeEmergencyResult,PAGE_TRANSLATION_INSTRUCTIONS,normalizePageTranslationItems,inspectPageTranslationResult,normalizePageTranslationResult,CONVERSATION_INSTRUCTIONS,conversationSchema,normalizeConversationRequest,normalizeConversationResult} from './gloss.mjs';
-import {AUTO_SCRIPT_ID,ALL_HOSTS,VIDEO_SUPPORT_ENABLED,pageOrigin,sitePattern,validateAutomation,validateVideo,resolveAutomation,registrationMatches,requiredPermissionOrigins} from './activation.js';
+import {AUTO_SCRIPT_ID,ALL_HOSTS,VIDEO_SUPPORT_ENABLED,pageOrigin,sitePattern,validateAutomation,validateVideo,resolveAutomation,registrationMatches,requiredPermissionOrigins,dismissKeywordOrigin} from './activation.js';
 import {createDiagnostics} from './diagnostic-service.js';
 import {createConversationStore} from './conversation-store.js';
 import {collectConversationMemory} from './conversation-memory.js';
@@ -1317,8 +1317,34 @@ async function clearAutomaticSentenceModes(tabId=null) {
 }
 
 
+// 无痕窗口的「不再提示」只写入会话存储，绝不落入本机设置；会话忽略仅作用于无痕上下文，
+// 不并入普通窗口的判定，避免无痕浏览痕迹影响常规页面。
+const keywordHintDismissedKey = 'keywordHintDismissed';
+let keywordHintDismissedWrites=Promise.resolve();
+function clearPrivateKeywordHintsIfClosed(){
+  keywordHintDismissedWrites=keywordHintDismissedWrites.catch(()=>{}).then(async()=>{
+    const windows=await chrome.windows.getAll();
+    if(!windows.some(window=>window.incognito))await chrome.storage.session.remove(keywordHintDismissedKey);
+  });
+  return keywordHintDismissedWrites;
+}
+const keywordHintPrivateReady=chrome.windows?.getAll?clearPrivateKeywordHintsIfClosed():Promise.resolve();
+chrome.windows?.onRemoved?.addListener(()=>{void clearPrivateKeywordHintsIfClosed().catch(()=>{});});
+async function keywordHintDismissedSession() {
+  await keywordHintPrivateReady;
+  const stored = (await chrome.storage.session.get(keywordHintDismissedKey))[keywordHintDismissedKey];
+  return Array.isArray(stored) ? stored.filter(entry => typeof entry === 'string') : [];
+}
+async function automationWithSessionDismissed(automation,incognito=false) {
+  if (!incognito) return automation;
+  const session = await keywordHintDismissedSession();
+  if (!session.length) return automation;
+  const hints = automation.keywordHints;
+  return {...automation, keywordHints: {...hints, dismissed: [...new Set([...hints.dismissed, ...session])]}};
+}
+
 async function automationResult(settings,tab,paused,authorizeSentenceGroups=false) {
-  const resolved = resolveAutomation(settings.automation,tab?.url || '',paused);
+  const resolved = resolveAutomation(await automationWithSessionDismissed(settings.automation,tab?.incognito===true),tab?.url || '',paused);
   const pattern = resolved.origin ? sitePattern(resolved.origin) : null;
   const authorized = !pattern || await chrome.permissions.contains({origins:[pattern]});
   const sentenceGroups=await effectiveSentenceGroupsMode(settings,tab,paused,authorizeSentenceGroups);
@@ -1412,12 +1438,60 @@ async function activateTab(tab) {
   await chrome.tabs.sendMessage(tabId,{type:'SS_AUTO_START',origin:expectedOrigin,reading,video,sentenceGroups,paused:status.paused,assistanceMode:settings.assistanceMode},{frameId:0}).catch(() => {});
 }
 let automationReconciliation = Promise.resolve();
+const keywordHintKey=tabId=>'keywordHint:'+tabId;
+const tabErrorKey=tabId=>'tabError:'+tabId;
+const tabStatusQueues=new Map();
+function withTabStatus(tabId,fn) {
+  const run=(tabStatusQueues.get(tabId)||Promise.resolve()).catch(()=>{}).then(fn);
+  tabStatusQueues.set(tabId,run);
+  void run.finally(()=>{if(tabStatusQueues.get(tabId)===run)tabStatusQueues.delete(tabId);});
+  return run;
+}
+function resetBadge(tabId) {
+  return Promise.all([
+    chrome.action.setBadgeText({tabId,text:''}),
+    chrome.action.setTitle({tabId,title:'RelyLess'})
+  ]);
+}
+async function applyKeywordHint(tabId,url) {
+  if (!Number.isInteger(tabId)) return;
+  const key=keywordHintKey(tabId);
+  const {settings:raw}=await chrome.storage.local.get('settings');
+  const incognito=await chrome.tabs.get(tabId).then(value=>value?.incognito===true).catch(()=>false);
+  const automation=await automationWithSessionDismissed(normalizeSettings(raw).automation,incognito);
+  if (automation.keywordHints.badge&&url===undefined) url=await chrome.webNavigation.getFrame({tabId,frameId:0}).then(frame=>frame?.url||'').catch(()=>null);
+  if (url===null) return;
+  const keyword=automation.keywordHints.badge&&url?resolveAutomation(automation,url).keywordHint:null;
+  if (keyword) {
+    if ((await chrome.storage.session.get(tabErrorKey(tabId)))[tabErrorKey(tabId)]) return;
+    await Promise.allSettled([
+      chrome.action.setBadgeBackgroundColor({tabId,color:'#70509c'}),
+      chrome.action.setBadgeText({tabId,text:'+'}),
+      chrome.action.setTitle({tabId,title:`RelyLess：域名含“${keyword}”，可在弹窗中为此网站开启自动辅助`}),
+      chrome.storage.session.set({[key]:true})
+    ]);
+    return;
+  }
+  if (!(await chrome.storage.session.get(key))[key]) return;
+  await Promise.allSettled([resetBadge(tabId),chrome.storage.session.remove(key)]);
+}
+function refreshKeywordHint(tabId,url) {
+  return withTabStatus(tabId,()=>applyKeywordHint(tabId,url));
+}
+chrome.webNavigation.onCommitted.addListener(details => {
+  if (details.frameId !== 0) return;
+  void withTabStatus(details.tabId,async()=>{
+    await chrome.storage.session.remove(tabErrorKey(details.tabId));
+    await applyKeywordHint(details.tabId,details.url);
+  }).catch(error => console.error('更新文档类网站提示失败',error));
+},{url:[{schemes:['http','https']}]});
 function reconcileAutomation() {
   const work = automationReconciliation.catch(() => {}).then(async () => {
     const {settings}=await load(false);
     await reconcileAutoScript(settings);
     const tabs = await chrome.tabs.query({});
     await Promise.allSettled(tabs.map(activateTab));
+    await Promise.allSettled(tabs.map(tab=>refreshKeywordHint(tab.id)));
   });
   automationReconciliation = work;
   return work;
@@ -1468,6 +1542,15 @@ async function handle(message,sender) {
     case 'AUTO_BOOTSTRAP_CHECK':if(!Number.isInteger(sender.tab?.id)||sender.frameId!==0)throw new Error('自动开启只能由网页主框架检查。');await activateTab({...sender.tab,url:sender.url||sender.tab.url});return{};
     case 'AUTOMATION_GET':{const [{settings},tab]=await Promise.all([load(false),requestedTab(message,sender)]);return automationResult(settings,tab,Boolean(tab?.id&&await tabPaused(tab.id)));}
     case 'AUTOMATION_PATCH':{const settings=await patchAutomation(message.patch);await reconcileAutomation();const tab=await requestedTab(message,sender);return automationResult(settings,tab,Boolean(tab?.id&&await tabPaused(tab.id)));}
+    // 无痕窗口的「不再提示」只保留到会话结束；普通窗口持久化且有界回收最早条目。
+    case 'KEYWORD_HINT_DISMISS':{const [{settings},tab]=await Promise.all([load(false),requestedTab(message,sender)]);
+      const origin=pageOrigin(tab?.url||'');
+      if(!origin)throw new Error('当前页面不能设置网站提示。');
+      const paused=Boolean(tab?.id&&await tabPaused(tab.id));
+      if(tab?.incognito===true){await keywordHintPrivateReady;keywordHintDismissedWrites=keywordHintDismissedWrites.catch(()=>{}).then(async()=>chrome.storage.session.set({[keywordHintDismissedKey]:dismissKeywordOrigin(await keywordHintDismissedSession(),origin)}));await keywordHintDismissedWrites;await refreshKeywordHint(tab.id);return automationResult(settings,tab,paused);}
+      const hints=settings.automation.keywordHints;
+      const updated=await patchAutomation({keywordHints:{...hints,dismissed:dismissKeywordOrigin(hints.dismissed,origin)}});
+      await refreshKeywordHint(tab.id);return automationResult(updated,tab,paused);}
     case 'PAGE_ACTIVITY_SET':if(!Number.isInteger(sender.tab?.id)||sender.frameId!==0||typeof message.enabled!=='boolean')throw new Error('无效的页面活动状态。');await setTabPaused(sender.tab.id,!message.enabled);return{paused:!message.enabled};
     case 'VIDEO_SETTINGS_PATCH':{if(!trusted&&(!Number.isInteger(sender.tab?.id)||sender.frameId!==0))throw new Error('视频设置只能由网页主框架更新。');const video=await mutate(state=>{const next=validateVideo(message.patch,state.settings.video);state.settings={...state.settings,video:next};return next;},false,false);await broadcastVideoSettings(video);return{video};}
     case 'YOUTUBE_CAPTIONS_BRIDGE':{if(!VIDEO_SUPPORT_ENABLED)throw new Error('视频字幕功能暂未开放。');if(!Number.isInteger(sender.tab?.id)||sender.frameId!==0)throw new Error('字幕桥只能由当前网页主框架启用。');const {url}=await tabPage(sender.tab.id);if(url.protocol!=='https:'||!['www.youtube.com','m.youtube.com'].includes(url.hostname))throw new Error('字幕桥仅适用于 YouTube。');await chrome.scripting.executeScript({target:{tabId:sender.tab.id,frameIds:[0]},world:'MAIN',files:['youtube-captions-bridge.js']});return{};}
@@ -1570,7 +1653,7 @@ chrome.runtime.onInstalled.addListener(registerContextMenus);
 chrome.runtime.onStartup.addListener(registerContextMenus);
 void registerContextMenus();
 async function forgetTabAutomation(tabId) {
-  await chrome.storage.session.remove([tabPauseKey(tabId),offeredKey(tabId),pendingKey(tabId),assistCacheKey(tabId),'pageDomain:'+tabId]);
+  await chrome.storage.session.remove([tabPauseKey(tabId),offeredKey(tabId),pendingKey(tabId),assistCacheKey(tabId),'pageDomain:'+tabId,keywordHintKey(tabId),tabErrorKey(tabId)]);
   for(const key of assistQueues.keys())if(key.startsWith(tabId+':')){assistQueues.delete(key);commitFlights.delete(key);}
 }
 
@@ -1598,21 +1681,26 @@ chrome.tabs.onRemoved.addListener(tabId => {
 void reconcileAutomation().catch(error => console.error('初始化自动开启策略失败',error));
 
 
-async function clearTabStatus(tabId) {
-  await Promise.all([
-    chrome.action.setBadgeText({tabId,text:''}),
-    chrome.action.setTitle({tabId,title:'RelyLess'})
-  ]);
+function clearTabStatus(tabId) {
+  return withTabStatus(tabId,async()=>{
+    if (!(await chrome.storage.session.get(tabErrorKey(tabId)))[tabErrorKey(tabId)]) return;
+    await Promise.allSettled([resetBadge(tabId),chrome.storage.session.remove(tabErrorKey(tabId))]);
+    await applyKeywordHint(tabId);
+  });
 }
 
-async function showTabError(tabId,error,fallback) {
+function showTabError(tabId,error,fallback) {
   const message = error instanceof Error && error.message ? error.message : fallback;
   console.error(fallback,error);
-  await Promise.allSettled([
-    chrome.action.setBadgeBackgroundColor({tabId,color:'#B42318'}),
-    chrome.action.setBadgeText({tabId,text:'!'}),
-    chrome.action.setTitle({tabId,title:`RelyLess：${message}`})
-  ]);
+  return withTabStatus(tabId,async()=>{
+    await Promise.allSettled([
+      chrome.action.setBadgeBackgroundColor({tabId,color:'#B42318'}),
+      chrome.action.setBadgeText({tabId,text:'!'}),
+      chrome.action.setTitle({tabId,title:`RelyLess：${message}`}),
+      chrome.storage.session.set({[tabErrorKey(tabId)]:true}),
+      chrome.storage.session.remove(keywordHintKey(tabId))
+    ]);
+  });
 }
 
 async function toggleReading(tab) {
