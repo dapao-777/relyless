@@ -130,6 +130,15 @@
     for (const [selector,resolved] of [[mark,markStyle],[hint,hintStyle],[block,blockStyle]]) {
       if (resolved === 'quote' && selector !== block) rules.push(`${selector}::before{content:"“"!important}`,`${selector}::after{content:"”"!important}`);
     }
+    // Full-page bilingual reading is typography, not a rescue-panel decoration.
+    const page = `${block}[data-shisui-translation-layout]`;
+    rules.push(`${page}{background:none!important;border:0!important;box-shadow:none!important;padding:0!important;font-style:normal!important;font-size:max(13px,var(--ss-source-size,1em))!important;font-weight:var(--ss-source-weight,400)!important;line-height:var(--ss-source-leading,1.6)!important;letter-spacing:normal!important;word-spacing:normal!important;color:${current.translation.color === 'auto' ? 'var(--ss-source-color,inherit)' : current.translation.color}!important;margin:.3em 0 0!important;text-align:start!important}`);
+    rules.push(`${page}[data-shisui-translation-layout="heading"]{margin:.15em 0 0!important}`,`${page}[data-shisui-translation-layout="inline-heading"]{display:inline!important;margin:0 0 0 .5em!important}`);
+    // Text parts carry aria-busy; failure/retry controls alone are not a translation.
+    const translated = `:has(>${page}>span[aria-busy])`;
+    const quietMark = `${mark}:not(:hover):not(${annotation}:focus-within ${mark})`;
+    rules.push(`${translated} ${quietMark}{background:none!important;border:0!important;box-shadow:none!important;text-decoration:none!important}`);
+    rules.push(`${translated} ${quietMark}::before,${translated} ${quietMark}::after{content:none!important}`);
     return rules.join('\n');
   }
 
