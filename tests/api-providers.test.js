@@ -38,11 +38,13 @@ test('stepfun plan option switches between metered and subscription endpoints',(
   expect(service.options.plan).toBe('step_plan');
   expect(service.baseUrl).toBe('https://api.stepfun.com/step_plan/v1');
   expect(()=>normalizeApiService({id:'x',name:'X',providerId:'stepfun',baseUrl:'',model:'m',apiKey:'k',options:{plan:'vip'}})).toThrow('无效');
-  // 套餐端点不含 step-1-flash（实测 model_invalid），默认模型按接入方式区分。
-  expect(apiProviderDefaultModel('stepfun')).toBe('step-1-flash');
+  // 按量 v1 与套餐端点均不含 step-1-flash（实测 model_invalid），默认模型按接入方式区分。
+  expect(apiProviderDefaultModel('stepfun')).toBe('step-3.7-flash');
+  expect(apiProviderDefaultModel('stepfun',{plan:'api'})).toBe('step-3.7-flash');
   expect(apiProviderDefaultModel('stepfun',{plan:'step_plan'})).toBe('step-3.5-flash');
   expect(apiProviderDefaultModels('stepfun').has('step-1-flash')).toBe(true);
   expect(apiProviderDefaultModels('stepfun').has('step-3.5-flash')).toBe(true);
+  expect(apiProviderDefaultModels('stepfun').has('step-3.7-flash')).toBe(true);
   expect(apiProviderDefaultModels('stepfun').has('custom-model')).toBe(false);
 });
 

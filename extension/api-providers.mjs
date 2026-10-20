@@ -45,7 +45,7 @@ export const API_PROVIDERS = [
   {id:'volcengine',name:'Volcengine',protocol:'chat',baseUrl:'https://ark.cn-beijing.volces.com/api/v3',defaultModel:'doubao-seed-1-6-flash-250828',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'alibaba',name:'Alibaba Cloud',protocol:'chat',baseUrl:'https://dashscope.aliyuncs.com/compatible-mode/v1',defaultModel:'qwen3.8-flash',apiKeyUrl:'',keyOptional:false,fields:[]},
   {id:'moonshotai',name:'Moonshot AI',protocol:'chat',baseUrl:'https://api.moonshot.ai/v1',defaultModel:'kimi-k2.6',apiKeyUrl:'',keyOptional:false,fields:[]},
-  {id:'stepfun',name:'StepFun (阶跃星辰)',protocol:'chat',baseUrl:'https://api.stepfun.com/v1',defaultModel:'step-1-flash',apiKeyUrl:'',keyOptional:false,fields:stepfunFields},
+  {id:'stepfun',name:'StepFun (阶跃星辰)',protocol:'chat',baseUrl:'https://api.stepfun.com/v1',defaultModel:'step-3.7-flash',apiKeyUrl:'',keyOptional:false,fields:stepfunFields},
   {id:'huggingface',name:'Hugging Face',protocol:'chat',baseUrl:'https://router.huggingface.co/v1',defaultModel:'Qwen/Qwen2.5-7B-Instruct-1M',apiKeyUrl:'',keyOptional:false,fields:[]},
 ].map(provider => THINKING_PROTOCOLS.has(provider.protocol) ? {...provider,fields:[...provider.fields,THINKING_FIELD]} : provider);
 
@@ -104,16 +104,17 @@ export function apiProviderBaseUrl(providerId,options={}) {
   return provider.baseUrl;
 }
 
-// Step Plan 订阅套餐不含 step-1-flash（实测返回 model_invalid），套餐端点的可用默认模型是 step-3.5-flash；
-// 返回该接入方式的默认模型，自定义模型始终保留不动。
+// 按量 v1 现网已不含 step-1-flash（实测 model_invalid）；可用 flash 为恒思考的 step-3.x。
+// 套餐端点默认仍是 step-3.5-flash。自定义模型始终保留不动。
 export function apiProviderDefaultModel(providerId,options={}) {
   const provider=getApiProvider(providerId);
-  if (providerId==='stepfun') return normalizedOptions(provider,options).plan==='step_plan'?'step-3.5-flash':'step-1-flash';
+  if (providerId==='stepfun') return normalizedOptions(provider,options).plan==='step_plan'?'step-3.5-flash':'step-3.7-flash';
   return provider?.defaultModel || '';
 }
 // StepFun 各接入方式的默认模型集合，供切换接入方式时识别「仍是默认值、可以替换」的情形。
+// 保留已下线的 step-1-flash，以便旧默认值在切换接入方式时仍被替换。
 export function apiProviderDefaultModels(providerId) {
-  return providerId==='stepfun'?new Set(['step-1-flash','step-3.5-flash']):new Set([getApiProvider(providerId)?.defaultModel||'']);
+  return providerId==='stepfun'?new Set(['step-1-flash','step-3.5-flash','step-3.7-flash']):new Set([getApiProvider(providerId)?.defaultModel||'']);
 }
 
 function normalizedBaseUrl(value) {
