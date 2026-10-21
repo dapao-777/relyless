@@ -862,7 +862,7 @@ async function translateItems(items,settings,trace,{scope,onProgress,origin,sour
         const result=scope==='page'?(isSubscriptionKind(settings.providerKind)?normalizePageTranslationResult(raw,sourceItems):inspectPageTranslationResult(raw,sourceItems)):normalizeEmergencyResult(raw,sourceItems),mapped=new Map();
         for(const value of result.items)mapped.set(idToKey.get(value.id),{translation:value.translation});
         for(const value of result.errors||[])mapped.set(idToKey.get(value.id),{error:value.code});
-        await diagnostics.event(trace,'validation','ok');
+        if(result.errors?.length)await diagnostics.event(trace,'validation','error',{code:result.errors[0].code,expectedCount:sourceItems.length,actualCount:result.items.length});else await diagnostics.event(trace,'validation','ok');
         await requireLiveConsumer(backgroundGuards.get(operation));
         if(generation!==providerGeneration)throw staleWork();
         const at=Date.now();for(const [key,outcome]of mapped)if(outcome.translation!==undefined){translationCache.delete(key);translationCache.set(key,{translation:outcome.translation,at});const pkey=keyToPkey.get(key);if(pkey){pageTranslationCache=writeCache(pageTranslationCache||{},pkey,{zh:outcome.translation,at},{limit:PAGE_TRANSLATION_CACHE_LIMIT});void persistPageTranslationCache(settings);}}

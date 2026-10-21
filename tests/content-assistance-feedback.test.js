@@ -116,6 +116,22 @@ test('late prepared support cannot withdraw a confirmed annotation during viewpo
   }});
 });
 
+test('a remembered word with help history still renders its support batch',async()=>{
+  const sentence='Give it a concrete task in ordinary language so the assistant can inspect the request, preserve context, explain the result, and verify the completed work.';
+  const start=sentence.indexOf('ordinary');
+  // Background publicSupport adds history for words already in the reading record.
+  const target=history=>({text:'ordinary',start,end:start+'ordinary'.length,wordId:'ordinary-general',senseKey:'ordinary-sense',sense:'common',stage:'hint',locked:false,revision:3,hint:'common',translation:'日常的',personal:true,history});
+  for(const [history,shown]of[[{helps:2,lastAt:1700000000000},true],[{helps:-1,lastAt:0},false]])await withContent(async({paragraph})=>{
+    if(shown)await waitFor(()=>paragraph.querySelector('.shisui-term-hint')?.textContent==='common');
+    else{await new Promise(resolve=>setTimeout(resolve,300));expect(paragraph.querySelector('.shisui-term-hint')).toBeNull();}
+  },{observe:true,settingsPatch:{assistanceMode:'ambient',rememberSupport:true},bodyHtml:'<main lang="en"><p>'+sentence+'</p><p>'+sentence+' '+sentence+'</p></main>',runtimeHandler:(message,callback)=>{
+    if(message.type==='ANALYZE'){callback({ok:true,data:{terms:[{id:'ordinary-general',priority:10,occurrences:[{start,end:start+'ordinary'.length,text:'ordinary'}]}]}});return true;}
+    if(message.type==='SUPPORT_BATCH'){callback({ok:true,data:{items:message.items.map(item=>({id:item.id,target:target(history),meaning:null,sentenceTranslation:null,coverage:'excerpt'}))}});return true;}
+    if(message.type==='PREPARED_SUPPORT'){callback({ok:true,data:{items:message.items.map(item=>({id:item.id,targets:[]}))}});return true;}
+    return false;
+  }});
+});
+
 test('annotation lookup shows temporary loading and a retryable error without an unconfirmed hint',async()=>{
   await withContent(async({state,paragraph,pending,lookup})=>{
     lookup();expect(state.card.answer.textContent).toContain('正在查词');expect(paragraph.querySelector('.shisui-term-hint')).toBeNull();
@@ -338,6 +354,23 @@ test('closing a failed passage panel clears its error task',async()=>{
     expect((await send({type:'SS_STATUS'})).data.tasks.find(task=>task.key==='passage')?.error).toBe(true);
     click(panel.querySelector('button'));expect(panel.isConnected).toBe(false);
     expect((await send({type:'SS_STATUS'})).data.tasks.some(task=>task.key==='passage')).toBe(false);
+  });
+});
+
+test('a failed passage panel announces the error and retries only that passage',async()=>{
+  await withContent(async({paragraph,pending,send,click})=>{
+    const range=document.createRange();range.selectNodeContents(paragraph);
+    const operation=ShisuiContent.hooks.translatePassage(ShisuiContent.hooks.passageTarget(range));
+    await waitFor(()=>pending.length===1);pending.shift().reply({ok:false,error:'段落翻译失败'});await operation;
+    const panel=document.querySelector('[data-shisui-ui="passage-translation"]'),body=panel.querySelector('[role="alert"]');
+    expect(body?.textContent).toBe('段落翻译失败');
+    const retry=[...panel.querySelectorAll('button')].find(button=>button.textContent==='重试');
+    expect(retry).toBeTruthy();
+    click(retry);expect(panel.isConnected).toBe(false);
+    await waitFor(()=>pending.length===1);pending.shift().reply({ok:true,data:{items:[{id:'p1',translation:'段落译文'}]}});
+    await waitFor(()=>document.querySelector('[data-shisui-ui="passage-translation"]')?.textContent.includes('段落译文'));
+    expect(document.querySelectorAll('[data-shisui-ui="passage-translation"]')).toHaveLength(1);
+    expect((await send({type:'SS_STATUS'})).data.tasks.some(task=>task.key==='passage'&&task.error)).toBe(false);
   });
 });
 

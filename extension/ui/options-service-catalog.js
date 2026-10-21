@@ -105,8 +105,6 @@ class ServiceCatalogController {
     this.setDefaultBtn = document.querySelector('#catalog-hero-set-default');
     this.docLink = document.querySelector('#catalog-hero-website');
     this.heroDesc = document.querySelector('#catalog-hero-desc');
-    this.checkConnBtn = document.querySelector('#catalog-check-conn-btn');
-    this.checkBtnLabel = document.querySelector('#catalog-check-btn-label');
     this.countEl = document.querySelector('#catalog-service-count');
 
     this.searchInput?.addEventListener('input', () => {
@@ -115,7 +113,6 @@ class ServiceCatalogController {
     });
     this.addBtn?.addEventListener('click', () => this.triggerNewCustomService());
     this.setDefaultBtn?.addEventListener('click', () => void this.makeCurrentServiceDefault());
-    this.checkConnBtn?.addEventListener('click', () => this.triggerCheckConnection());
   }
 
   getCurrentState() {
@@ -357,7 +354,6 @@ class ServiceCatalogController {
         this.docLink.hidden = false;
       } else this.docLink.hidden = true;
     }
-    if (this.checkBtnLabel) this.checkBtnLabel.textContent = this.isSubscriptionKey(key) ? '刷新连接与状态' : '检查服务连接';
     if (this.isSubscriptionKey(key) && key !== 'local') globalThis.optionsRenderSubscription?.();
   }
 
@@ -409,15 +405,6 @@ class ServiceCatalogController {
       result.hidden = false;
     }
     document.querySelector('#provider-keys')?.focus();
-  }
-
-  triggerCheckConnection() {
-    const spinIcon = this.checkConnBtn?.querySelector('.check-spin-icon');
-    spinIcon?.classList.add('is-spinning');
-    if (this.selectedKey === 'local') document.querySelector('#nano-refresh')?.click();
-    else if (this.isSubscriptionKey(this.selectedKey)) document.querySelector('#refresh-subscription')?.click();
-    else document.querySelector('#test-provider')?.click();
-    setTimeout(() => spinIcon?.classList.remove('is-spinning'), 1200);
   }
 
   triggerNewCustomService() {

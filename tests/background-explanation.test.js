@@ -1249,6 +1249,20 @@ test('emergency authorization survives worker restart but not service changes, s
   }finally{globalThis.chrome=previous;}
 });
 
+test('page translation records item validation failures instead of a clean validation pass',async()=>{
+  const previous=globalThis.chrome,previousFetch=globalThis.fetch,data={wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',provider:{baseUrl:'https://api.example/v1',model:'fixture',apiKey:'fixture-key'}}},fixture=isolatedChrome(data,{id:'page-validation'}),page={url:'https://isolated.example/read',tab:{id:91},frameId:0};
+  try{
+    globalThis.chrome=fixture.api;globalThis.fetch=withCapabilityProbe(async()=>({ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({items:[{id:'chunk',translation:'still English'}]})},finish_reason:'stop'}]})}));
+    await import('../extension/background.js?page-validation='+Date.now());
+    await isolatedSend(fixture,{type:'PAGE_UI_INJECT',tabId:91});
+    const {token}=await isolatedSend(fixture,{type:'EMERGENCY_BEGIN',tabId:91,url:page.url});
+    const result=await isolatedSend(fixture,{type:'EMERGENCY_TRANSLATE',token,requestSeq:1,items:[pageItem('chunk','A paragraph the model failed to translate.')]},page);
+    expect(result).toEqual({items:[],errors:[{id:'chunk',code:'TRANSLATION_NO_HAN'}]});
+    const events=(await isolatedSend(fixture,{type:'DIAGNOSTICS_EXPORT'})).events.filter(row=>row.operation==='EMERGENCY_TRANSLATE'&&row.stage==='validation');
+    expect(events).toEqual([expect.objectContaining({status:'error',code:'TRANSLATION_NO_HAN',expectedCount:1,actualCount:0})]);
+  }finally{globalThis.chrome=previous;globalThis.fetch=previousFetch;}
+});
+
 test('diagnostic export finds repeated validation failures without exposing source or secrets',async()=>{
   const previous=globalThis.chrome,previousFetch=globalThis.fetch,data={wordSchemaVersion:5,productSchemaVersion:1,words:[],settings:{providerKind:'api',provider:{baseUrl:'https://private-provider.example/v1',model:'private-model-name',apiKey:'secret-key-marker'}}},fixture=isolatedChrome(data,{id:'diagnostic-boundary'}),page={url:'https://isolated.example/read?secret-page-query',tab:{id:91},frameId:0};
   page.url='https://isolated.example/read';

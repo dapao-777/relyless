@@ -89,6 +89,8 @@ async function boot(){
   setStatus('正在渲染…');
   try{state.doc=await getDocument({data}).promise;}catch{setStatus('文档解析失败：可能不是有效的 PDF，或已加密/损坏。');return;}
   if(state.doc.numPages>MAX_PDF_PAGES){await state.doc.destroy();state.doc=null;setStatus('PDF 超过 500 页，请使用原生查看器。');return;}
+  // Narrow windows start at fit-to-width instead of scrolling the whole viewer sideways; zoom still works.
+  try{const width=(await state.doc.getPage(1)).getViewport({scale:1}).width,pages=$('pages'),room=pages.clientWidth-parseFloat(getComputedStyle(pages).paddingLeft)-parseFloat(getComputedStyle(pages).paddingRight);if(room>0&&width*state.scale>room)state.scale=Math.max(0.5,Math.floor(room/width*100)/100);}catch{}
   buildPlaceholders();
   $('page-info').textContent='1 / '+state.doc.numPages;
   setStatus('');
@@ -136,7 +138,9 @@ async function renderPage(pageNo,wrap,gen){
   try{await Promise.all([renderTask.promise,textLayer.render()]);}catch(error){if(gen!==state.renderGen)return;setStatus('页面渲染失败：'+(error?.message||'未知错误'));return;}
   if(gen!==state.renderGen)return;
   if(rec&&rec.renderTask===renderTask)rec.renderTask=null;
-  const divs=[...layer.querySelectorAll('span')].map(el=>({el,x:el.offsetLeft,y:el.offsetTop,w:el.offsetWidth,h:el.offsetHeight,text:el.textContent}));
+  // pdf.js sizes spans with scaleX/scale transforms; offset* ignores them, so measure rendered boxes.
+  const origin=layer.getBoundingClientRect();
+  const divs=[...layer.querySelectorAll('span:not(.markedContent)')].map(el=>{const box=el.getBoundingClientRect();return {el,x:box.left-origin.left,y:box.top-origin.top,w:box.width,h:box.height,text:el.textContent};});
   const blocks=pdfBlocks(divs);
   for(const block of blocks){
     block.pageNo=pageNo;
@@ -146,8 +150,7 @@ async function renderPage(pageNo,wrap,gen){
     const action=document.createElement('button');action.type='button';action.className='block-action';action.textContent='译';
     action.addEventListener('click',event=>{
       event.stopPropagation();
-      const zh=overlay.querySelector('.pdf-zh');
-      if(zh){zh.hidden=!zh.hidden;action.textContent=zh.hidden?'译':'文';}
+      if(overlay.querySelector('.pdf-zh'))pinTranslation(overlay,!overlay.classList.contains('pinned'));
       else void translateBlocks(pageNo,[block]);
     });
     overlay.append(action);
@@ -290,11 +293,14 @@ function setTranslation(block,text){
   block.overlay.classList.add('translated');
   let zh=block.overlay.querySelector('.pdf-zh');
   if(!zh){zh=document.createElement('div');zh.className='pdf-zh';block.overlay.append(zh);}
-  zh.hidden=false;
-  zh.style.fontSize=Math.max(9,Math.min(15,(block.h/Math.max(block.lines?.length||1,1))*0.7))+'px';
-  zh.textContent=text.length>280?text.slice(0,280)+'…':text;
-  const action=block.overlay.querySelector('.block-action');
-  if(action)action.textContent='文';
+  zh.textContent=text;
+  pinTranslation(block.overlay,block.overlay.classList.contains('pinned'));
+}
+// Page translations never cover the English by default: they show on hover or focus, or stay pinned per block.
+function pinTranslation(overlay,pinned){
+  overlay.classList.toggle('pinned',pinned);
+  const action=overlay.querySelector('.block-action');
+  if(action){action.textContent=pinned?'收起':'译';action.setAttribute('aria-pressed',String(pinned));action.title=pinned?'收起本段译文':'固定显示本段译文';}
 }
 async function translateBlocks(pageNo,blocks){
   const seq=++state.assistSeq;
@@ -441,7 +447,7 @@ async function translateCurrentPage(){
     const untranslated=sendable.filter(block=>!state.translations.get(pageNo+':'+block.id));
     let status=untranslated.length
       ?'本页已译 '+(sendable.length-untranslated.length)+'/'+sendable.length+' 块，'+untranslated.length+' 块失败，可再次点击重试。'
-      :'本页翻译完成（'+sendable.length+' 块），译文附在原文下方，右侧栏可总览。';
+      :'本页翻译完成（'+sendable.length+' 块）。悬停原文段落查看译文，点「译」可固定显示；右侧栏可总览。';
     if(skipped.length)status+=' '+skipped.length+' 个超长块未送译。';
     setStatus(status);
   }catch(error){

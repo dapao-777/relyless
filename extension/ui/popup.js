@@ -5,7 +5,7 @@ popupEls.sentenceSelection=document.querySelector('#sentence-selection');
 popupEls.sentenceSelectionOption=document.querySelector('#sentence-selection-option');
 const popupUnsupported=document.querySelector('#unsupported-page');
 const popupPageControls=document.querySelector('#page-controls');
-for(const name of ['panel','open','confirm','confirm-title','start','cancel','progress','progress-copy','counts','actions','stop','resume','retry','clear','result','status']){
+for(const name of ['panel','open','confirm','confirm-title','start','cancel','progress','progress-copy','counts','phase','actions','stop','resume','retry','clear','result','status']){
   const key='emergency'+name.split('-').map(part=>part[0].toUpperCase()+part.slice(1)).join('');
   popupEls[key]=document.querySelector('#emergency-'+name);
 }
@@ -32,10 +32,13 @@ function popupTaskSnapshot(value){
   }
   return value.map(({key,text,error,busy})=>({key,text,error,busy}));
 }
+function popupEmergencyVisible(){return Boolean(popupEmergency.active||popupEmergency.displayed||popupEmergency.phase!=='off');}
 function popupRenderTasks(){
-  popupTaskPanel.hidden=popupTasks.length===0;
-  const signature=JSON.stringify(popupTasks);if(signature===popupTaskSignature)return;popupTaskSignature=signature;
-  popupTaskList.replaceChildren(...popupTasks.map(task=>{const item=document.createElement('li');item.textContent=task.text;item.title=task.text;item.classList.toggle('error',task.error);if(task.busy)item.setAttribute('aria-busy','true');return item;}));
+  // The progress box already reports page translation; do not repeat it as a task row.
+  const tasks=popupEmergencyVisible()?popupTasks.filter(task=>task.key!=='emergency'):popupTasks;
+  popupTaskPanel.hidden=tasks.length===0;
+  const signature=JSON.stringify(tasks);if(signature===popupTaskSignature)return;popupTaskSignature=signature;
+  popupTaskList.replaceChildren(...tasks.map(task=>{const item=document.createElement('li');item.textContent=task.text;item.title=task.text;item.classList.toggle('error',task.error);if(task.busy)item.setAttribute('aria-busy','true');return item;}));
 }
 
 function popupSetLive(element, value) { if (element.textContent !== value) element.textContent = value; }
@@ -103,10 +106,13 @@ function popupRender(){
   popupEls.sentenceSelectionOption.hidden=!popupSentenceGroupsLoaded||!popupSentenceGroups.enabled;
   popupEls.sentenceSelection.checked=popupSentenceGroups.selectionColor!==false;
   popupEls.sentenceSelection.disabled=popupBusy||!supported||!popupSentenceGroupsLoaded||!popupSentenceGroups.enabled;
-  const emergencyVisible=Boolean(popupEmergency.active||popupEmergency.displayed||popupEmergency.phase!=='off');
+  const emergencyVisible=popupEmergencyVisible();
   const resumable=!popupEmergency.active&&popupEmergency.total>0&&['stopped','error'].includes(popupEmergency.phase);
-  popupSetLive(popupEls.emergencyStatus,popupReaderActive?'先退出专注阅读':popupEmergencyPhaseText());
-  popupEls.emergencyOpen.textContent=popupEmergency.active?'翻译进行中':emergencyVisible?'本页译文':'全文翻译';
+  const phaseText=popupReaderActive?'先退出专注阅读':popupEmergencyPhaseText();
+  // While progress is shown, the phase sentence lives in the progress box at full width.
+  popupSetLive(popupEls.emergencyStatus,emergencyVisible?'':phaseText);popupEls.emergencyStatus.hidden=emergencyVisible;
+  popupSetLive(popupEls.emergencyPhase,emergencyVisible?phaseText:'');popupEls.emergencyPhase.classList.toggle('error',popupEmergency.phase==='error');
+  popupEls.emergencyOpen.textContent=popupEmergency.active?'翻译进行中':'全文翻译';
   popupEls.emergencyOpen.disabled=popupBusy||!supported||popupReaderActive||!popupState?.providerConfigured||emergencyVisible||!popupEls.emergencyConfirm.hidden;
   popupEls.emergencyProgress.hidden=!emergencyVisible;
   popupEls.emergencyProgressCopy.textContent='已译 '+popupEmergency.completed+' / 已识别 '+popupEmergency.total+' 段';
@@ -220,7 +226,8 @@ async function popupEmergencyStart(){
     popupEmergencyPrompt(false,{focus:false});
     popupEls.emergencyResult.classList.remove('error');
     popupEls.emergencyResult.textContent=resume?'已继续，仅处理尚未完成的段落。':'已开始，仅处理读到附近的正文。';
-    popupEls.emergencyResult.hidden=false;
+    // The progress box states the phase; a success note is only needed once the box is gone.
+    popupEls.emergencyResult.hidden=popupEmergencyVisible();
   }catch(error){
     if(token)await request('EMERGENCY_END',{tabId:popupTab.id,token}).catch(()=>{});
     popupEls.emergencyResult.classList.add('error');popupShowError(popupEls.emergencyResult,error);
@@ -234,7 +241,7 @@ async function popupEmergencyAction(type){
     popupEmergency=popupEmergencySnapshot(result.data?.emergency||{});
     popupEls.emergencyResult.classList.remove('error');
     popupEls.emergencyResult.textContent=type==='SS_EMERGENCY_STOP'?'已停止发送新请求；已显示的中文仍保留。':type==='SS_EMERGENCY_RETRY'?'正在重试失败段落。':'已移除本页译文，页面已返回英文。';
-    popupEls.emergencyResult.hidden=false;
+    popupEls.emergencyResult.hidden=popupEmergencyVisible();
   }catch(error){popupEls.emergencyResult.classList.add('error');popupShowError(popupEls.emergencyResult,error);}
   finally{popupBusy=false;popupRender();popupFocusEmergency();}
 }

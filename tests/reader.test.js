@@ -33,6 +33,20 @@ test('English and Chinese articles preserve ordered prose and nested content wit
   }
 });
 
+test('an article inside main keeps the preceding title and lede from main, in order and once',()=>{
+  const html='<main><header><h1>Full article title</h1><p class="lede">The lede explains the article.</p><nav>'+long('Section link. ')+'</nav></header><article><h2>First section</h2><p>'+long('Body paragraph. ')+'</p><p>'+long('Second body paragraph. ')+'</p></article></main><footer><p>Footer text.</p></footer>';
+  const {reader}=page(html),{article,sourceRoot,sourceMap}=reader.extract();
+  expect(sourceRoot.localName).toBe('article');
+  expect(article.querySelectorAll('h1')).toHaveLength(1);
+  expect(article.querySelector('h1').textContent).toBe('Full article title');
+  expect(article.firstElementChild.localName).toBe('h1');
+  expect(article.textContent.match(/The lede explains the article\./g)).toHaveLength(1);
+  expect(article.textContent.indexOf('The lede')).toBeLessThan(article.textContent.indexOf('First section'));
+  expect(article.textContent.includes('Section link')).toBe(false);
+  expect(article.textContent.includes('Footer text')).toBe(false);
+  expect(sourceMap.get(article.querySelector('h1')).textContent).toBe('Full article title');
+});
+
 test('ambiguous articles, short controls and excessive source nodes refuse without a partial article',()=>{
   let ctx=page('<article><p>'+long('Article one paragraph. ')+'</p><p>'+long('Another paragraph. ')+'</p></article><article><p>'+long('Article two paragraph. ')+'</p><p>'+long('Another paragraph. ')+'</p></article>');
   expect(()=>ctx.reader.extract()).toThrow('无法可靠识别');

@@ -54,12 +54,16 @@
       for (const other of candidates.slice(1)) if (!first.element.contains(other.element) && !other.element.contains(first.element) && other.letters >= first.letters*.8) throw failure();
       return first;
     }
-    let selected = null;
+    let selected = null, lead = [];
     if (rule?.root) { try { selected = score(rootDocument.querySelector(rule.root)); } catch {} }
     if (!selected) {
       const articles = choose([...rootDocument.querySelectorAll('article')]);
       const mains = choose([...rootDocument.querySelectorAll('main,[role="main"]')]);
-      if (articles && mains && mains.element.contains(articles.element) && articles.letters >= mains.letters/2) selected = articles;
+      if (articles && mains && mains.element.contains(articles.element) && articles.letters >= mains.letters/2) {
+        selected = articles;
+        // Same lede rule as the live reading root: main-level title, lede and pull quote before the article.
+        lead = [...mains.element.querySelectorAll('h1,p,blockquote')].filter(block => filtered.has(block) && visible(block) && !articles.element.contains(block) && !block.parentElement.closest('h1,p,blockquote') && (block.compareDocumentPosition(articles.element) & Node.DOCUMENT_POSITION_FOLLOWING)).slice(0,12);
+      }
       else selected = choose([articles?.element,mains?.element].filter(Boolean));
       if (!selected) {
         const ancestors = new Set();
@@ -123,10 +127,11 @@
       }
       if(tag==='a'&&fragment!==null&&anchorIds.has(fragment))pendingAnchors.push({link:result,id:anchorIds.get(fragment),href:fallbackHref});
     }
-    if (!source.querySelector('h1') && rootDocument.title) {const heading=rootDocument.createElement('h1');heading.textContent=rootDocument.title.slice(0,300);article.append(heading);}
+    if (!source.querySelector('h1') && !lead.some(block => block.localName === 'h1') && rootDocument.title) {const heading=rootDocument.createElement('h1');heading.textContent=rootDocument.title.slice(0,300);article.append(heading);}
     sourceMap.set(article,source);
     if (source.id && anchorIds.has(source.id)) {article.id=anchorIds.get(source.id);renderedIds.add(article.id);}
     if (['ltr','rtl','auto'].includes(source.dir)) article.dir=source.dir;
+    for (const block of lead) render(block,article);
     for (const child of source.childNodes) render(child,article);
     for (const {link,id,href} of pendingAnchors) if (!renderedIds.has(id)) {if(href)link.href=href;else link.removeAttribute('href');}
     return {article,sourceRoot:source,sourceMap};
