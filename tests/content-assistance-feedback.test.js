@@ -480,6 +480,113 @@ test('navigation failure arriving in a hidden document has recovery controls aft
   });
 });
 
+test('annotation lookup shows a confirmed meaning above the word and closes the card',async()=>{
+  await withContent(async({state,paragraph,pending,lookup})=>{
+    state.enabled=true;state.paused=false;state.settings.lookupDisplay='annotation';state.settings.helpLanguage='zh';
+    lookup();
+    expect(state.card.answer.textContent).toContain('正在查词');
+    await waitFor(()=>pending.length===1);
+    pending.shift().reply({ok:true,data:{translation:'重试',hint:'try again',sense:'repeat an attempt',source:'provider',support:{wordId:'retry-word',senseKey:'retry-sense'}}});
+    await waitFor(()=>paragraph.querySelector('.shisui-term-hint')?.textContent==='重试');
+    await waitFor(()=>state.card===null);
+    expect(paragraph.querySelector('.shisui-term-mark')?.textContent).toBe('retries');
+    expect(state.enabled).toBe(true);
+  });
+});
+
+test('annotation lookup puts a confirmed meaning above an in-article link',async()=>{
+  await withContent(async({state,paragraph,pending,lookup})=>{
+    paragraph.innerHTML='The client <a href="/retries">retries</a> with backoff.';
+    const link=paragraph.querySelector('a');
+    document.caretRangeFromPoint=()=>{const range=document.createRange();range.setStart(link.firstChild,1);range.collapse(true);return range;};
+    state.enabled=true;state.paused=false;state.settings.lookupDisplay='annotation';state.settings.helpLanguage='zh';
+    lookup(link);
+    expect(state.card.answer.textContent).toContain('正在查词');
+    await waitFor(()=>pending.length===1);
+    expect(pending[0].message.context).toContain('backoff');
+    expect(pending[0].message.level).toBe('rescue');
+    pending.shift().reply({ok:true,data:{translation:'重试',hint:'try again',sense:'repeat an attempt',source:'provider',support:{wordId:'retry-word',senseKey:'retry-sense'}}});
+    await waitFor(()=>link.querySelector('.shisui-term-hint')?.textContent==='重试');
+    await waitFor(()=>state.card===null);
+    expect(state.enabled).toBe(true);
+  });
+});
+
+test('hold-D lookup and selection stay available while page reading is off',async()=>{
+  await withContent(async({state,paragraph,pending,handlers,event,lookup})=>{
+    state.enabled=false;state.paused=true;
+    lookup();
+    await waitFor(()=>pending.some(item=>item.message.type==='ASSIST'));
+    expect(state.enabled).toBe(false);
+    expect(paragraph.querySelector('.shisui-term-mark')).toBeNull();
+    expect(paragraph.querySelector('.shisui-term-hint')).toBeNull();
+    expect(state.card.answer.textContent).not.toContain('正在查词');
+    pending.splice(0).forEach(item=>item.reply({ok:false,error:'测试结束'}));
+    const range=document.createRange();range.selectNodeContents(paragraph);getSelection().removeAllRanges();getSelection().addRange(range);
+    handlers.get('showPassageAction')(event(paragraph,{type:'pointerup'}));
+    const labels=[...document.querySelectorAll('[data-shisui-ui="passage-action"] button')].map(button=>button.textContent);
+    expect(labels).toContain('翻译所选');
+    expect(state.enabled).toBe(false);
+  });
+});
+
+test('context help explains the selection without enabling page reading',async()=>{
+  await withContent(async({state,paragraph,pending,send})=>{
+    state.enabled=false;state.paused=true;
+    const range=document.createRange();range.selectNodeContents(paragraph);getSelection().removeAllRanges();getSelection().addRange(range);
+    const result=await send({type:'SS_CONTEXT_HELP',selectionText:paragraph.textContent});
+    expect(result.ok).toBe(true);
+    await waitFor(()=>pending.some(item=>item.message.type==='ASSIST'));
+    expect(state.enabled).toBe(false);
+    expect(paragraph.querySelector('.shisui-term')).toBeNull();
+  });
+});
+
+test('turning off page reading keeps a confirmed translation when word marks unwrap',async()=>{
+  await withContent(async({state,paragraph,pending,send})=>{
+    const node=paragraph.firstChild,start=node.textContent.indexOf('retries');
+    const head=node.splitText(start);head.splitText('retries'.length);
+    const mark=document.createElement('span');mark.className='shisui-term-mark';mark.setAttribute('data-shisui-ui','term');
+    head.parentNode.insertBefore(mark,head);mark.append(head);
+    state.records.push({manual:false,block:paragraph,marks:[mark],target:{text:'retries'},sourceText:paragraph.textContent});
+    await send({type:'SS_EMERGENCY_START',token:'keep-token',resume:false});
+    await waitFor(()=>pending.length===1);
+    const request=pending.shift();
+    request.reply({ok:true,data:{items:[{id:request.message.items[0].id,translation:'保留的译文'}],errors:[]}});
+    await waitFor(()=>paragraph.querySelector('[data-shisui-ui=emergency-translation]')?.textContent==='保留的译文');
+    const off=await send({type:'SS_SET_ENABLED',enabled:false});
+    expect(off.ok).toBe(true);
+    expect(off.data.enabled).toBe(false);
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(paragraph.querySelector('.shisui-term-mark')).toBeNull();
+    expect(paragraph.querySelector('[data-shisui-ui=emergency-translation]')?.textContent).toBe('保留的译文');
+  });
+});
+
+test('turning sentence structure on does not start page reading',async()=>{
+  await withContent(async({state,send})=>{
+    state.enabled=false;state.paused=true;
+    const result=await send({type:'SS_SET_SENTENCE_GROUPS',enabled:true});
+    expect(result.ok).toBe(true);
+    expect(result.data.enabled).toBe(false);
+    expect(result.data.sentenceGroups.enabled).toBe(true);
+    expect(state.enabled).toBe(false);
+  });
+});
+
+test('leaving the page stops word marks and sentence structure together',async()=>{
+  await withContent(async({window,state,handlers,send})=>{
+    state.enabled=true;
+    const started=await send({type:'SS_SET_SENTENCE_GROUPS',enabled:true});
+    expect(started.data.sentenceGroups.enabled).toBe(true);
+    window.history.pushState({},'','/next');
+    handlers.get('onPageNavigation')();
+    const status=await send({type:'SS_STATUS'});
+    expect(status.data.enabled).toBe(false);
+    expect(status.data.sentenceGroups.enabled).toBe(false);
+  });
+});
+
 test('host removal of an in-flight help card clears its task and rejects a late failure',async()=>{
   await withContent(async({state,pending,lookup,send})=>{
     lookup();await waitFor(()=>pending.length===1);state.card.host.remove();await waitFor(()=>state.card===null);expect((await send({type:'SS_STATUS'})).data.tasks.some(task=>task.key==='lookup')).toBe(false);pending.shift().reply({ok:false,error:'迟到失败'});await new Promise(resolve=>setTimeout(resolve,20));expect((await send({type:'SS_STATUS'})).data.tasks.some(task=>task.key==='lookup')).toBe(false);expect(document.querySelector('[data-shisui-ui=card]')).toBeNull();

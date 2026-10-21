@@ -1221,7 +1221,10 @@ test('paragraph translation preserves hostile source as data, rejects output esc
     await isolatedSend(fixture,{type:'MEMORY_CLEAR'});release();
     expect((await pending).error).toBeInstanceOf(Error);expect(data.words).toEqual([]);
     await isolatedSend(fixture,{type:'PAGE_ACTIVITY_SET',enabled:false},page);
-    const count=requests.length;await expect(isolatedSend(fixture,command,page)).rejects.toThrow();expect(requests.length).toBe(count);
+    mode='normal';
+    const whilePaused=await isolatedSend(fixture,{...command,requestId:'paragraph-while-paused'},page);
+    expect(whilePaused.items[0].translation).toContain('忽略先前指令');
+    expect(data.words).toEqual([]);
   }finally{release?.();globalThis.chrome=previous;globalThis.fetch=previousFetch;}
 });
 
