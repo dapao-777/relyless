@@ -139,12 +139,30 @@ function authHeaders(service,protocol){const headers={'Content-Type':'applicatio
   else headers.Authorization='Bearer '+service.apiKey;
   return headers;
 }
+async function peekError(response){
+  if(!response.body?.getReader)return {};
+  const reader=response.body.getReader(),decoder=new TextDecoder();let text='',size=0;
+  try{while(true){const next=await reader.read();if(next.done)break;size+=next.value.byteLength;if(size>8192)return {};text+=decoder.decode(next.value,{stream:true});}text+=decoder.decode();}
+  catch{return {};}finally{try{await reader.cancel();}catch{}reader.releaseLock();}
+  try{const value=JSON.parse(text);const error=value.error||value;return {code:typeof error.code==='string'?error.code:'',message:typeof error.message==='string'?error.message:'',param:typeof error.param==='string'?error.param:''};}
+  catch{return {};}
+}
+function missingModel(status,detail){
+  const code=(detail.code||'').toLowerCase(),message=(detail.message||'').toLowerCase(),param=(detail.param||'').toLowerCase();
+  if(['model_invalid','model_not_found','invalid_model','model_not_exist'].includes(code))return true;
+  if(param==='model'&&[400,404,422].includes(status))return true;
+  return /\bmodel(?:[_ ]id)?\b/.test(message)&&/(invalid|not found|unknown|does not exist|not exist)/i.test(message);
+}
 async function checkedFetch(url,init,service,protocol,detectSchemaSupport=false){const base=serviceBase(service);assertSameOrigin(base,url);let response;try{response=await fetch(url,{...init,redirect:'error',credentials:'omit',headers:{...authHeaders(service,protocol),...init.headers}});}catch(error){if(error?.name==='AbortError')throw error;throw transportError('无法连接服务，请检查网络、API 地址与服务跨域支持。','NETWORK');}
   if(response.ok)return response;
-  if(detectSchemaSupport&&await rejectsSchemaFormat(response))throw transportError('此服务或模型不支持严格 JSON Schema。','SCHEMA_UNSUPPORTED');
-  const incompatible=[400,404,405,422].includes(response.status);
-  const message=[401,403].includes(response.status)?'服务拒绝访问，请检查 API Key、模型权限与账户状态。':response.status===402?'服务账户余额不足，请充值或检查服务商账户状态。':response.status===429?'服务额度不足或请求过快，请稍后重试或检查账户。':incompatible?'服务或模型不兼容无思考模式、结构化输出或当前原生协议，已停止且不会删除参数重试。':`服务返回 HTTP ${response.status}，请检查 API 地址和模型。`;
-  throw transportError(message,[401,403].includes(response.status)?'AUTH':response.status===402?'QUOTA':response.status===429?'RATE_LIMIT':incompatible?'INCOMPATIBLE_REQUEST':'HTTP',{httpStatus:response.status});
+  if(detectSchemaSupport&&await rejectsSchemaFormat(response.clone()))throw transportError('此服务或模型不支持严格 JSON Schema。','SCHEMA_UNSUPPORTED');
+  const status=response.status,detail=await peekError(response);
+  if([401,403].includes(status))throw transportError('服务拒绝访问，请检查 API Key、模型权限与账户状态。','AUTH',{httpStatus:status});
+  if(status===402)throw transportError('服务账户余额不足，请充值或检查服务商账户状态。','QUOTA',{httpStatus:status});
+  if(status===429)throw transportError('服务额度不足或请求过快，请稍后重试或检查账户。','RATE_LIMIT',{httpStatus:status});
+  if(missingModel(status,detail))throw transportError('当前模型不可用或不存在，请更换模型 ID。','MODEL_INVALID',{httpStatus:status});
+  if([400,405,422].includes(status))throw transportError('服务或模型不兼容无思考模式、结构化输出或当前原生协议，已停止且不会删除参数重试。','INCOMPATIBLE_REQUEST',{httpStatus:status});
+  throw transportError(`服务返回 HTTP ${status}，请检查 API 地址和模型。`,'HTTP',{httpStatus:status});
 }
 function systemPrompt(instructions,schema){return instructions+JSON_SUFFIX+JSON.stringify(schema);}
 function isHybridChatModel(model){return /(?:deepseek-(?:v3|v4)|glm-5\.2|kimi-k2\.6|kimi-k3|qwen3\.(?:5|6|8)|minimax-m3|gemini-2\.5-(?:flash|flash-lite)|grok-4\.3)/i.test(model||'');}

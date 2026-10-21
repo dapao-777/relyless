@@ -219,6 +219,17 @@ test('an incompatible no-thinking request is never retried without its control',
   expect(calls).toBe(1);expect(sent.reasoning_effort).toBe('none');
 });
 
+test('a missing model is not reported as a thinking or schema incompatibility',async()=>{
+  globalThis.fetch=async()=>Response.json({error:{code:'model_invalid',message:'secret-model step-1-flash'}},{status:404});
+  let error;try{await performProviderRequest(service('stepfun','https://api.stepfun.com/v1','step-1-flash'),{},'Explain.',schema);}catch(caught){error=caught;}
+  expect(error.code).toBe('MODEL_INVALID');
+  expect(error.message).toBe('当前模型不可用或不存在，请更换模型 ID。');
+  expect(error.message).not.toContain('secret-model');
+  expect(error.message).not.toContain('不兼容无思考');
+  globalThis.fetch=async()=>new Response('',{status:404});
+  await expect(performProviderRequest(service('openai-compatible','https://custom.example/v1','custom-model'),{},'Explain.',schema)).rejects.toMatchObject({code:'HTTP',detail:{httpStatus:404}});
+});
+
 test('per-service thinking levels map to each provider protocol parameter',async()=>{
   const cases=[
     ['stepfun','https://api.stepfun.com/v1','step-3.7-flash','high',{choices:[{finish_reason:'stop',message:{content:'{"value":"ok"}'}}]},body=>body.reasoning_effort==='high'],
