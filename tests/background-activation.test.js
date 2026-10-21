@@ -69,7 +69,7 @@ test('automation is not persisted until its exact host permission exists',async(
   const result = await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{sites:[{origin:'https://docs.example',enabled:true}]}});
   expect(result).toMatchObject({origin:'https://docs.example',siteRule:true,effective:true,paused:false});
   expect(registrations).toEqual([{id:'ss-auto-start',matches:['https://docs.example/*'],js:['auto-start.js'],runAt:'document_start',allFrames:false,persistAcrossSessions:true}]);
-  expect(tabMessages.at(-1).message).toEqual({type:'SS_AUTO_START',origin:'https://docs.example',reading:true,video:false,sentenceGroups:false,paused:false,assistanceMode:'ambient'});
+  expect(tabMessages.at(-1).message).toEqual({type:'SS_AUTO_START',origin:'https://docs.example',reading:true,video:false,sentenceGroups:true,paused:false,assistanceMode:'ambient'});
   granted.delete('https://docs.example/*');
   globalThis.chrome.permissions.onRemoved.listeners.forEach(listener=>listener({origins:['https://docs.example/*']}));
   await new Promise(resolve=>setTimeout(resolve,0));
@@ -219,6 +219,21 @@ test('sentence groups automation honors exclusions, pause, permission, manual ov
   expect(session['sentenceGroupsMode:'+tab.id]).toBeUndefined();
   tab.url='https://docs.example/article';
   await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{sentenceGroupsAllSites:false}});
+});
+test('opening another page clears a manual pause so site auto can start',async()=>{
+  const previousUrl=tab.url,previousSites=stored.settings.automation.sites.map(site=>({...site}));
+  granted.add('https://docs.example/*');
+  await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{sites:[{origin:'https://docs.example',enabled:true}]}});
+  await send({type:'PAGE_ACTIVITY_SET',enabled:false},pageSender);
+  expect(session['automationPaused:'+tab.id]).toBe(true);
+  tab.url='https://docs.example/next-article';
+  globalThis.chrome.tabs.onUpdated.listeners[0](tab.id,{url:tab.url,status:'complete'},{...tab});
+  await new Promise(resolve=>setTimeout(resolve,0));
+  expect(session['automationPaused:'+tab.id]).toBeUndefined();
+  expect(tabMessages.at(-1).message).toMatchObject({type:'SS_AUTO_START',origin:'https://docs.example',reading:true,paused:false});
+  tab.url=previousUrl;
+  await send({type:'PAGE_ACTIVITY_SET',enabled:true},pageSender);
+  await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{sites:previousSites}});
 });
 test('page request cancellation is restricted to the armed main frame',async()=>{
   await send({type:'PAGE_UI_INJECT',tabId:tab.id});

@@ -918,10 +918,10 @@ async function emergencyCancelRequest(message,sender){
 }
 async function passageTranslate(message,sender) {
   const source=await readingSource(sender);
-  if(!source.active||await tabPaused(source.tabId))throw new Error('请在当前活动页面选择需要翻译的段落。');
+  if(!source.active)throw new Error('请在当前活动页面选择需要翻译的段落。');
   if(typeof message.requestId!=='string'||!message.requestId.length||message.requestId.length>128||!/^[A-Za-z0-9._:-]+$/.test(message.requestId))throw new Error('无效的段落翻译请求编号。');
   const items=normalizeEmergencyItems(message.items),state=await load(),generation=providerGeneration;
-  const current=async()=>{const[latest,page]=await Promise.all([load(),readingSource(sender)]);return generation===providerGeneration&&state.supportDataGeneration===latest.supportDataGeneration&&page.sourceHash===source.sourceHash&&page.active&&!await tabPaused(source.tabId);};
+  const current=async()=>{const[latest,page]=await Promise.all([load(),readingSource(sender)]);return generation===providerGeneration&&state.supportDataGeneration===latest.supportDataGeneration&&page.sourceHash===source.sourceHash&&page.active;};
   const guard=async()=>{if(!await current())throw staleWork();};
   let open=true,pending=null,previous=null,delivering=false,timer=0;
   const deliver=async()=>{
@@ -1386,7 +1386,7 @@ async function effectiveSentenceGroupsMode(settings,tab,paused,authorizeAuto=fal
   const url=new URL(tab.url),pageHash=await hashValue(url.origin+url.pathname),key=sentenceModeKey(tabId),stored=(await chrome.storage.session.get(key))[key],current=stored?.page===pageHash;
   // Missing source predates automatic authorization and is therefore user-owned.
   if(current&&stored.source!=='auto')return Boolean(stored.enabled&&!paused);
-  const resolved=resolveAutomation(settings.automation,tab.url),authorized=await chrome.permissions.contains({origins:[sitePattern(origin)]}),permitted=Boolean(resolved.sentenceGroupsEffective&&authorized),enabled=Boolean(permitted&&!paused);
+  const resolved=resolveAutomation(settings.automation,tab.url),authorized=await chrome.permissions.contains({origins:[sitePattern(origin)]}),permitted=Boolean(authorized&&(resolved.sentenceGroupsEffective||resolved.effective)),enabled=Boolean(permitted&&!paused);
   if(authorizeAuto&&enabled&&(!current||stored.source!=='auto'||!stored.enabled)){
     const generation=(sentenceModeGeneration.get(tabId)||0)+1;sentenceModeGeneration.set(tabId,generation);
     await chrome.storage.session.set({[key]:{page:pageHash,enabled:true,generation,source:'auto'}});
@@ -1514,7 +1514,8 @@ async function activateTab(tab) {
   const sentenceGroups = status.sentenceGroups;
   const reading = status.effective || sentenceGroups;
   const video = status.videoAvailable;
-  if (reading || video) await injectPageUI(tabId);
+  const standby = await chrome.permissions.contains({origins:[sitePattern(expectedOrigin)]}).catch(()=>false);
+  if (reading || video || standby) await injectPageUI(tabId);
   const latest = await chrome.tabs.get(tabId).catch(() => null);
   if ((tabActivationGeneration.get(tabId) || 0) !== generation || pageOrigin(latest?.url || '') !== expectedOrigin) return;
   await chrome.tabs.sendMessage(tabId,{type:'SS_AUTO_START',origin:expectedOrigin,reading,video,sentenceGroups,paused:status.paused,assistanceMode:settings.assistanceMode},{frameId:0}).catch(() => {});
@@ -1814,7 +1815,7 @@ function registerContextMenus() {
   menuRegistration = menuRegistration.catch(() => {}).then(async () => {
     await chrome.contextMenus.removeAll();
     await contextMenuCreate({id:CONTEXT_EXPLAIN,title:'RelyLess：帮助理解选中内容',contexts:['selection'],documentUrlPatterns:['http://*/*','https://*/*']});
-    await contextMenuCreate({id:CONTEXT_TOGGLE_READING,title:'RelyLess：开启/暂停阅读辅助',contexts:['page'],documentUrlPatterns:['http://*/*','https://*/*']});
+    await contextMenuCreate({id:CONTEXT_TOGGLE_READING,title:'RelyLess：开启/暂停本页阅读',contexts:['page'],documentUrlPatterns:['http://*/*','https://*/*']});
     await contextMenuCreate({id:CONTEXT_COPY_PARAGRAPH,title:'RelyLess：复制选中段落的原文',contexts:['selection'],documentUrlPatterns:['http://*/*','https://*/*']});
     await contextMenuCreate({id:CONTEXT_TRANSLATE_LINK,title:'RelyLess：翻译导航链接文字',contexts:['link'],documentUrlPatterns:['http://*/*','https://*/*']});
     // PDF 明确入口：只在 .pdf 链接上出现，点击即单次使用内置阅读器，与 pdfReader 设置无关。
@@ -1846,8 +1847,11 @@ chrome.tabs.onUpdated.addListener((tabId,changeInfo,tab) => {
   if((changeInfo.url!==undefined||changeInfo.status==='loading')&&!pageOrigin(tab?.url||''))void clearAutomaticSentenceModes(tabId);
   if (changeInfo.url === undefined && changeInfo.status !== 'complete') return;
 
-  tabActivationGeneration.set(tabId,(tabActivationGeneration.get(tabId) || 0) + 1);
-  void activateTab(tab).catch(error => console.error('更新页面自动开启策略失败',error));
+  void (async()=>{
+    if(typeof changeInfo.url==='string')await setTabPaused(tabId,false);
+    tabActivationGeneration.set(tabId,(tabActivationGeneration.get(tabId) || 0) + 1);
+    await activateTab(tab);
+  })().catch(error => console.error('更新页面自动开启策略失败',error));
 });
 chrome.tabs.onRemoved.addListener(tabId => {
   void pruneBackgroundQueue();
@@ -1912,13 +1916,19 @@ async function toggleReading(tab) {
   const source=tabStatusSource(tab);
   try {
     await injectPageUI(tab.id);
+    const page=await tabPage(tab.id);
+    injectedEmergencyPages.set(tab.id,page.url.href);
     const status = await chrome.tabs.sendMessage(tab.id,{type:'SS_STATUS'},{frameId:0});
     if (!status?.ok) throw new Error('无法读取阅读状态。');
-    const result = await chrome.tabs.sendMessage(tab.id,{type:'SS_SET_ENABLED',enabled:!status.data.enabled},{frameId:0});
+    const enabled=!status.data?.enabled;
+    const result = await chrome.tabs.sendMessage(tab.id,{type:'SS_SET_ENABLED',enabled},{frameId:0});
     if (!result?.ok) throw new Error('无法切换阅读状态。');
+    await setSentenceGroupsMode({enabled,tabId:tab.id},{},true);
+    const structure=await chrome.tabs.sendMessage(tab.id,{type:'SS_SET_SENTENCE_GROUPS',enabled},{frameId:0});
+    if (!structure?.ok) throw new Error(structure?.error||'无法切换句子结构。');
     await clearTabStatus(tab.id,source);
   } catch (error) {
-    await showTabError(tab.id,error,'此页面无法开启阅读辅助，请在普通网页重试。',source);
+    await showTabError(tab.id,error,'此页面无法开启本页阅读，请在普通网页重试。',source);
   }
 }
 

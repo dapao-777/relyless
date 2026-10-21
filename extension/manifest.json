@@ -13,7 +13,7 @@
   "action": {"default_popup": "ui/popup.html", "default_title": "RelyLess", "default_icon": {"16":"icons/icon-16.png","32":"icons/icon-32.png","48":"icons/icon-48.png"}},
   "options_page": "ui/options.html",
   "commands": {
-    "toggle-reading": {"description": "开启或暂停当前网页的阅读辅助"}
+    "toggle-reading": {"description": "开启或暂停本页阅读"}
   },
   "content_security_policy": {"extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; base-uri 'none'"}
 }

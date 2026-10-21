@@ -305,6 +305,115 @@ test('popup shows the keyword hint note and dismisses the origin through an auto
   }
 });
 
+test('popup hides site and structure controls until page assistance or an existing site decision',async()=>{
+  const previousChrome=globalThis.chrome,previousDocument=globalThis.document;
+  const window=new Window({url:'https://popup.example/',settings:{disableJavaScriptFileLoading:true,disableCSSFileLoading:true}});
+  window.document.body.innerHTML=readFileSync(new URL('../extension/ui/popup.html',import.meta.url),'utf8');
+  let enabled=false;
+  const automation={allSites:false,sites:[],videoSites:false};
+  globalThis.document=window.document;
+  globalThis.chrome={runtime:{async sendMessage(message){
+    if(message.type==='STATE_GET')return{ok:true,data:{settings:{assistanceMode:'on-demand'},providerConfigured:true}};
+    if(message.type==='SENTENCE_GROUPS_GET')return{ok:true,data:{enabled:false}};
+    return{ok:true,data:{automation,siteRule:null}};
+  }},storage:{onChanged:{addListener(){}}},tabs:{query:async()=>[{id:7,url:'https://docs.example/read'}],async sendMessage(_id,message){
+    if(message.type==='SS_SET_ENABLED')enabled=message.enabled;
+    return{ok:true,data:{enabled,sentenceGroups:{enabled:false,status:'off'}}};
+  }}};
+  try{
+    await import('../extension/ui/popup.js?followup-visibility');
+    await new Promise(resolve=>setTimeout(resolve,0));
+    const followups=window.document.querySelector('#page-followups');
+    expect(followups.hidden).toBe(true);
+    expect(window.document.querySelector('#activation-title').textContent).toBe('本页阅读');
+    expect(window.document.querySelector('#page-status').classList.contains('sr-only')).toBe(true);
+    expect(window.document.querySelector('#toggle-reader').textContent).toBe('专注阅读');
+    window.document.querySelector('#toggle-page').click();
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(followups.hidden).toBe(false);
+    expect(window.document.querySelector('#site-auto-panel').hidden).toBe(false);
+    expect(window.document.querySelector('#sentence-groups-panel').hidden).toBe(false);
+  }finally{
+    await window.happyDOM.abort();
+    if(previousChrome===undefined)delete globalThis.chrome;else globalThis.chrome=previousChrome;
+    if(previousDocument===undefined)delete globalThis.document;else globalThis.document=previousDocument;
+  }
+});
+
+test('popup keeps a site decision visible while page assistance is off',async()=>{
+  const previousChrome=globalThis.chrome,previousDocument=globalThis.document;
+  const window=new Window({url:'https://popup.example/',settings:{disableJavaScriptFileLoading:true,disableCSSFileLoading:true}});
+  window.document.body.innerHTML=readFileSync(new URL('../extension/ui/popup.html',import.meta.url),'utf8');
+  globalThis.document=window.document;
+  globalThis.chrome={runtime:{async sendMessage(message){
+    if(message.type==='STATE_GET')return{ok:true,data:{settings:{assistanceMode:'on-demand'},providerConfigured:true}};
+    if(message.type==='SENTENCE_GROUPS_GET')return{ok:true,data:{enabled:false}};
+    return{ok:true,data:{automation:{allSites:false,sites:[],videoSites:false},siteRule:true,keywordHint:null}};
+  }},storage:{onChanged:{addListener(){}}},tabs:{query:async()=>[{id:7,url:'https://docs.example/read'}],sendMessage:async()=>({ok:true,data:{enabled:false}})}};
+  try{
+    await import('../extension/ui/popup.js?site-row-visible');
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(window.document.querySelector('#page-followups').hidden).toBe(false);
+    expect(window.document.querySelector('#site-auto-panel').hidden).toBe(false);
+    expect(window.document.querySelector('#sentence-groups-panel').hidden).toBe(true);
+    expect(window.document.querySelector('#site-auto').checked).toBe(true);
+    expect(window.document.querySelector('#page-note').textContent).toContain('按需模式');
+  }finally{
+    await window.happyDOM.abort();
+    if(previousChrome===undefined)delete globalThis.chrome;else globalThis.chrome=previousChrome;
+    if(previousDocument===undefined)delete globalThis.document;else globalThis.document=previousDocument;
+  }
+});
+
+test('opening page reading also turns sentence structure on and off',async()=>{
+  const previousChrome=globalThis.chrome,previousDocument=globalThis.document;
+  const window=new Window({url:'https://popup.example/',settings:{disableJavaScriptFileLoading:true,disableCSSFileLoading:true}});
+  window.document.body.innerHTML=readFileSync(new URL('../extension/ui/popup.html',import.meta.url),'utf8');
+  const calls=[];
+  globalThis.document=window.document;
+  globalThis.chrome={runtime:{async sendMessage(message){calls.push(message);if(message.type==='STATE_GET')return{ok:true,data:{settings:{assistanceMode:'ambient'},providerConfigured:true}};if(message.type==='SENTENCE_GROUPS_GET')return{ok:true,data:{enabled:false}};return{ok:true,data:{automation:{allSites:false,sites:[],videoSites:false},siteRule:null}};}},storage:{onChanged:{addListener(){}}},tabs:{query:async()=>[{id:7,url:'https://docs.example/read'}],async sendMessage(_id,message){calls.push(message);if(message.type==='SS_STATUS')return{ok:true,data:{enabled:false,sentenceGroups:{enabled:false,status:'off'}}};if(message.type==='SS_SET_SENTENCE_GROUPS')return{ok:true,data:{enabled:message.enabled,sentenceGroups:{enabled:message.enabled,status:message.enabled?'queued':'off'}}};return{ok:true,data:{enabled:message.enabled}};}},commands:{getAll:async()=>[{name:'toggle-reading',shortcut:''}]}};
+  try{
+    await import('../extension/ui/popup.js?page-reading-session');
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(window.document.querySelector('#shortcut-status').textContent).toBe('快捷键未设置');
+    expect(window.document.querySelector('#shortcut-open').hidden).toBe(false);
+    const toggle=window.document.querySelector('#toggle-page');
+    toggle.click();
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(calls.some(message=>message.type==='SENTENCE_GROUPS_SET'&&message.enabled===true)).toBe(true);
+    expect(calls.some(message=>message.type==='SS_SET_SENTENCE_GROUPS'&&message.enabled===true)).toBe(true);
+    expect(window.document.querySelector('#sentence-groups').checked).toBe(true);
+    expect(window.document.querySelector('#page-note').textContent).toContain('都会调用模型');
+    toggle.click();
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(calls.some(message=>message.type==='SENTENCE_GROUPS_SET'&&message.enabled===false)).toBe(true);
+    expect(window.document.querySelector('#sentence-groups-panel').hidden).toBe(true);
+  }finally{
+    await window.happyDOM.abort();
+    if(previousChrome===undefined)delete globalThis.chrome;else globalThis.chrome=previousChrome;
+    if(previousDocument===undefined)delete globalThis.document;else globalThis.document=previousDocument;
+  }
+});
+
+test('popup shows a configured reading shortcut and hides the shortcuts link',async()=>{
+  const previousChrome=globalThis.chrome,previousDocument=globalThis.document;
+  const window=new Window({url:'https://popup.example/',settings:{disableJavaScriptFileLoading:true,disableCSSFileLoading:true}});
+  window.document.body.innerHTML=readFileSync(new URL('../extension/ui/popup.html',import.meta.url),'utf8');
+  globalThis.document=window.document;
+  globalThis.chrome={runtime:{async sendMessage(message){if(message.type==='STATE_GET')return{ok:true,data:{settings:{assistanceMode:'ambient',lookupKey:'D'},providerConfigured:true}};if(message.type==='SENTENCE_GROUPS_GET')return{ok:true,data:{enabled:false}};return{ok:true,data:{automation:{allSites:false,sites:[],videoSites:false},siteRule:null}};}},storage:{onChanged:{addListener(){}}},tabs:{query:async()=>[{id:7,url:'https://docs.example/read'}],sendMessage:async()=>({ok:true,data:{enabled:false}})},commands:{getAll:async()=>[{name:'other',shortcut:'Ctrl+K'},{name:'toggle-reading',shortcut:'Alt+R'}]}};
+  try{
+    await import('../extension/ui/popup.js?shortcut-status');
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(window.document.querySelector('#shortcut-status').textContent).toBe('Alt+R 开启或暂停本页阅读');
+    expect(window.document.querySelector('#shortcut-open').hidden).toBe(true);
+    expect(window.document.querySelector('.popup-footer').textContent).toContain('不用开辅助');
+  }finally{
+    await window.happyDOM.abort();
+    if(previousChrome===undefined)delete globalThis.chrome;else globalThis.chrome=previousChrome;
+    if(previousDocument===undefined)delete globalThis.document;else globalThis.document=previousDocument;
+  }
+});
+
 test('keyboard navigation defaults off and only accepts an explicit boolean',()=>{
   expect(normalizeSettings({}).keyboardNav).toEqual({enabled:false});
   expect(normalizeSettings({keyboardNav:{enabled:true}}).keyboardNav).toEqual({enabled:true});

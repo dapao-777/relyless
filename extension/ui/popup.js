@@ -1,8 +1,11 @@
 import {request, errorText, upsertSiteEntry} from '../shared.js';
 
-const popupEls={status:document.querySelector('#page-status'),hostname:document.querySelector('#site-hostname'),siteAuto:document.querySelector('#site-auto'),siteAutoNote:document.querySelector('#site-auto-note'),siteHintDismiss:document.querySelector('#site-hint-dismiss'),siteAutoError:document.querySelector('#site-auto-error'),toggle:document.querySelector('#toggle-page'),pageNote:document.querySelector('#page-note'),actionError:document.querySelector('#action-error'),readerToggle:document.querySelector('#toggle-reader'),readerNote:document.querySelector('#reader-note'),readerError:document.querySelector('#reader-error'),sentenceGroups:document.querySelector('#sentence-groups'),sentenceGroupsNote:document.querySelector('#sentence-groups-note'),sentenceGroupsError:document.querySelector('#sentence-groups-error'),options:document.querySelector('#open-options'),serviceWarning:document.querySelector('#service-warning'),serviceWarningCopy:document.querySelector('#service-warning-copy'),repairService:document.querySelector('#repair-service'),emergencyEstimate:document.querySelector('#emergency-estimate'),emergencyBudget:document.querySelector('#emergency-budget')};
+const popupEls={status:document.querySelector('#page-status'),hostname:document.querySelector('#site-hostname'),followups:document.querySelector('#page-followups'),sitePanel:document.querySelector('#site-auto-panel'),siteAuto:document.querySelector('#site-auto'),siteAutoNote:document.querySelector('#site-auto-note'),siteHintDismiss:document.querySelector('#site-hint-dismiss'),siteAutoError:document.querySelector('#site-auto-error'),toggle:document.querySelector('#toggle-page'),pageNote:document.querySelector('#page-note'),actionError:document.querySelector('#action-error'),readerToggle:document.querySelector('#toggle-reader'),readerNote:document.querySelector('#reader-note'),readerError:document.querySelector('#reader-error'),sentencePanel:document.querySelector('#sentence-groups-panel'),sentenceGroups:document.querySelector('#sentence-groups'),sentenceGroupsNote:document.querySelector('#sentence-groups-note'),sentenceGroupsError:document.querySelector('#sentence-groups-error'),options:document.querySelector('#open-options'),serviceWarning:document.querySelector('#service-warning'),serviceWarningCopy:document.querySelector('#service-warning-copy'),repairService:document.querySelector('#repair-service'),emergencyEstimate:document.querySelector('#emergency-estimate'),emergencyBudget:document.querySelector('#emergency-budget')};
 popupEls.sentenceSelection=document.querySelector('#sentence-selection');
 popupEls.sentenceSelectionOption=document.querySelector('#sentence-selection-option');
+popupEls.shortcutStatus=document.querySelector('#shortcut-status');
+popupEls.shortcutOpen=document.querySelector('#shortcut-open');
+let popupShortcut='';
 const popupUnsupported=document.querySelector('#unsupported-page');
 const popupPageControls=document.querySelector('#page-controls');
 for(const name of ['panel','open','confirm','confirm-title','start','cancel','progress','progress-copy','counts','actions','stop','resume','retry','clear','result','status']){
@@ -59,7 +62,7 @@ function popupEmergencyPhaseText(){
   if(popupEmergency.phase==='partial')return '部分段落未译完，可重试失败段落。';
   if(popupEmergency.phase==='stopped')return '已停止发送新请求，现有译文仍保留。';
   if(popupEmergency.phase==='error')return popupEmergency.error||'翻译已停止，可确认后继续。';
-  return '保留英文，按阅读位置翻译附近正文。';
+  return '保留英文 · 只译附近正文';
 }
 function popupRender(){
   popupEls.hostname.textContent=popupHostname();
@@ -79,13 +82,15 @@ function popupRender(){
   else if(allSites&&popupAutomation?.siteRule===false)popupEls.siteAutoNote.textContent='全部网站已开启；当前网站已排除。';
   else if(allSites)popupEls.siteAutoNote.textContent='全部网站已开启；关闭可排除当前网站。';
   else if(!configured&&popupAutomation?.keywordHint){popupEls.siteAutoNote.textContent=`域名含“${popupAutomation.keywordHint}”，像是文档类网站；开启后以后打开会自动辅助。`;popupEls.siteHintDismiss.hidden=false;}
-  else popupEls.siteAutoNote.textContent=configured?'下次打开此网站会自动辅助。':'有限上下文用于准备；支持记录只在本机。';
+  else popupEls.siteAutoNote.textContent=configured?'下次打开此网站会自动开始本页阅读。':'有限上下文用于准备；支持记录只在本机。';
   popupEls.siteHintDismiss.disabled=popupBusy;
   popupEls.toggle.disabled=popupBusy||!supported;popupEls.toggle.checked=popupEnabled;
-  popupEls.readerToggle.disabled=popupBusy||!supported;popupEls.readerToggle.textContent=popupReaderActive?'退出专注':'专注阅读';popupEls.readerNote.textContent=popupReaderActive?'退出后返回原网页':'本地快照 · 不保存文章';
+  popupEls.readerToggle.disabled=popupBusy||!supported;popupEls.readerToggle.textContent=popupReaderActive?'退出专注':'专注阅读';popupEls.readerToggle.classList.toggle('is-active',popupReaderActive);popupEls.readerNote.textContent=popupReaderActive?'退出后返回原网页':'本地快照 · 不保存文章';
   popupEls.status.classList.toggle('active',popupEnabled);
-  if(popupEnabled){popupSetLive(popupEls.status,'本页已开启');popupEls.pageNote.textContent=popupState?.settings?.assistanceMode==='on-demand'?'按需模式：仅响应主动求助。':'保留英文，按阅读位置提供少量支撑。';}
-  else{popupSetLive(popupEls.status,popupAutomation?.paused?'本页已暂停':'等待开启');popupEls.pageNote.textContent='仅作用于本页，不更改网站自动开启规则。';}
+  if(popupEnabled){popupSetLive(popupEls.status,'本页已开启');popupEls.pageNote.textContent=popupState?.settings?.assistanceMode==='on-demand'?'按需模式：不做被动标记，句子结构也不自动分析。':'单词提示和句子结构都会调用模型。离开页面后一起关闭。';}
+  else{popupSetLive(popupEls.status,popupAutomation?.paused?'本页已暂停':'等待开启');popupEls.pageNote.textContent=popupAutomation?.paused?'本页已暂停。按住查词键和划词翻译仍然可用。':popupState?.settings?.assistanceMode==='on-demand'?'按需模式：打开后仍不做被动标记，句子结构也不自动分析。':'打开后同时开始单词提示和句子结构。离开页面后一起关闭。';}
+  if(popupEls.shortcutStatus)popupEls.shortcutStatus.textContent=popupShortcut?popupShortcut+' 开启或暂停本页阅读':'快捷键未设置';
+  if(popupEls.shortcutOpen)popupEls.shortcutOpen.hidden=Boolean(popupShortcut);
   const serviceProblem=popupState?.providerError||(['chatgpt','grok','antigravity'].includes(popupState?.settings?.providerKind)?popupState?.subscription?.error:'')||(!popupState?.providerConfigured?'辅助服务尚未连接。':'');
   popupEls.serviceWarning.hidden=!serviceProblem;
   popupEls.serviceWarningCopy.textContent=serviceProblem||'';
@@ -96,6 +101,7 @@ function popupRender(){
   else if(popupSentenceGroups.status==='analyzing')popupSetLive(popupEls.sentenceGroupsNote,'正在分析当前可见正文；滚动后只分析新出现的句子。');
   else if(popupSentenceGroups.status==='error')popupSetLive(popupEls.sentenceGroupsNote,'阅读解构出错，可在扩展中关闭后重新开启。');
   else if(popupSentenceGroups.status==='paused')popupSetLive(popupEls.sentenceGroupsNote,'分析暂缓；页面恢复阅读状态后按需继续。');
+  else if(popupState?.settings?.assistanceMode==='on-demand'&&popupSentenceGroups.enabled)popupSetLive(popupEls.sentenceGroupsNote,'按需模式不自动解构；可选中句子后点「解构所选」。');
   else if(popupSentenceGroups.enabled)popupSetLive(popupEls.sentenceGroupsNote,popupSentenceGroups.processed?'已开启，已处理 '+popupSentenceGroups.processed+' 句；滚动时按需继续。':'已开启，等待分析可见正文。');
   else popupSetLive(popupEls.sentenceGroupsNote,'已关闭；可随时为当前页面开启。');
   popupEls.sentenceGroupsNote.hidden=Boolean(popupState?.providerConfigured&&popupSentenceGroupsLoaded&&!popupSentenceGroups.enabled&&popupSentenceGroups.status==='off'&&!popupSentenceGroups.error);
@@ -103,6 +109,11 @@ function popupRender(){
   popupEls.sentenceSelectionOption.hidden=!popupSentenceGroupsLoaded||!popupSentenceGroups.enabled;
   popupEls.sentenceSelection.checked=popupSentenceGroups.selectionColor!==false;
   popupEls.sentenceSelection.disabled=popupBusy||!supported||!popupSentenceGroupsLoaded||!popupSentenceGroups.enabled;
+  const showSite=Boolean(popupEnabled||configured||allSites||popupAutomation?.keywordHint);
+  const showStructure=Boolean(popupEnabled||popupSentenceGroups.enabled);
+  popupEls.sitePanel.hidden=!showSite;
+  popupEls.sentencePanel.hidden=!showStructure;
+  popupEls.followups.hidden=!(showSite||showStructure);
   const emergencyVisible=Boolean(popupEmergency.active||popupEmergency.displayed||popupEmergency.phase!=='off');
   const resumable=!popupEmergency.active&&popupEmergency.total>0&&['stopped','error'].includes(popupEmergency.phase);
   popupSetLive(popupEls.emergencyStatus,popupReaderActive?'先退出专注阅读':popupEmergencyPhaseText());
@@ -122,7 +133,7 @@ function popupRender(){
   popupEls.emergencyStart.textContent=popupEmergencyResume?'确认并继续':'确认并翻译本页';popupEls.emergencyConfirmTitle.textContent=popupEmergencyResume?'继续翻译，保留已有译文':'确认翻译当前页面';
   popupEls.emergencyStart.disabled=popupBusy||popupReaderActive||!supported||!popupState?.providerConfigured;
   popupEls.emergencyCancel.disabled=popupBusy;
-  for(const element of document.querySelectorAll('.popup-feedback, #reader-note'))element.title=element.textContent;
+  for(const element of document.querySelectorAll('.popup-feedback, #reader-note, #page-note'))element.title=element.textContent;
 }
 async function popupGetPageStatus(){if(!popupSupported()){popupTasks=[];return;}const snapshot=popupSentenceGroups;const result=await chrome.tabs.sendMessage(popupTab.id,{type:'SS_STATUS'},{frameId:0}).catch(()=>null);if(snapshot!==popupSentenceGroups)return;popupTasks=popupTaskSnapshot(result?.ok?result.data?.tasks:null);if(!result?.ok)return;popupEnabled=Boolean(result.data?.enabled);popupReaderActive=Boolean(result.data?.reader?.active);if(result.data?.sentenceGroups)popupSentenceGroups={...popupSentenceGroups,...result.data.sentenceGroups};if(result.data?.emergency)popupEmergency=popupEmergencySnapshot(result.data.emergency);}
 async function popupGetSentenceGroups(){const result=await request('SENTENCE_GROUPS_GET',{tabId:popupTab?.id});popupSentenceGroups={enabled:Boolean(result?.enabled),status:result?.enabled?'idle':'off',error:'',processed:0};popupSentenceGroupsLoaded=true;}
@@ -161,7 +172,7 @@ async function popupToggleReader(){
   }catch(error){popupShowError(popupEls.readerError,error);popupEls.readerError.focus();}
   finally{popupBusy=false;popupRender();popupRestoreFocus(popupEls.readerToggle);}
 }
-async function popupTogglePage(){if(!popupSupported()||popupBusy)return;const enabled=popupEls.toggle.checked;popupBusy=true;popupClearError(popupEls.actionError);popupRender();try{await request('PAGE_UI_INJECT',{tabId:popupTab.id});const result=await chrome.tabs.sendMessage(popupTab.id,{type:'SS_SET_ENABLED',enabled});if(!result?.ok)throw new Error(result?.error||'请刷新网页后重试。');popupEnabled=Boolean(result.data?.enabled);popupAutomation=await request('AUTOMATION_GET',{tabId:popupTab.id});}catch(error){popupShowError(popupEls.actionError,new Error(`无法更新当前页：${errorText(error)}`));}finally{popupBusy=false;popupRender();popupRestoreFocus(popupEls.toggle);}}
+async function popupTogglePage(){if(!popupSupported()||popupBusy)return;const enabled=popupEls.toggle.checked;popupBusy=true;popupClearError(popupEls.actionError);popupRender();try{await request('PAGE_UI_INJECT',{tabId:popupTab.id});const result=await chrome.tabs.sendMessage(popupTab.id,{type:'SS_SET_ENABLED',enabled});if(!result?.ok)throw new Error(result?.error||'请刷新网页后重试。');popupEnabled=Boolean(result.data?.enabled);try{await request('SENTENCE_GROUPS_SET',{tabId:popupTab.id,enabled});const structure=await chrome.tabs.sendMessage(popupTab.id,{type:'SS_SET_SENTENCE_GROUPS',enabled},{frameId:0});if(!structure?.ok)throw new Error(structure?.error||'网页未能应用句子结构，请刷新后重试。');popupSentenceGroups={...popupSentenceGroups,enabled,status:enabled?(popupState?.settings?.assistanceMode==='on-demand'?'idle':'queued'):'off',error:''};if(structure.data?.sentenceGroups)popupSentenceGroups={...popupSentenceGroups,...structure.data.sentenceGroups};}catch(error){popupSentenceGroups.error=(enabled?'句子结构未能开启：':'句子结构未能关闭：')+errorText(error);}popupAutomation=await request('AUTOMATION_GET',{tabId:popupTab.id});}catch(error){popupShowError(popupEls.actionError,new Error(`无法更新当前页：${errorText(error)}`));}finally{popupBusy=false;popupRender();popupRestoreFocus(popupEls.toggle);}}
 async function popupToggleSentenceGroups(){
   if(!popupSupported()||popupBusy||!popupSentenceGroupsLoaded)return;const enabled=popupEls.sentenceGroups.checked;
   popupBusy=true;popupSentenceGroups.error='';popupRender();
@@ -239,11 +250,18 @@ async function popupEmergencyAction(type){
   finally{popupBusy=false;popupRender();popupFocusEmergency();}
 }
 function popupOpenOptions(section=''){if(!section){chrome.runtime.openOptionsPage();return;}const url=chrome.runtime.getURL('ui/options.html#'+section);chrome.tabs.query({url:chrome.runtime.getURL('ui/options.html*')},tabs=>{const tab=tabs.at(-1);if(tab?.id){chrome.tabs.update(tab.id,{url,active:true});chrome.windows.update(tab.windowId,{focused:true});}else chrome.tabs.create({url});});}
+async function popupLoadShortcut(){
+  popupShortcut='';
+  if(typeof chrome.commands?.getAll!=='function')return;
+  try{const commands=await chrome.commands.getAll();const command=Array.isArray(commands)?commands.find(item=>item?.name==='toggle-reading'):null;popupShortcut=typeof command?.shortcut==='string'?command.shortcut.trim():'';}catch{popupShortcut='';}
+}
 async function popupInit(){
   try{
     [popupTab]=await chrome.tabs.query({active:true,currentWindow:true});
     popupState=await request('STATE_GET');
+    await popupLoadShortcut();
     if(!popupSupported()){popupRender();return;}
+    void request('PAGE_UI_INJECT',{tabId:popupTab.id}).catch(()=>{});
     popupAutomation=await request('AUTOMATION_GET',{tabId:popupTab.id});
     try{await popupGetSentenceGroups();}
     catch(error){popupSentenceGroupsLoaded=false;popupSentenceGroups.error='无法读取阅读解构设置：'+errorText(error);}
@@ -258,6 +276,7 @@ async function popupWatchPage(){
 }
 popupEls.toggle.addEventListener('change',()=>void popupTogglePage());popupEls.readerToggle.addEventListener('click',()=>void popupToggleReader());popupEls.siteAuto.addEventListener('change',()=>void popupToggleSite());popupEls.siteHintDismiss.addEventListener('click',()=>void popupDismissSiteHint());popupEls.sentenceGroups.addEventListener('change',()=>void popupToggleSentenceGroups());popupEls.options.addEventListener('click',()=>popupOpenOptions());popupEls.repairService.addEventListener('click',()=>popupOpenOptions('service'));popupEls.emergencyOpen.addEventListener('click',()=>popupEmergencyPrompt(true));popupEls.emergencyCancel.addEventListener('click',()=>popupEmergencyPrompt(false));popupEls.emergencyStart.addEventListener('click',()=>void popupEmergencyStart());popupEls.emergencyStop.addEventListener('click',()=>void popupEmergencyAction('SS_EMERGENCY_STOP'));popupEls.emergencyResume.addEventListener('click',()=>popupEmergencyPrompt(true,{resume:true}));popupEls.emergencyRetry.addEventListener('click',()=>void popupEmergencyAction('SS_EMERGENCY_RETRY'));popupEls.emergencyClear.addEventListener('click',()=>void popupEmergencyAction('SS_EMERGENCY_END'));
 popupEls.sentenceSelection.addEventListener('change',()=>void popupToggleSentenceSelection());
+popupEls.shortcutOpen?.addEventListener('click',()=>{chrome.tabs.create?.({url:'chrome://extensions/shortcuts'});});
 popupEls.emergencyConfirm.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();popupEmergencyPrompt(false);}});
 chrome.storage.onChanged.addListener((changes,area)=>{if(area!=='local'||!changes.settings)return;void Promise.all([request('STATE_GET'),request('AUTOMATION_GET',{tabId:popupTab?.id}).catch(()=>null)]).then(([state,automation])=>{popupState=state;if(automation)popupAutomation=automation;popupRender();}).catch(()=>{});});
 void popupInit().then(()=>setTimeout(()=>void popupWatchPage(),1000));
