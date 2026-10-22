@@ -284,40 +284,29 @@
 </label>
             </div>
 </fieldset>
-            <fieldset class="sentence-line-style" aria-describedby="sentence-density-help sentence-density-result">
-<legend>下划线样式</legend>
-<div class="sentence-density-options sentence-line-options">
-              <label style="--sentence-line-style:solid">
-<input type="radio" name="sentence-line-style" value="solid">
-<span>
-<b lang="en" aria-hidden="true">English</b>
-<small>实线</small>
-</span>
+            <label class="field" for="sentence-mark">
+<span>标注方案</span>
+<select id="sentence-mark">
+<optgroup label="画在字上">
+<option value="wash">浅色底</option>
+<option value="underline">细下划线</option>
+<option value="bar">底边色条</option>
+<option value="overline">顶线</option>
+<option value="ink">词色</option>
+</optgroup>
+<optgroup label="少标一点">
+<option value="trunk">只标主干</option>
+<option value="head">只标核心词</option>
+<option value="dim">修饰变淡</option>
+</optgroup>
+<optgroup label="标出边界">
+<option value="bracket">括号</option>
+<option value="tick">成分前色标</option>
+<option value="gloss">行间角色名</option>
+</optgroup>
+</select>
 </label>
-<label style="--sentence-line-style:dashed">
-<input type="radio" name="sentence-line-style" value="dashed">
-<span>
-<b lang="en" aria-hidden="true">English</b>
-<small>虚线</small>
-</span>
-</label>
-<label style="--sentence-line-style:dotted">
-<input type="radio" name="sentence-line-style" value="dotted">
-<span>
-<b lang="en" aria-hidden="true">English</b>
-<small>点线</small>
-</span>
-</label>
-<label style="--sentence-line-style:wavy">
-<input type="radio" name="sentence-line-style" value="wavy">
-<span>
-<b lang="en" aria-hidden="true">English</b>
-<small>波浪线</small>
-</span>
-</label>
-            </div>
-</fieldset>
-            <p id="sentence-density-help" class="field-help">颜色表示句子成分，线型只改变外观。粒度与线型立即生效，不会额外调用模型。</p>
+            <p id="sentence-density-help" class="field-help">颜色表示句子成分。切换标注方案或粒度会立刻改已打开的阅读页，不重新调用模型，也不改写原文。</p>
 <p id="sentence-density-result" class="inline-message" role="status" hidden="">
 </p>
           <p class="field-help">在弹窗中为本页开启，或到 <a href="#sites">网站规则</a> 设置自动开启。</p>
@@ -1393,21 +1382,21 @@
   <article class="paper-card guide-scene guide-structure" aria-labelledby="guide-structure-heading">
     <span class="guide-eyebrow">02 · 阅读解构</span>
     <h3 id="guide-structure-heading">每个词都认识，连成一句却读不顺</h3>
-    <p>这时需要的不是更多词义，而是看清句子的骨架。阅读解构用彩色下划线标出主语、谓语、宾语以及修饰部分，帮你先读主干，再把条件和补充接回来。</p>
+    <p>这时需要的不是更多词义，而是看清句子的骨架。阅读解构按你选的标注方案标出主语、谓语、宾语以及修饰部分。先读主干，再把条件和补充接回来。</p>
     <figure class="guide-demo">
       <p class="guide-example" lang="en">When requests repeat, <strong>the cache reduces latency</strong>.</p>
-      <figcaption>读法示意：先抓住主干，再补上条件；这里的加粗用于讲解，不是网页的实际下划线样式。</figcaption>
+      <figcaption>读法示意：先抓住主干，再补上条件。这里的加粗只用于讲解，网页上的样子以「显示与解构」里的标注方案为准。</figcaption>
       <dl class="guide-definitions">
         <div><dt>先读主干：谁，在做什么？</dt><dd><span lang="en">The cache</span>（主语）→ <span lang="en">reduces</span>（谓语）→ <span lang="en">latency</span>（宾语）。先知道“缓存降低延迟”。</dd></div>
         <div><dt>再补上条件：在什么情况下？</dt><dd><span lang="en">When requests repeat</span> 是状语部分，补充“当请求重复时”。把它接回主干，就能读通整句。</dd></div>
       </dl>
     </figure>
     <ol class="guide-list">
-      <li><strong>开启：</strong>打开扩展弹窗，打开「阅读解构」。页面可见、未暂停且模型服务可用时，它会分析正文并画出结构线。</li>
-      <li><strong>读结构：</strong>先沿着主谓宾看意思，再看修饰部分。点击结构下划线，可打开「本句解构」查看带成分名称的层级，不必死记颜色。</li>
-      <li><strong>嫌密或想看更细：</strong>到 <a href="#appearance">显示与解构</a> 的「句子结构」调整。粗粒度突出大结构，中粒度显示句子成分，细粒度最多展示两层；切换粒度、实线或虚线只改变显示，不额外调用模型。</li>
+      <li><strong>开启：</strong>打开扩展弹窗，打开「阅读解构」。页面可见、未暂停且模型服务可用时，它会分析正文并按当前方案标出结构。</li>
+      <li><strong>读结构：</strong>先沿着主谓宾看意思，再看修饰部分。点击已标注的文字，可打开「本句解构」查看带成分名称的层级，不必死记颜色。</li>
+      <li><strong>嫌密或想换标法：</strong>到 <a href="#appearance">显示与解构</a> 的「句子结构」调整。粗粒度突出大结构，中粒度显示句子成分，细粒度最多展示两层。标注方案可以换成浅色底、线条、词色、只标主干或核心词、修饰变淡、括号、色标和行间角色名。这些切换只改变显示，不额外调用模型。</li>
     </ol>
-    <p><strong>结构线不是生词标记。</strong>颜色表示句子成分，不表示难度或熟悉度。解构和注释独立：即使词汇辅助选了「只在主动求助时」，已开启的解构仍会分析正文、产生模型用量。不需要时，在弹窗里关闭它。</p>
+    <p><strong>结构标注不是生词标记。</strong>颜色表示句子成分，不表示难度或熟悉度。解构和注释独立：即使词汇辅助选了「只在主动求助时」，已开启的解构仍会分析正文、产生模型用量。不需要时，在弹窗里关闭它。</p>
   </article>
 
   <details class="paper-card settings-disclosure guide-chapter">
@@ -1443,7 +1432,7 @@
         <li><strong>一句或一段：</strong>选中需要理解的正文，再点击出现的翻译操作。点击后才发送选段，译文与英文一起保留。</li>
         <li><strong>导航看不懂：</strong>开启本页后，按住查词键单击导航链接上的英文词，或在链接上右键选「RelyLess：翻译导航链接文字」。只发送该链接的英文文字（最多 200 字符），译文直接显示在原标签旁；原文及链接保持可用。普通按钮和输入区不参与。</li>
         <li data-video-feature hidden><strong>视频字幕：</strong>播放、展开字幕和滚动本身不调用模型，主动请求翻译才调用。字幕里的生词也可以单独求助。</li>
-        <li><strong>本页都吃力：</strong>在扩展弹窗底部点「全文翻译」，或在专注阅读顶部点「翻译本页」，再单独确认。英文会保留，只处理读到附近的正文；可以停止、继续、重试失败段落或「返回英文」（专注阅读中为「返回原文」）。停止不能撤回已发送且可能计费的请求。</li>
+        <li><strong>本页都吃力：</strong>在扩展弹窗底部点「全文翻译」即开始，按钮下显示预计 tokens；超出月度预算时才需要再确认。专注阅读顶部的「翻译本页」仍先确认。英文会保留，只处理读到附近的正文；可以停止、继续、重试失败段落或「返回英文」（专注阅读中为「返回原文」）。停止不能撤回已发送且可能计费的请求。</li>
       </ol>
       <p>如果你等的是自动词注，却一直没出现：先确认本页已开启、服务已连接。正文无法可靠识别、词已设为认识或提示策略较安静，也可能不显示。导航、输入区、代码等不会当作普通正文；导航链接文字可在链接右键菜单主动翻译。没有标注不代表整页已分析，更不代表你已经认识所有词。请求失败时到 <a href="#diagnostics">运行诊断</a> 查看。</p>
     </div>

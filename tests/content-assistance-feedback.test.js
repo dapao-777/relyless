@@ -193,6 +193,32 @@ for(const mode of ['ambient','on-demand'])test('syntax selection clips inline no
   },{structure:true,observe:true,bodyHtml:'<main><p>The <em>client</em> retries with backoff.</p></main>'});
 });
 
+test('sentence mark modes restyle ranges without rewriting the sentence',async()=>{
+  await withContent(async({paragraph,pending,handlers,event,click,send})=>{
+    globalThis.Highlight=class extends Set{};
+    const computed=getComputedStyle;globalThis.getComputedStyle=(element,pseudo)=>({...computed(element),font:'16px Arial',fontSize:'16px',lineHeight:'40px',color:'rgb(32, 33, 36)',backgroundColor:pseudo?'rgba(0, 0, 0, 0)':'rgb(255, 255, 255)'});
+    const range=document.createRange();range.selectNodeContents(paragraph);getSelection().addRange(range);handlers.get('showPassageAction')(event(paragraph,{type:'pointerup'}));
+    click([...document.querySelectorAll('[data-shisui-ui="passage-action"] button')].find(button=>button.textContent==='解构所选'));
+    await waitFor(()=>pending.length===1);const item=pending.shift(),sentence=item.message.items[0].sentence;
+    item.reply({ok:true,data:{items:[{id:item.message.items[0].id,groups:[{role:'clause',start:0,end:sentence.length,parent:-1},{role:'subject',start:0,end:10,parent:0},{role:'adverbial',start:11,end:sentence.length,parent:0}]}]}});
+    await waitFor(()=>[...CSS.highlights.keys()].some(name=>name.includes('-subject-')));
+    const original=paragraph.innerHTML,style=()=>document.querySelector('[data-shisui-ui="sentence-style"]')?.textContent||'';
+    expect(style()).toContain('background-color');
+    expect((await send({type:'SS_SET_SENTENCE_MARK',mark:'underline'})).ok).toBe(true);
+    await waitFor(()=>style().includes('text-decoration-line:underline')&&!style().includes('background-color'));
+    expect((await send({type:'SS_SET_SENTENCE_MARK',mark:'head'})).data.sentenceGroups.mark).toBe('head');
+    await waitFor(()=>[...CSS.highlights.values()].some(highlight=>[...highlight].some(part=>part.toString()==='client')));
+    expect((await send({type:'SS_SET_SENTENCE_MARK',mark:'trunk'})).ok).toBe(true);
+    await waitFor(()=>[...CSS.highlights.keys()].some(name=>name.includes('-subject-'))&&![...CSS.highlights.keys()].some(name=>name.includes('-adverbial-')));
+    expect((await send({type:'SS_SET_SENTENCE_MARK',mark:'bracket'})).ok).toBe(true);
+    await waitFor(()=>document.querySelector('[data-shisui-ui="sentence-marks"]')?.textContent.includes('['));
+    expect([...CSS.highlights.keys()].some(name=>name.includes('-subject-'))).toBe(false);
+    expect(paragraph.innerHTML).toBe(original);
+    expect((await send({type:'SS_SET_SENTENCE_MARK',mark:'nope'})).ok).toBe(false);
+    expect((await send({type:'SS_STATUS'})).data.sentenceGroups.mark).toBe('bracket');
+  },{structure:true,observe:true,bodyHtml:'<main><p>The <em>client</em> retries with backoff.</p></main>'});
+});
+
 test('known save errors stay beside the originating button and do not change source text',async()=>{
   await withContent(async({state,paragraph,pending,lookup})=>{
     state.settings.lookupDisplay='card';lookup();await waitFor(()=>pending.length===1);
