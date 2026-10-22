@@ -44,7 +44,7 @@ const optionsReadingControls = Object.fromEntries(optionsReadingLayers.map(layer
 }]));
 let optionsSentenceDensity='medium';
 let optionsSentenceLineStyle='solid';
-let optionsSentenceMark='wash';
+let optionsSentenceMark='underline';
 let optionsState = null;
 // 目录控制器通过全局状态读取当前服务；赋值时同步，避免两份真实来源。
 const optionsSubscriptionStatuses=new Map(),optionsSubscriptionModels=new Map();
@@ -319,7 +319,6 @@ function optionsRenderSentenceDensity(){for(const input of optionsSentenceDensit
 function optionsRenderSentenceLineStyle(){for(const input of optionsSentenceLineInputs)input.checked=input.value===optionsSentenceLineStyle;}
 function optionsRenderSentenceAllSites(){optionsSentenceAllSites.checked=Boolean((optionsAutomation?.automation||optionsState?.settings?.automation)?.sentenceGroupsAllSites);}
 function optionsStructureSegments(){
-  if(optionsSentenceMark==='trunk')return[['subject','Careful readers',3],['predicate','compare',3],['object','the evidence that each explanation provides',3]];
   const relative='that each explanation provides',adverbial='before they reach a conclusion';
   if(optionsSentenceDensity==='coarse')return[['attributive',relative,3],['adverbial',adverbial,3]];
   const fine=optionsSentenceDensity==='fine',segments=[['subject','Careful readers',3],['predicate','compare',3],['object','the evidence '+relative,fine?9:3],['adverbial',adverbial,fine?9:3]];
@@ -327,39 +326,20 @@ function optionsStructureSegments(){
   return segments;
 }
 function optionsClearStructureHighlights(){if(!globalThis.CSS?.highlights)return;for(const name of optionsStructureHighlightNames)CSS.highlights.delete(name);optionsStructureHighlightNames.clear();}
-function optionsClearStructureMarks(){optionsSentencePreviewSource?.parentElement?.querySelectorAll('[data-sentence-mark]').forEach(node=>node.remove());}
-function optionsPlaceStructureMarks(page,marks,mode){
-  const box=page.getBoundingClientRect(),style=getComputedStyle(page),borderLeft=Number.parseFloat(style.borderLeftWidth)||0,borderTop=Number.parseFloat(style.borderTopWidth)||0;
-  for(const item of marks){
-    const rects=[...item.range.getClientRects()].filter(rect=>rect.width>0&&rect.height>0);if(!rects.length)continue;
-    const first=rects[0],last=rects.at(-1),x=rect=>rect.left-box.left-borderLeft,y=rect=>rect.top-box.top-borderTop;
-    if(mode==='tick'){const bar=document.createElement('span');bar.dataset.sentenceMark='';bar.style.cssText='position:absolute;width:3px;pointer-events:none;background:'+item.color+';left:'+Math.max(0,x(first)-7)+'px;top:'+y(first)+'px;height:'+first.height+'px';page.append(bar);continue;}
-    if(mode==='gloss'){const label=document.createElement('span');label.dataset.sentenceMark='';label.textContent=globalThis.ShisuiDesign.structureRoles[item.role][0];label.style.cssText='position:absolute;pointer-events:none;left:'+x(first)+'px;top:'+(y(first)+first.height)+'px;color:'+item.color+';font:12px/1.2 var(--sans);white-space:nowrap';page.append(label);continue;}
-    const open=document.createElement('span'),close=document.createElement('span');
-    for(const node of [open,close]){node.dataset.sentenceMark='';node.style.position='absolute';node.style.pointerEvents='none';node.style.color=item.color;node.style.lineHeight=first.height+'px';}
-    open.textContent='[';close.textContent=']';open.style.left=Math.max(0,x(first)-10)+'px';open.style.top=y(first)+'px';close.style.left=x(last)+last.width+'px';close.style.top=y(last)+'px';page.append(open,close);
-  }
-}
 function optionsRenderStructurePreview(){
-  if(optionsSentencePreview.hidden)return;
-  if(!globalThis.CSS?.highlights||typeof Range!=='function'){optionsClearStructureMarks();return;}
-  const text=optionsSentencePreviewSource.firstChild,page=optionsSentencePreviewSource.parentElement,{structureColors:colors,structureRoles:roles,sentenceMarkMode,sentenceMarkOverlay,sentenceMarkCss,sentenceHeadOffsets}=globalThis.ShisuiDesign,dark=matchMedia('(prefers-color-scheme: dark)').matches?1:0,mode=sentenceMarkMode(optionsSentenceMark),overlay=sentenceMarkOverlay(mode);
-  optionsClearStructureHighlights();optionsClearStructureMarks();page.dataset.mark=mode;
+  if(optionsSentencePreview.hidden||!globalThis.CSS?.highlights)return;
+  const text=optionsSentencePreviewSource.firstChild,{structureColors:colors,structureRoles:roles,sentenceMarkMode,sentenceMarkCss}=globalThis.ShisuiDesign,dark=matchMedia('(prefers-color-scheme: dark)').matches?1:0,mode=sentenceMarkMode(optionsSentenceMark);
+  optionsClearStructureHighlights();
   let css=document.querySelector('#sentence-preview-highlight-style');if(!css){css=document.createElement('style');css.id='sentence-preview-highlight-style';document.head.append(css);}
-  const rules=[],marks=[];
+  const rules=[];
   for(const [role,fragment,offset] of optionsStructureSegments()){
-    if(mode==='dim'&&role!=='adverbial'&&role!=='attributive')continue;
-    const phrase=text.data.indexOf(fragment);if(phrase<0)continue;
-    let start=phrase,end=phrase+fragment.length;
-    if(mode==='head'){const head=sentenceHeadOffsets(fragment);if(head){start=phrase+head[0];end=phrase+head[1];}}
-    const range=new Range();range.setStart(text,start);range.setEnd(text,end);const color=colors[roles[role][1]][dark];
-    if(overlay){marks.push({role,color,range});continue;}
-    if(!globalThis.CSS?.highlights)continue;
+    const start=text.data.indexOf(fragment);if(start<0)continue;
+    const range=new Range();range.setStart(text,start);range.setEnd(text,start+fragment.length);const color=colors[roles[role][1]][dark];
     const name='shisui-preview-'+role+'-'+offset;let highlight=CSS.highlights.get(name);
-    if(!highlight){highlight=new Highlight();highlight.priority=offset===9?0:1;CSS.highlights.set(name,highlight);optionsStructureHighlightNames.add(name);}
-    highlight.add(range);const rule=sentenceMarkCss(name,mode,color,offset===9,dark===1);if(rule)rules.push(rule);
+    if(!highlight){highlight=new Highlight();highlight.priority=offset===9?0:1;CSS.highlights.set(name,highlight);optionsStructureHighlightNames.add(name);rules.push(mode==='wash'?sentenceMarkCss(name,color,offset===9,dark===1):'::highlight('+name+'){text-decoration:underline '+optionsSentenceLineStyle+' '+color+' 1.5px;text-underline-offset:'+offset+'px;text-decoration-skip-ink:auto}');}
+    highlight.add(range);
   }
-  css.textContent=rules.join('');if(overlay)optionsPlaceStructureMarks(page,marks,mode);
+  css.textContent=rules.join('');
 }
 function optionsRefreshStructurePreview(){optionsRenderAppearance();}
 function optionsRenderAppearance(){
@@ -370,7 +350,7 @@ function optionsRenderAppearance(){
   optionsEls.readingStylePreview.hidden=!optionsReadingLayers.includes(view);
   optionsEls.resetReadingStyle.parentElement.hidden=!optionsReadingLayers.includes(view);
   const videoPreview=document.getElementById('video-style-preview');videoPreview.hidden=view!=='video';
-  if(view==='structure')optionsRenderStructurePreview();else{optionsClearStructureHighlights();optionsClearStructureMarks();}
+  if(view==='structure')optionsRenderStructurePreview();else optionsClearStructureHighlights();
   if(optionsReadingLayers.includes(view))optionsSizeStylePreview();
   if(view==='video'){
     const video=optionsState?.settings?.video||{fontSize:20,theme:'auto'};

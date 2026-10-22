@@ -678,10 +678,10 @@ async function supportBatch(message,sender){
 const SENTENCE_GROUPS_DENSITY_KEY='sentenceGroupsDensity';
 const SENTENCE_GROUPS_LINE_STYLE_KEY='sentenceGroupsLineStyle';
 const SENTENCE_GROUPS_MARK_KEY='sentenceGroupsMark';
-const SENTENCE_MARK_MODES=['wash','underline','bar','overline','ink','trunk','head','dim','bracket','tick','gloss'];
+const SENTENCE_MARK_MODES=['underline','wash'];
 const sentenceGroupsLineStyle=value=>['solid','dashed','dotted','wavy'].includes(value)?value:'solid';
 const sentenceGroupsDensity=value=>['coarse','medium','fine'].includes(value)?value:'medium';
-const sentenceGroupsMark=value=>SENTENCE_MARK_MODES.includes(value)?value:'wash';
+const sentenceGroupsMark=value=>SENTENCE_MARK_MODES.includes(value)?value:'underline';
 async function sentenceGroupsMode(message,sender,trusted){
   const tabId=trusted?message.tabId:sender.tab?.id;if(!Number.isInteger(tabId)||(!trusted&&sender.frameId!==0))throw new Error('阅读解构只能用于网页主框架。');
   const [page,densityData,paused]=await Promise.all([trusted?tabPage(tabId):readingSource(sender),chrome.storage.local.get([SENTENCE_GROUPS_DENSITY_KEY,SENTENCE_GROUPS_LINE_STYLE_KEY,SENTENCE_GROUPS_MARK_KEY]),tabPaused(tabId)]),pageKey=page.sourceHash||await hashValue(page.key),key=sentenceModeKey(tabId),stored=(await chrome.storage.session.get(key))[key];
