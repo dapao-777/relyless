@@ -115,8 +115,33 @@
   // consume the same tokens without fetching styles or exposing extension resources.
   const cssFor = (selector, theme = 'auto') => `${selector} { ${common} ${theme === 'dark' ? dark : light} }${theme === 'auto' ? `\n@media (prefers-color-scheme: dark) { ${selector} { ${dark} } }` : ''}`;
   const structureRoles = Object.freeze({clause:Object.freeze(['原句','neutral']),subject:Object.freeze(['主语','subject']),predicate:Object.freeze(['谓语','predicate']),object:Object.freeze(['宾语','object']),predicative:Object.freeze(['表语','object']),complement:Object.freeze(['补语','object']),adverbial:Object.freeze(['状语','adverbial']),attributive:Object.freeze(['定语','attributive'])});
-  const structureColors = Object.freeze({subject:Object.freeze(['#3978aa','#8ebae0']),predicate:Object.freeze(['#ad672b','#e1ae7e']),object:Object.freeze(['#397c54','#91c5a4']),adverbial:Object.freeze(['#845ca6','#bea0dc']),attributive:Object.freeze(['#247f83','#80c3c6']),neutral:Object.freeze(['#70777c','#afb7be'])});
-  globalThis.ShisuiDesign = Object.freeze({cssFor,structureRoles,structureColors});
+  const structureColors = Object.freeze({subject:Object.freeze(['#3978aa','#6eb6ff']),predicate:Object.freeze(['#ad672b','#ffb15a']),object:Object.freeze(['#397c54','#5dce8a']),adverbial:Object.freeze(['#845ca6','#c9a0ff']),attributive:Object.freeze(['#247f83','#4fd4d6']),neutral:Object.freeze(['#70777c','#c8d0d8'])});
+  const sentenceMarkModes = Object.freeze(['wash','underline','bar','overline','ink','trunk','head','dim','bracket','tick','gloss']);
+  const sentenceMarkMode = value => sentenceMarkModes.includes(value) ? value : 'wash';
+  const sentenceMarkOverlay = mode => mode === 'bracket' || mode === 'tick' || mode === 'gloss';
+  const sentenceFunctionWords = new Set('a an the to of in on for with by from as at into onto over after before when while if because although though since until unless where that which who whom whose and or but nor so yet not no than then them they their this these those it its be is are was were been being do does did doing have has had having will would can could should may might must shall about across against among around behind between during without within upon per via each every some any both few many much all another'.split(' '));
+  function sentenceHeadOffsets(text) {
+    const words = [...String(text || '').matchAll(/[A-Za-z]+(?:'[A-Za-z]+)?/g)];
+    if (!words.length) return null;
+    const content = words.filter(word => !sentenceFunctionWords.has(word[0].toLowerCase()));
+    const pool = content.length ? content : words;
+    const relativizer = words.find(word => word.index > 0 && /^(?:that|which|who|whom|whose)$/i.test(word[0]));
+    const before = relativizer ? pool.findLast(word => word.index < relativizer.index) : null;
+    const chosen = before || pool.at(-1);
+    return [chosen.index, chosen.index + chosen[0].length];
+  }
+  function sentenceMarkCss(name, mode, color, nested, dark) {
+    const amount = nested ? (dark ? 24 : 18) : (dark ? 40 : 32);
+    const decoration = (line, thickness, skip) => '::highlight(' + name + '){text-decoration-line:' + line + ';text-decoration-color:' + color + ';text-decoration-thickness:' + thickness + ';text-underline-offset:3px;text-decoration-skip-ink:' + skip + '}';
+    if (mode === 'underline') return decoration('underline', '1.5px', 'auto');
+    if (mode === 'bar') return decoration('underline', '3px', 'none');
+    if (mode === 'overline') return decoration('overline', '2px', 'none');
+    if (mode === 'ink') return '::highlight(' + name + '){color:' + color + '}';
+    if (mode === 'dim') return '::highlight(' + name + '){color:' + (dark ? '#9aa0a6' : '#5c6166') + '}';
+    if (sentenceMarkOverlay(mode)) return '';
+    return '::highlight(' + name + '){background-color:color-mix(in srgb,' + color + ' ' + amount + '%,transparent)}';
+  }
+  globalThis.ShisuiDesign = Object.freeze({cssFor,structureRoles,structureColors,sentenceMarkModes,sentenceMarkMode,sentenceMarkOverlay,sentenceHeadOffsets,sentenceMarkCss});
 
   // Only extension-owned HTML opts into page-root tokens. Script injection into a
   // website has no currentScript and must never apply this theme to the website.

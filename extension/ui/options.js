@@ -23,6 +23,7 @@ if (optionsMissing.length) throw new Error('设置页缺少元素：' + optionsM
 const optionsProviderPicker=createProviderPicker(optionsEls.providerId,API_PROVIDERS.filter(provider=>!JUDGMENT_PROTOCOLS.includes(provider.protocol)));
 const optionsSentenceDensityInputs=[...document.querySelectorAll('input[name="sentence-density"]')];
 const optionsSentenceLineInputs=[...document.querySelectorAll('input[name="sentence-line-style"]')];
+const optionsSentenceMarkInput=document.querySelector('#sentence-mark');
 const optionsSentenceDensityResult=document.querySelector('#sentence-density-result');
 const optionsLookupKeyCopies=[...document.querySelectorAll('[data-lookup-key]')];
 const optionsLookupDisplayInputs=[...document.querySelectorAll('input[name="lookup-display"]')];
@@ -43,6 +44,7 @@ const optionsReadingControls = Object.fromEntries(optionsReadingLayers.map(layer
 }]));
 let optionsSentenceDensity='medium';
 let optionsSentenceLineStyle='solid';
+let optionsSentenceMark='wash';
 let optionsState = null;
 // 目录控制器通过全局状态读取当前服务；赋值时同步，避免两份真实来源。
 const optionsSubscriptionStatuses=new Map(),optionsSubscriptionModels=new Map();
@@ -317,6 +319,7 @@ function optionsRenderSentenceDensity(){for(const input of optionsSentenceDensit
 function optionsRenderSentenceLineStyle(){for(const input of optionsSentenceLineInputs)input.checked=input.value===optionsSentenceLineStyle;}
 function optionsRenderSentenceAllSites(){optionsSentenceAllSites.checked=Boolean((optionsAutomation?.automation||optionsState?.settings?.automation)?.sentenceGroupsAllSites);}
 function optionsStructureSegments(){
+  if(optionsSentenceMark==='trunk')return[['subject','Careful readers',3],['predicate','compare',3],['object','the evidence that each explanation provides',3]];
   const relative='that each explanation provides',adverbial='before they reach a conclusion';
   if(optionsSentenceDensity==='coarse')return[['attributive',relative,3],['adverbial',adverbial,3]];
   const fine=optionsSentenceDensity==='fine',segments=[['subject','Careful readers',3],['predicate','compare',3],['object','the evidence '+relative,fine?9:3],['adverbial',adverbial,fine?9:3]];
@@ -324,20 +327,39 @@ function optionsStructureSegments(){
   return segments;
 }
 function optionsClearStructureHighlights(){if(!globalThis.CSS?.highlights)return;for(const name of optionsStructureHighlightNames)CSS.highlights.delete(name);optionsStructureHighlightNames.clear();}
-function optionsRenderStructurePreview(){
-  if(optionsSentencePreview.hidden||!globalThis.CSS?.highlights)return;
-  const text=optionsSentencePreviewSource.firstChild,{structureColors:colors,structureRoles:roles}=globalThis.ShisuiDesign,dark=matchMedia('(prefers-color-scheme: dark)').matches?1:0;
-  optionsClearStructureHighlights();
-  let css=document.querySelector('#sentence-preview-highlight-style');if(!css){css=document.createElement('style');css.id='sentence-preview-highlight-style';document.head.append(css);}
-  const rules=[];
-  for(const [role,fragment,offset] of optionsStructureSegments()){
-    const start=text.data.indexOf(fragment);if(start<0)continue;
-    const range=new Range();range.setStart(text,start);range.setEnd(text,start+fragment.length);
-    const name='shisui-preview-'+role+'-'+offset;let highlight=CSS.highlights.get(name);
-    if(!highlight){highlight=new Highlight();highlight.priority=offset===9?0:1;CSS.highlights.set(name,highlight);optionsStructureHighlightNames.add(name);rules.push('::highlight('+name+'){text-decoration:underline '+optionsSentenceLineStyle+' '+colors[roles[role][1]][dark]+' 1.5px;text-underline-offset:'+offset+'px;text-decoration-skip-ink:auto}');}
-    highlight.add(range);
+function optionsClearStructureMarks(){optionsSentencePreviewSource?.parentElement?.querySelectorAll('[data-sentence-mark]').forEach(node=>node.remove());}
+function optionsPlaceStructureMarks(page,marks,mode){
+  const box=page.getBoundingClientRect(),style=getComputedStyle(page),borderLeft=Number.parseFloat(style.borderLeftWidth)||0,borderTop=Number.parseFloat(style.borderTopWidth)||0;
+  for(const item of marks){
+    const rects=[...item.range.getClientRects()].filter(rect=>rect.width>0&&rect.height>0);if(!rects.length)continue;
+    const first=rects[0],last=rects.at(-1),x=rect=>rect.left-box.left-borderLeft,y=rect=>rect.top-box.top-borderTop;
+    if(mode==='tick'){const bar=document.createElement('span');bar.dataset.sentenceMark='';bar.style.cssText='position:absolute;width:3px;pointer-events:none;background:'+item.color+';left:'+Math.max(0,x(first)-7)+'px;top:'+y(first)+'px;height:'+first.height+'px';page.append(bar);continue;}
+    if(mode==='gloss'){const label=document.createElement('span');label.dataset.sentenceMark='';label.textContent=globalThis.ShisuiDesign.structureRoles[item.role][0];label.style.cssText='position:absolute;pointer-events:none;left:'+x(first)+'px;top:'+(y(first)+first.height)+'px;color:'+item.color+';font:12px/1.2 var(--sans);white-space:nowrap';page.append(label);continue;}
+    const open=document.createElement('span'),close=document.createElement('span');
+    for(const node of [open,close]){node.dataset.sentenceMark='';node.style.position='absolute';node.style.pointerEvents='none';node.style.color=item.color;node.style.lineHeight=first.height+'px';}
+    open.textContent='[';close.textContent=']';open.style.left=Math.max(0,x(first)-10)+'px';open.style.top=y(first)+'px';close.style.left=x(last)+last.width+'px';close.style.top=y(last)+'px';page.append(open,close);
   }
-  css.textContent=rules.join('');
+}
+function optionsRenderStructurePreview(){
+  if(optionsSentencePreview.hidden)return;
+  if(!globalThis.CSS?.highlights||typeof Range!=='function'){optionsClearStructureMarks();return;}
+  const text=optionsSentencePreviewSource.firstChild,page=optionsSentencePreviewSource.parentElement,{structureColors:colors,structureRoles:roles,sentenceMarkMode,sentenceMarkOverlay,sentenceMarkCss,sentenceHeadOffsets}=globalThis.ShisuiDesign,dark=matchMedia('(prefers-color-scheme: dark)').matches?1:0,mode=sentenceMarkMode(optionsSentenceMark),overlay=sentenceMarkOverlay(mode);
+  optionsClearStructureHighlights();optionsClearStructureMarks();page.dataset.mark=mode;
+  let css=document.querySelector('#sentence-preview-highlight-style');if(!css){css=document.createElement('style');css.id='sentence-preview-highlight-style';document.head.append(css);}
+  const rules=[],marks=[];
+  for(const [role,fragment,offset] of optionsStructureSegments()){
+    if(mode==='dim'&&role!=='adverbial'&&role!=='attributive')continue;
+    const phrase=text.data.indexOf(fragment);if(phrase<0)continue;
+    let start=phrase,end=phrase+fragment.length;
+    if(mode==='head'){const head=sentenceHeadOffsets(fragment);if(head){start=phrase+head[0];end=phrase+head[1];}}
+    const range=new Range();range.setStart(text,start);range.setEnd(text,end);const color=colors[roles[role][1]][dark];
+    if(overlay){marks.push({role,color,range});continue;}
+    if(!globalThis.CSS?.highlights)continue;
+    const name='shisui-preview-'+role+'-'+offset;let highlight=CSS.highlights.get(name);
+    if(!highlight){highlight=new Highlight();highlight.priority=offset===9?0:1;CSS.highlights.set(name,highlight);optionsStructureHighlightNames.add(name);}
+    highlight.add(range);const rule=sentenceMarkCss(name,mode,color,offset===9,dark===1);if(rule)rules.push(rule);
+  }
+  css.textContent=rules.join('');if(overlay)optionsPlaceStructureMarks(page,marks,mode);
 }
 function optionsRefreshStructurePreview(){optionsRenderAppearance();}
 function optionsRenderAppearance(){
@@ -348,7 +370,7 @@ function optionsRenderAppearance(){
   optionsEls.readingStylePreview.hidden=!optionsReadingLayers.includes(view);
   optionsEls.resetReadingStyle.parentElement.hidden=!optionsReadingLayers.includes(view);
   const videoPreview=document.getElementById('video-style-preview');videoPreview.hidden=view!=='video';
-  if(view==='structure')optionsRenderStructurePreview();else optionsClearStructureHighlights();
+  if(view==='structure')optionsRenderStructurePreview();else{optionsClearStructureHighlights();optionsClearStructureMarks();}
   if(optionsReadingLayers.includes(view))optionsSizeStylePreview();
   if(view==='video'){
     const video=optionsState?.settings?.video||{fontSize:20,theme:'auto'};
@@ -375,7 +397,7 @@ function optionsRenderAll(){
   setResult(optionsEls.dataProblem,optionsState.dataProblem||'',Boolean(optionsState.dataProblem));
   const video=optionsState.settings.video||{fontSize:20,theme:'auto'};
   optionsEls.videoFontSize.value=String(video.fontSize||20);optionsEls.videoTheme.value=video.theme||'auto';
-  optionsRenderAutomation();optionsRenderSentenceAllSites();optionsRenderPassageAction();optionsRenderDetection();optionsRenderReadingStyle();optionsRenderSentenceDensity();optionsRenderSentenceLineStyle();optionsRenderRules();optionsRenderTerms();optionsRenderRulePacks();optionsRenderProvider();serviceCatalog.sync();optionsRenderRouting();void optionsRefreshStructurePreview();
+  optionsRenderAutomation();optionsRenderSentenceAllSites();optionsRenderPassageAction();optionsRenderDetection();optionsRenderReadingStyle();optionsRenderSentenceDensity();optionsRenderSentenceLineStyle();optionsRenderSentenceMark();optionsRenderRules();optionsRenderTerms();optionsRenderRulePacks();optionsRenderProvider();serviceCatalog.sync();optionsRenderRouting();void optionsRefreshStructurePreview();
 }
 async function optionsSavePatch(patch,message='已保存'){optionsClearError();try{setOptionsState(await request('STATE_PATCH',{patch}));optionsRenderAll();optionsShowSaved(message);return true;}catch(error){optionsShowError(error);optionsRenderAll();return false;}}
 async function optionsPatchAutomation(patch,message){optionsClearError();try{optionsAutomation=await request('AUTOMATION_PATCH',{patch});optionsState.settings.automation=optionsAutomation.automation;optionsRenderAutomation();optionsRenderSentenceAllSites();void optionsRefreshStructurePreview();optionsShowSaved(message);return true;}catch(error){optionsShowError(error);optionsRenderAutomation();optionsRenderSentenceAllSites();void optionsRefreshStructurePreview();return false;}}
@@ -386,6 +408,15 @@ async function optionsSetSentenceLineStyle(lineStyle){
   try{const saved=await request('SENTENCE_GROUPS_LINE_STYLE_SET',{lineStyle});optionsSentenceLineStyle=saved.lineStyle;optionsRenderSentenceLineStyle();optionsRenderStructurePreview();setResult(optionsSentenceDensityResult,'下划线样式已保存，并已应用到开启的阅读页。');optionsShowSaved('下划线样式已保存');}
   catch(error){optionsSentenceLineStyle=previous;optionsRenderSentenceLineStyle();optionsRenderStructurePreview();setResult(optionsSentenceDensityResult,errorText(error),true);}
   finally{optionsSentenceLineInputs.forEach(input=>{input.disabled=false;});}
+}
+function optionsRenderSentenceMark(){if(optionsSentenceMarkInput)optionsSentenceMarkInput.value=optionsSentenceMark;}
+async function optionsSetSentenceMark(mark){
+  if(!globalThis.ShisuiDesign.sentenceMarkModes.includes(mark))return;
+  const previous=optionsSentenceMark;optionsSentenceMark=mark;optionsRenderSentenceMark();optionsRenderStructurePreview();
+  optionsSentenceMarkInput.disabled=true;setResult(optionsSentenceDensityResult,'正在保存…');
+  try{const saved=await request('SENTENCE_GROUPS_MARK_SET',{mark});optionsSentenceMark=globalThis.ShisuiDesign.sentenceMarkMode(saved?.mark);optionsRenderSentenceMark();optionsRenderStructurePreview();setResult(optionsSentenceDensityResult,'标注方案已保存，并已应用到开启的阅读页。');optionsShowSaved('标注方案已保存');}
+  catch(error){optionsSentenceMark=previous;optionsRenderSentenceMark();optionsRenderStructurePreview();setResult(optionsSentenceDensityResult,errorText(error),true);}
+  finally{optionsSentenceMarkInput.disabled=false;}
 }
 async function optionsSetSentenceDensity(density){
   if(!['coarse','medium','fine'].includes(density))return;
@@ -609,6 +640,7 @@ optionsPassageOpenInputs.forEach(input=>input.addEventListener('change',()=>void
 optionsEls.passageDelay.addEventListener('change',()=>void optionsSavePatch({passageAction:{delay:Number(optionsEls.passageDelay.value)}},'悬停等待已设为 '+optionsEls.passageDelay.value+' 毫秒'));
 optionsSentenceDensityInputs.forEach(input=>input.addEventListener('change',()=>void optionsSetSentenceDensity(input.value)));
 optionsSentenceLineInputs.forEach(input=>input.addEventListener('change',()=>void optionsSetSentenceLineStyle(input.value)));
+optionsSentenceMarkInput?.addEventListener('change',()=>void optionsSetSentenceMark(optionsSentenceMarkInput.value));
 optionsSentenceAllSites.addEventListener('change',async()=>{const enabled=optionsSentenceAllSites.checked;optionsSentenceAllSites.disabled=true;try{if(enabled&&!await chrome.permissions.request({origins:ALL_HOSTS}))throw new Error('未授予全部网站权限，原设置保持不变。');await optionsPatchAutomation({sentenceGroupsAllSites:enabled},enabled?'所有网站阅读解构已开启':'所有网站阅读解构已关闭');}catch(error){optionsShowError(error);optionsRenderSentenceAllSites();void optionsRefreshStructurePreview();}finally{optionsSentenceAllSites.disabled=false;}});
 document.querySelectorAll('input[name="assistance-mode"]').forEach(input=>input.addEventListener('change',()=>void optionsSavePatch({assistanceMode:input.value},input.value==='on-demand'?'已切换为仅在需要时':'已恢复阅读时辅助')));
 optionsLookupDisplayInputs.forEach(input=>input.addEventListener('change',()=>void optionsSavePatch({lookupDisplay:input.value},'查词显示方式已保存')));
@@ -700,7 +732,7 @@ window.addEventListener('focus',()=>void optionsRefreshStructurePreview());
 
 
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change',optionsRenderStructurePreview);
-chrome.storage.onChanged.addListener((changes,area)=>{if(area!=='local')return;if(changes.sentenceGroupsDensity){optionsSentenceDensity=['coarse','medium','fine'].includes(changes.sentenceGroupsDensity.newValue)?changes.sentenceGroupsDensity.newValue:'medium';optionsRenderSentenceDensity();}if(changes.sentenceGroupsLineStyle){optionsSentenceLineStyle=['solid','dashed','dotted','wavy'].includes(changes.sentenceGroupsLineStyle.newValue)?changes.sentenceGroupsLineStyle.newValue:'solid';optionsRenderSentenceLineStyle();}if(changes.sentenceGroupsDensity||changes.sentenceGroupsLineStyle)queueMicrotask(optionsRenderStructurePreview);if(!changes.settings&&!changes.subscriptionLinked)return;clearTimeout(optionsSyncTimer);optionsSyncTimer=setTimeout(()=>void optionsSyncState().catch(optionsShowError),30);});chrome.runtime.onMessage.addListener(message=>{if(message?.type==='SUBSCRIPTION_UPDATED'&&optionsState){optionsState.subscription=message.subscription||{};optionsRenderSubscription();}});
+chrome.storage.onChanged.addListener((changes,area)=>{if(area!=='local')return;if(changes.sentenceGroupsDensity){optionsSentenceDensity=['coarse','medium','fine'].includes(changes.sentenceGroupsDensity.newValue)?changes.sentenceGroupsDensity.newValue:'medium';optionsRenderSentenceDensity();}if(changes.sentenceGroupsLineStyle){optionsSentenceLineStyle=['solid','dashed','dotted','wavy'].includes(changes.sentenceGroupsLineStyle.newValue)?changes.sentenceGroupsLineStyle.newValue:'solid';optionsRenderSentenceLineStyle();}if(changes.sentenceGroupsMark){optionsSentenceMark=globalThis.ShisuiDesign.sentenceMarkMode(changes.sentenceGroupsMark.newValue);optionsRenderSentenceMark();}if(changes.sentenceGroupsDensity||changes.sentenceGroupsLineStyle||changes.sentenceGroupsMark)queueMicrotask(optionsRenderStructurePreview);if(!changes.settings&&!changes.subscriptionLinked)return;clearTimeout(optionsSyncTimer);optionsSyncTimer=setTimeout(()=>void optionsSyncState().catch(optionsShowError),30);});chrome.runtime.onMessage.addListener(message=>{if(message?.type==='SUBSCRIPTION_UPDATED'&&optionsState){optionsState.subscription=message.subscription||{};optionsRenderSubscription();}});
 window.addEventListener('pagehide',()=>{void optionsCleanupDraftPermissions();});
 
 globalThis.optionsRenderSubscription=optionsRenderSubscription;
@@ -747,5 +779,5 @@ chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local'&&changes
 
 document.querySelectorAll('input[name="usage-days"]').forEach(input=>input.addEventListener('change',()=>{optionsUsageDays=Number(input.value);void optionsRefreshUsage();}));
 optionsEls.usageClear.addEventListener('click',async()=>{if(!confirm('清空模型用量统计？只删除用量计数，不影响服务配置与阅读数据。'))return;try{await request('USAGE_CLEAR');setResult(optionsEls.usageResult,'用量统计已清空');await optionsRefreshUsage();}catch(error){setResult(optionsEls.usageResult,errorText(error),true);}});
-async function optionsInit(){optionsFillDomains(optionsEls.readingDomain,true);optionsFillDomains(optionsEls.ruleDomain,false);optionsFillDomains(optionsEls.termDomain,false);optionsEls.installCommand.textContent=`node connector/install.mjs --extension-id ${chrome.runtime.id}`;optionsNavigate();try{const densityData=await chrome.storage.local.get(['sentenceGroupsDensity','sentenceGroupsLineStyle']);optionsSentenceDensity=['coarse','medium','fine'].includes(densityData.sentenceGroupsDensity)?densityData.sentenceGroupsDensity:'medium';optionsSentenceLineStyle=['solid','dashed','dotted','wavy'].includes(densityData.sentenceGroupsLineStyle)?densityData.sentenceGroupsLineStyle:'solid';await optionsSyncState();if(!['diagnostics','history','personalization'].includes(optionsCurrentSection))await optionsRefreshSubscription();const pending=(await chrome.storage.local.get('pendingTerm')).pendingTerm;if(pending)await optionsConsumePendingTerm(pending);}catch(error){optionsShowError(error);}}
+async function optionsInit(){optionsFillDomains(optionsEls.readingDomain,true);optionsFillDomains(optionsEls.ruleDomain,false);optionsFillDomains(optionsEls.termDomain,false);optionsEls.installCommand.textContent=`node connector/install.mjs --extension-id ${chrome.runtime.id}`;optionsNavigate();try{const densityData=await chrome.storage.local.get(['sentenceGroupsDensity','sentenceGroupsLineStyle','sentenceGroupsMark']);optionsSentenceDensity=['coarse','medium','fine'].includes(densityData.sentenceGroupsDensity)?densityData.sentenceGroupsDensity:'medium';optionsSentenceLineStyle=['solid','dashed','dotted','wavy'].includes(densityData.sentenceGroupsLineStyle)?densityData.sentenceGroupsLineStyle:'solid';optionsSentenceMark=globalThis.ShisuiDesign.sentenceMarkMode(densityData.sentenceGroupsMark);await optionsSyncState();if(!['diagnostics','history','personalization'].includes(optionsCurrentSection))await optionsRefreshSubscription();const pending=(await chrome.storage.local.get('pendingTerm')).pendingTerm;if(pending)await optionsConsumePendingTerm(pending);}catch(error){optionsShowError(error);}}
 void optionsInit();

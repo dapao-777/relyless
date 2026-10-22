@@ -161,9 +161,13 @@ test('sentence hierarchy is authorized, cached, presentation-independent, and dr
   await send({type:'SENTENCE_GROUPS_BATCH',items});expect(providerCalls).toBe(before+1);
   await send({type:'SENTENCE_GROUPS_LINE_STYLE_SET',lineStyle:'wavy'},extensionSender);
   expect(await send({type:'SENTENCE_GROUPS_GET'})).toMatchObject({enabled:true,lineStyle:'wavy'});
+  await send({type:'SENTENCE_GROUPS_MARK_SET',mark:'bracket'},extensionSender);
+  expect(await send({type:'SENTENCE_GROUPS_GET'})).toMatchObject({enabled:true,mark:'bracket'});
   expect(await send({type:'SENTENCE_GROUPS_BATCH',items})).toEqual(first);expect(providerCalls).toBe(before+1);
   await expect(send({type:'SENTENCE_GROUPS_LINE_STYLE_SET',lineStyle:'invalid'},extensionSender)).rejects.toThrow();
   await expect(send({type:'SENTENCE_GROUPS_LINE_STYLE_SET',lineStyle:'dashed'})).rejects.toThrow();
+  await expect(send({type:'SENTENCE_GROUPS_MARK_SET',mark:'rainbow'},extensionSender)).rejects.toThrow();
+  await expect(send({type:'SENTENCE_GROUPS_MARK_SET',mark:'wash'})).rejects.toThrow();
   await expect(send({type:'SENTENCE_GROUPS_DENSITY_SET',density:'dense'},extensionSender)).rejects.toThrow();
   await expect(send({type:'SENTENCE_GROUPS_DENSITY_SET',density:'coarse'})).rejects.toThrow();
   invalidSentenceGroups=true;
@@ -176,7 +180,8 @@ test('sentence hierarchy is authorized, cached, presentation-independent, and dr
   await expect(send({type:'SENTENCE_GROUPS_SET',enabled:false})).rejects.toThrow('未获');
   const stoppedAt=providerCalls;await expect(send({type:'SENTENCE_GROUPS_BATCH',items})).rejects.toThrow();
   await send({type:'SENTENCE_GROUPS_LINE_STYLE_SET',lineStyle:'solid'},extensionSender);
-  expect(await send({type:'SENTENCE_GROUPS_GET'})).toMatchObject({enabled:false,lineStyle:'solid'});expect(providerCalls).toBe(stoppedAt);
+  await send({type:'SENTENCE_GROUPS_MARK_SET',mark:'wash'},extensionSender);
+  expect(await send({type:'SENTENCE_GROUPS_GET'})).toMatchObject({enabled:false,lineStyle:'solid',mark:'wash'});expect(providerCalls).toBe(stoppedAt);
 });
 test('on-demand sentence hierarchy rejects background scans but serves deliberate selection',async()=>{
   await send({type:'PAGE_UI_INJECT',tabId:7},extensionSender);
