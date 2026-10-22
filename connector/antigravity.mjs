@@ -212,6 +212,7 @@ export class AntigravityClient extends EventEmitter {
     this.modelRefresh = null;
     this.loginError = null;
     this.account = null;
+    this.probedAt = 0;
     this.stopping = false;
     this.authGeneration = 0;
     this.stderrReports = new Map();
@@ -251,8 +252,17 @@ export class AntigravityClient extends EventEmitter {
     this.ready = true;
     // Best-effort account probe; never throws (missing login just reports status).
     // NOTE: must not call refreshStatus() here: it awaits start(), which is us.
-    try { await this.#probeAccount(); } catch { /* reported on next refreshStatus() */ }
+    try { await this.#probeAccount(); } catch (error) { this.#rememberProbeError(error); }
+    this.probedAt = Date.now();
     this.#emitStatus();
+  }
+
+  #rememberProbeError(error) {
+    const message = String(error?.message || '');
+    this.account = null;
+    this.loginError = /authentication required|not signed in|not authenticated|no .*credential|login required|sign.?in|unauthori[sz]ed/i.test(message)
+      ? '尚未登录 Google 账号。请在终端运行 agy，用 Google 账号（Google AI Pro / Ultra 订阅）完成登录，再点击“刷新账户与模型”。'
+      : publicAntgravityError(error);
   }
 
   #env() {
@@ -356,16 +366,16 @@ export class AntigravityClient extends EventEmitter {
 
   async refreshStatus() {
     await this.start();
+    // Host startup already ran agy /usage. Repeating it on the status request
+    // doubles the wait and can pass the extension's 45s reply limit.
+    if (Date.now() - this.probedAt < 15_000) return this.status();
     const previousAccount = this.account;
     try {
       await this.#probeAccount();
     } catch (error) {
-      const message = String(error?.message || '');
-      this.account = null;
-      this.loginError = /authentication required|not signed in|not authenticated|no .*credential|login required|sign.?in|unauthori[sz]ed/i.test(message)
-        ? '尚未登录 Google 账号。请在终端运行 agy，用 Google 账号（Google AI Pro / Ultra 订阅）完成登录，再点击“刷新账户与模型”。'
-        : publicAntgravityError(error);
+      this.#rememberProbeError(error);
     }
+    this.probedAt = Date.now();
     if (Boolean(previousAccount) !== Boolean(this.account)) {
       this.authGeneration++;
       this.modelCache = null;
