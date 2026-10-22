@@ -90,6 +90,23 @@ test('manual page pause survives in session and does not recursively broadcast a
   expect(await send({type:'PAGE_ACTIVITY_SET',enabled:true},pageSender)).toEqual({paused:false});
   expect(session['automationPaused:'+tab.id]).toBeUndefined();
 });
+
+test('opening another page clears a manual pause so site auto can start',async()=>{
+  const previousUrl=tab.url,previousSites=stored.settings.automation.sites.map(site=>({...site}));
+  granted.add('https://docs.example/*');
+  await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{sites:[{origin:'https://docs.example',enabled:true}]}});
+  await send({type:'PAGE_ACTIVITY_SET',enabled:false},pageSender);
+  expect(session['automationPaused:'+tab.id]).toBe(true);
+  tab.url='https://docs.example/next-article';
+  globalThis.chrome.tabs.onUpdated.listeners[0](tab.id,{url:tab.url,status:'complete'},{...tab});
+  await new Promise(resolve=>setTimeout(resolve,0));
+  expect(session['automationPaused:'+tab.id]).toBeUndefined();
+  expect(tabMessages.at(-1).message).toMatchObject({type:'SS_AUTO_START',origin:'https://docs.example',reading:true,paused:false});
+  tab.url=previousUrl;
+  await send({type:'PAGE_ACTIVITY_SET',enabled:true},pageSender);
+  await send({type:'AUTOMATION_PATCH',tabId:tab.id,patch:{sites:previousSites}});
+});
+
 test('concurrent pause writes use independent tab session keys',async()=>{
   const other = {id:12,url:'https://other.example/page'};
   await Promise.all([

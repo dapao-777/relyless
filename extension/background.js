@@ -918,10 +918,10 @@ async function emergencyCancelRequest(message,sender){
 }
 async function passageTranslate(message,sender) {
   const source=await readingSource(sender);
-  if(!source.active||await tabPaused(source.tabId))throw new Error('请在当前活动页面选择需要翻译的段落。');
+  if(!source.active)throw new Error('请在当前活动页面选择需要翻译的段落。');
   if(typeof message.requestId!=='string'||!message.requestId.length||message.requestId.length>128||!/^[A-Za-z0-9._:-]+$/.test(message.requestId))throw new Error('无效的段落翻译请求编号。');
   const items=normalizeEmergencyItems(message.items),state=await load(),generation=providerGeneration;
-  const current=async()=>{const[latest,page]=await Promise.all([load(),readingSource(sender)]);return generation===providerGeneration&&state.supportDataGeneration===latest.supportDataGeneration&&page.sourceHash===source.sourceHash&&page.active&&!await tabPaused(source.tabId);};
+  const current=async()=>{const[latest,page]=await Promise.all([load(),readingSource(sender)]);return generation===providerGeneration&&state.supportDataGeneration===latest.supportDataGeneration&&page.sourceHash===source.sourceHash&&page.active;};
   const guard=async()=>{if(!await current())throw staleWork();};
   let open=true,pending=null,previous=null,delivering=false,timer=0;
   const deliver=async()=>{
@@ -1503,6 +1503,7 @@ async function injectPageUI(tabId) {
   await chrome.scripting.executeScript({target:{tabId,frameIds:[0]},files:PAGE_UI_FILES});
 }
 const tabActivationGeneration = new Map();
+const tabUrls = new Map();
 async function activateTab(tab) {
   const tabId = tab?.id;
   const expectedOrigin = pageOrigin(tab?.url || '');
@@ -1844,15 +1845,21 @@ chrome.tabs.onUpdated.addListener((tabId,changeInfo,tab) => {
   if(changeInfo.url!==undefined||changeInfo.status==='loading'){void pruneBackgroundQueue();void chrome.tabs.sendMessage(tabId,{type:'SS_EMERGENCY_END',navigation:true,url:changeInfo.url||tab?.url},{frameId:0}).catch(()=>{});}
   if(changeInfo.url!==undefined||changeInfo.status==='loading'){void forgetEmergency(tabId);injectedEmergencyPages.delete(tabId);void chrome.storage.session.remove([offeredKey(tabId),pendingKey(tabId),assistCacheKey(tabId),'pageDomain:'+tabId]);}
   if((changeInfo.url!==undefined||changeInfo.status==='loading')&&!pageOrigin(tab?.url||''))void clearAutomaticSentenceModes(tabId);
+  const nextUrl=typeof changeInfo.url==='string'?changeInfo.url:'';
+  const urlChanged=Boolean(nextUrl&&tabUrls.get(tabId)!==nextUrl);
+  if(nextUrl)tabUrls.set(tabId,nextUrl);
   if (changeInfo.url === undefined && changeInfo.status !== 'complete') return;
 
   tabActivationGeneration.set(tabId,(tabActivationGeneration.get(tabId) || 0) + 1);
-  void activateTab(tab).catch(error => console.error('更新页面自动开启策略失败',error));
+  const activate=()=>activateTab(tab).catch(error => console.error('更新页面自动开启策略失败',error));
+  if(urlChanged)void setTabPaused(tabId,false).finally(activate);
+  else void activate();
 });
 chrome.tabs.onRemoved.addListener(tabId => {
   void pruneBackgroundQueue();
   void forgetEmergency(tabId);injectedEmergencyPages.delete(tabId);sentenceModeGeneration.delete(tabId);void chrome.storage.session.remove(sentenceModeKey(tabId));
   tabActivationGeneration.delete(tabId);
+  tabUrls.delete(tabId);
   tabStatusGeneration.set(tabId,(tabStatusGeneration.get(tabId)||0)+1);
   void forgetTabAutomation(tabId);
 });
