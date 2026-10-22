@@ -10,6 +10,7 @@ test('diagnostic whitelist excludes source, responses, credentials, arbitrary er
   const record=sanitizeDiagnostic(event({message:'secret-message',stack:'secret-stack',url:'https://private.example?q=token',input:'private source',response:'private response',apiKey:'sk-secret',model:'private-model',traceId:'sk-secret',code:'SECRET_ERROR',detail:{message:'private'},itemIndex:1,translationLength:5}));
   expect(record).toEqual({at:record.at,operation:'EMERGENCY_TRANSLATE',stage:'request',status:'error',itemIndex:1,translationLength:5});
   expect(diagnosticError({code:'TRANSLATION_NO_HAN',message:'sk-secret',detail:{itemIndex:2,translationLength:5,input:'private',expectedCount:4}})).toEqual({code:'TRANSLATION_NO_HAN',itemIndex:2,expectedCount:4,translationLength:5});
+  expect(diagnosticError({code:'MODEL_INVALID',message:'当前模型不可用或不存在，请更换模型 ID。',detail:{httpStatus:404}})).toEqual({code:'MODEL_INVALID',httpStatus:404});
   expect(sanitizeDiagnostic({...event(),operation:'SECRET_OPERATION'})).toBeNull();
   const ids=sanitizeDiagnostic(event({inputIds:['e1','secret-input'],outputIds:['p2','secret-output'],fields:['id','translation','private-field']}));
   expect(ids.inputIds).toEqual(['e1','<other>']);expect(ids.outputIds).toEqual(['p2','<other>']);expect(ids.fields).toEqual(['id','translation','<other>']);
